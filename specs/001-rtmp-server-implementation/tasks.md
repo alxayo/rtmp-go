@@ -62,7 +62,7 @@ go mod tidy
 
 ---
 
-### T002 [P]: Implement Buffer Pool
+### T002 [X]: Implement Buffer Pool
 **Description**: Create buffer pool package for memory-efficient chunk buffer reuse. Reduces GC pressure for high-throughput streams.
 **Files**:
 - `internal/bufpool/pool.go`
