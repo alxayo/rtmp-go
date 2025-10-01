@@ -5,6 +5,17 @@
 **Status**: Draft  
 **Input**: User description: "RTMP server implementation with handshake, chunking, and basic streaming support"
 
+## Clarifications
+
+### Session 2025-10-01
+- Q: Codec Handling Strategy - Should the server validate specific codecs or operate as codec-agnostic relay? → A: Hybrid - Server accepts any codec but logs/reports codec information for monitoring purposes
+- Q: Maximum Concurrent Connections - What is the target maximum number of simultaneous client connections the server should support? → A: 10-50 connections (Small-scale development/testing environment)
+- Q: Target Latency - What is the acceptable end-to-end latency from publisher to player? → A: 3-5 seconds (Relaxed latency for easier buffering and stability)
+- Q: Authentication Mechanism - How should the server authenticate clients? → A: No authentication (Accept all connections, suitable for development/testing in trusted networks)
+- Q: Stream Recording - Should the server support recording published streams to disk? → A: Yes, optional (Recording can be enabled/disabled per stream or via configuration)
+
+---
+
 ## Execution Flow (main)
 ```
 1. Parse user description from Input
@@ -60,7 +71,7 @@ A content creator uses streaming software (e.g., OBS Studio) to broadcast live v
 3. **Player Connect and Playback**
    - **Given** an active published stream exists
    - **When** a player client requests to play that stream
-   - **Then** the server begins transmitting the stream data to the player with minimal delay
+   - **Then** the server begins transmitting the stream data to the player within 3-5 seconds
 
 4. **Multiple Concurrent Streams**
    - **Given** the server is running
@@ -117,38 +128,46 @@ A content creator uses streaming software (e.g., OBS Studio) to broadcast live v
 - **FR-022**: System MUST handle audio messages (type 8) and video messages (type 9)
 - **FR-023**: System MUST preserve message timestamps during stream relay
 - **FR-024**: System MUST support multiple players consuming a single published stream
-- **FR-025**: System MUST [NEEDS CLARIFICATION: handle stream recording - yes/no/optional?]
-- **FR-026**: System MUST [NEEDS CLARIFICATION: support specific codecs only or codec-agnostic relay?]
+- **FR-025**: System SHOULD support optional recording of published streams to disk in FLV format
+- **FR-026**: System MUST allow recording to be enabled/disabled via configuration (global or per-stream)
+- **FR-027**: System MUST accept and relay audio/video data regardless of codec type
+- **FR-028**: System MUST detect and log codec information from stream metadata (FLV headers) when available
 
 #### Session State
-- **FR-027**: System MUST maintain session state for each connected client
-- **FR-028**: System MUST track active publishers and their associated streams
-- **FR-029**: System MUST track active players and their subscribed streams
-- **FR-030**: System MUST detect and handle orphaned streams when publishers disconnect
+- **FR-029**: System MUST maintain session state for each connected client
+- **FR-030**: System MUST track active publishers and their associated streams
+- **FR-031**: System MUST track active players and their subscribed streams
+- **FR-032**: System MUST detect and handle orphaned streams when publishers disconnect
+- **FR-033**: System SHOULD track recording state (active/stopped) for streams with recording enabled
 
 #### Error Handling
-- **FR-031**: System MUST reject connections with invalid handshake data
-- **FR-032**: System MUST handle malformed RTMP messages without crashing
-- **FR-033**: System MUST log protocol errors with sufficient detail for diagnosis
-- **FR-034**: System MUST respond with appropriate error messages when operations fail
-- **FR-035**: System MUST [NEEDS CLARIFICATION: retry behavior or immediate disconnect on errors?]
+- **FR-034**: System MUST reject connections with invalid handshake data
+- **FR-035**: System MUST handle malformed RTMP messages without crashing
+- **FR-036**: System MUST log protocol errors with sufficient detail for diagnosis
+- **FR-037**: System MUST respond with appropriate error messages when operations fail
+- **FR-038**: System SHOULD handle recording errors (disk full, permission issues) without interrupting live streaming
+- **FR-039**: System MUST [NEEDS CLARIFICATION: retry behavior or immediate disconnect on errors?]
 
 #### Performance & Scalability
-- **FR-036**: System MUST [NEEDS CLARIFICATION: support N concurrent connections where N = ?]
-- **FR-037**: System MUST [NEEDS CLARIFICATION: target latency between publisher and player = ?]
-- **FR-038**: System MUST handle back-pressure when clients cannot consume data fast enough
-- **FR-039**: System MUST [NEEDS CLARIFICATION: memory limits per connection or total?]
+- **FR-040**: System MUST support at least 50 concurrent client connections (publishers + players combined)
+- **FR-041**: System SHOULD gracefully handle up to 10-50 simultaneous connections under normal operating conditions
+- **FR-042**: System SHOULD maintain end-to-end latency (publisher to player) within 3-5 seconds under normal network conditions
+- **FR-043**: System MUST handle back-pressure when clients cannot consume data fast enough
+- **FR-044**: System SHOULD ensure recording operations do not negatively impact live streaming latency or throughput
+- **FR-045**: System MUST [NEEDS CLARIFICATION: memory limits per connection or total?]
 
 #### Security
-- **FR-040**: System MUST [NEEDS CLARIFICATION: authentication mechanism - token-based, none, other?]
-- **FR-041**: System MUST [NEEDS CLARIFICATION: authorization for publish/play operations?]
-- **FR-042**: System MUST [NEEDS CLARIFICATION: rate limiting to prevent abuse?]
+- **FR-046**: System MUST accept all client connections without authentication (trusted network assumption)
+- **FR-047**: System MUST allow any client to publish or play any stream without authorization checks
+- **FR-048**: System MUST [NEEDS CLARIFICATION: rate limiting to prevent abuse?]
 
 #### Observability
-- **FR-043**: System MUST log connection events (connect, disconnect, errors)
-- **FR-044**: System MUST log stream lifecycle events (publish start, publish end, play start, play end)
-- **FR-045**: System MUST provide visibility into active streams and connection counts
-- **FR-046**: System MUST [NEEDS CLARIFICATION: expose metrics for monitoring (Prometheus, custom, none)?]
+- **FR-049**: System MUST log connection events (connect, disconnect, errors)
+- **FR-050**: System MUST log stream lifecycle events (publish start, publish end, play start, play end)
+- **FR-051**: System MUST log detected codec information (video/audio codec types) for each stream
+- **FR-052**: System SHOULD log recording events (recording start, stop, errors, file path)
+- **FR-053**: System MUST provide visibility into active streams and connection counts
+- **FR-054**: System MUST [NEEDS CLARIFICATION: expose metrics for monitoring (Prometheus, custom, none)?]
 
 ### Non-Functional Requirements
 
@@ -172,6 +191,8 @@ A content creator uses streaming software (e.g., OBS Studio) to broadcast live v
 
 - **Player**: Represents a client currently receiving audio/video data from the server, subscribed to a specific stream and associated with a connection
 
+- **Recording**: Represents an optional recording session for a published stream, including file handle, recording state, output path, and bytes written
+
 ---
 
 ## Assumptions & Dependencies
@@ -182,18 +203,22 @@ A content creator uses streaming software (e.g., OBS Studio) to broadcast live v
 3. Audio and video data is pre-encoded by clients (no transcoding needed at this stage)
 4. Stream keys are known or configured (discovery mechanism out of scope)
 5. Single server deployment (distributed/clustered operation out of scope)
+6. Target deployment is small-scale development/testing environment (10-50 concurrent connections)
+7. Server deployed in trusted network environment (no authentication required)
 
 ### Dependencies
 1. Network infrastructure supporting TCP connections on configured port
 2. Client tools for testing (OBS Studio, FFmpeg, ffplay, or equivalents)
-3. [NEEDS CLARIFICATION: External authentication/authorization service if required?]
-4. [NEEDS CLARIFICATION: Storage system if recording is required?]
+3. Local disk storage for optional stream recording (when enabled)
+4. Sufficient disk I/O capacity to handle concurrent recording operations
 
 ---
 
 ## Out of Scope
 
 The following are explicitly NOT part of this feature:
+- Client authentication or authorization mechanisms
+- Access control lists or permission management
 - RTMPS (RTMP over TLS/SSL) support
 - RTMPE (encrypted RTMP) support
 - RTMPT (RTMP tunneled over HTTP) support
@@ -201,7 +226,7 @@ The following are explicitly NOT part of this feature:
 - Complex handshake with cryptographic validation
 - Enhanced RTMP (E-RTMP) features (multitrack, advanced codecs, HDR)
 - Media transcoding or transmuxing to other protocols (HLS, DASH, WebRTC)
-- Stream recording or DVR functionality (unless clarified as in-scope)
+- Advanced DVR functionality (seeking, time-shifting in recorded streams)
 - Content delivery network (CDN) integration
 - Web-based administration interface
 - Built-in player or viewer application
