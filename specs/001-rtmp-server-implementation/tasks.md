@@ -194,7 +194,7 @@ go mod tidy
 
 ---
 
-### T009 [P]: Create Integration Test: Handshake Flow
+### T009 [X]: Create Integration Test: Handshake Flow
 **Description**: Write integration test for complete handshake flow (client + server loopback) following contracts/handshake.md.
 **Files**:
 - `tests/integration/handshake_test.go`
