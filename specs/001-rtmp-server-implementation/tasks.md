@@ -129,7 +129,7 @@ go mod tidy
 
 ---
 
-### T006 [P]: Create Golden Test Vectors for Chunk Headers
+### T006 [X]: Create Golden Test Vectors for Chunk Headers
 **Description**: Generate binary golden test files for chunk headers (FMT 0-3) and multi-chunk messages following contracts/chunking.md.
 **Files**:
 - `tests/golden/chunk_fmt0_audio.bin`
