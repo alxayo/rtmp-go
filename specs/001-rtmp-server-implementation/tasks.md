@@ -95,7 +95,7 @@ go mod tidy
 
 ---
 
-### T004 [P]: Define Domain-Specific Errors
+### T004 [X]: Define Domain-Specific Errors
 **Description**: Create error types package with wrapped errors for protocol violations, timeouts, and validation failures.
 **Files**:
 - `internal/errors/errors.go`
