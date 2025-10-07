@@ -209,7 +209,7 @@ go mod tidy
 
 ---
 
-### T010 [P]: Create Integration Test: Chunking Flow
+### T010 [X]: Create Integration Test: Chunking Flow
 **Description**: Write integration test for dechunking and chunking (reassemble multi-chunk messages) following contracts/chunking.md.
 **Files**:
 - `tests/integration/chunking_test.go`
