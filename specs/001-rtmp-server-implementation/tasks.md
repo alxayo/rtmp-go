@@ -299,7 +299,7 @@ go mod tidy
 
 ---
 
-### T015 [P]: Implement Client Handshake FSM
+### T015 [P] [X]: Implement Client Handshake FSM
 **Description**: Implement client-side handshake finite state machine following contracts/handshake.md.
 **Files**:
 - `internal/rtmp/handshake/client.go`
