@@ -1,20 +1,16 @@
 package handshake
 
-// NOTE: Temporary stub to allow integration test (T009) to compile before
-// the real handshake implementation tasks (T013-T015). These functions will
-// be replaced with the full finite state machine per the handshake contract.
+// NOTE: This file now only retains the client-side stub (T015) while the
+// server FSM (T014) is implemented in server.go. Once T015 is executed this
+// stub will be replaced with the real client implementation.
 
 import (
 	"errors"
 	"net"
 )
 
-// ErrNotImplemented is returned by the stub functions until the handshake FSM
-// is implemented.
-var ErrNotImplemented = errors.New("handshake not implemented")
+// ErrNotImplemented indicates a handshake side (currently client) is not yet implemented.
+var ErrNotImplemented = errors.New("handshake not implemented (client side pending)")
 
-// ServerHandshake performs the server side RTMP simple handshake (stub).
-func ServerHandshake(conn net.Conn) error { return ErrNotImplemented }
-
-// ClientHandshake performs the client side RTMP simple handshake (stub).
+// ClientHandshake performs the client side RTMP simple handshake (stub placeholder for T015).
 func ClientHandshake(conn net.Conn) error { return ErrNotImplemented }

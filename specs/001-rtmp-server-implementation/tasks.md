@@ -278,7 +278,7 @@ go mod tidy
 
 ---
 
-### T014: Implement Server Handshake FSM
+### T014 [X]: Implement Server Handshake FSM
 **Description**: Implement server-side handshake finite state machine following contracts/handshake.md.
 **Files**:
 - `internal/rtmp/handshake/server.go`
