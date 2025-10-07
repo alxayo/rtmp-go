@@ -225,7 +225,7 @@ go mod tidy
 
 ---
 
-### T011 [P]: Create Integration Test: Command Flow
+### T011 [X]: Create Integration Test: Command Flow
 **Description**: Write integration test for RTMP command flow (connect → createStream → publish/play) following contracts/commands.md.
 **Files**:
 - `tests/integration/commands_test.go`
