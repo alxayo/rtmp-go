@@ -48,6 +48,18 @@ type Writer struct {
 // NewWriter creates a writer with the given outbound chunk size.
 func NewWriter(w io.Writer, chunkSize uint32) *Writer { return &Writer{w: w, chunkSize: chunkSize} }
 
+// EncodeHeaderOnly writes just the chunk header for the provided header spec h (T018 helper for tests).
+// prev is the previous header on the same CSID (required for correct FMT3 + extended timestamp emission).
+// Returns number of bytes written or error.
+func (w *Writer) EncodeHeaderOnly(h *ChunkHeader, prev *ChunkHeader) (int, error) {
+	b, err := EncodeChunkHeader(h, prev)
+	if err != nil {
+		return 0, err
+	}
+	n, err := w.w.Write(b)
+	return n, err
+}
+
 // WriteMessage writes the message in chunked form.
 func (w *Writer) WriteMessage(msg *Message) error {
 	return errors.New("chunk.Writer not implemented (T018/T021 pending)")

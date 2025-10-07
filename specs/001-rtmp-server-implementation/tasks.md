@@ -360,7 +360,7 @@ go mod tidy
 
 ---
 
-### T018 [P]: Implement Chunk Header Serialization
+### T018 [P] [X]: Implement Chunk Header Serialization
 **Description**: Implement Basic Header and Message Header serialization (encoding) for all FMT types following contracts/chunking.md.
 **Files**:
 - `internal/rtmp/chunk/writer.go`
