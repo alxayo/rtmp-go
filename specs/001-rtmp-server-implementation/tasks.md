@@ -338,7 +338,7 @@ go mod tidy
 
 ### Chunking Layer
 
-### T017 [P]: Implement Chunk Header Parsing
+### T017 [P] [X]: Implement Chunk Header Parsing
 **Description**: Implement Basic Header and Message Header parsing for all FMT types (0-3) following contracts/chunking.md.
 **Files**:
 - `internal/rtmp/chunk/header.go`
