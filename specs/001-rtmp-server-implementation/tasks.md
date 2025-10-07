@@ -150,7 +150,7 @@ go mod tidy
 
 ---
 
-### T007 [P]: Create Golden Test Vectors for AMF0 Encoding
+### T007 [X]: Create Golden Test Vectors for AMF0 Encoding
 **Description**: Generate binary golden test files for AMF0 types (Number, Boolean, String, Object, Null, Array) following contracts/amf0.md.
 **Files**:
 - `tests/golden/amf0_number_0.bin`
