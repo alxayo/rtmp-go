@@ -175,7 +175,7 @@ go mod tidy
 
 ---
 
-### T008 [P]: Create Golden Test Vectors for Control Messages
+### T008 [X]: Create Golden Test Vectors for Control Messages
 **Description**: Generate binary golden test files for control messages (Set Chunk Size, Acknowledgement, Window Ack Size, Set Peer Bandwidth) following contracts/control.md.
 **Files**:
 - `tests/golden/control_set_chunk_size_4096.bin`
