@@ -320,7 +320,7 @@ go mod tidy
 
 ---
 
-### T016: Integrate Handshake into Connection
+### T016 [X]: Integrate Handshake into Connection
 **Description**: Wire handshake FSM into connection lifecycle, called immediately after TCP accept/connect.
 **Files**:
 - `internal/rtmp/conn/conn.go` (update)
@@ -332,6 +332,7 @@ go mod tidy
 - Integration test: T009 (handshake flow)
 **Dependencies**: T009 (integration test), T014 (server handshake), T015 (client handshake)
 **Estimated Complexity**: Small (1-2 hours)
+
 
 ---
 
