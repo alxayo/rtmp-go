@@ -262,7 +262,7 @@ go mod tidy
 
 ### Handshake Layer
 
-### T013 [P]: Implement Handshake Data Structures
+### T013 [P] [X]: Implement Handshake Data Structures
 **Description**: Define handshake state machine types and constants following contracts/handshake.md.
 **Files**:
 - `internal/rtmp/handshake/types.go`
