@@ -240,7 +240,7 @@ go mod tidy
 
 ---
 
-### T012 [P]: Create Integration Test: Quickstart Scenario
+### T012 [P] [X]: Create Integration Test: Quickstart Scenario
 **Description**: Write integration test validating end-to-end quickstart scenario (FFmpeg publish + ffplay playback) following quickstart.md.
 **Files**:
 - `tests/integration/quickstart_test.go`
