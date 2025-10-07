@@ -113,7 +113,7 @@ go mod tidy
 
 ## Phase 3.2: Tests First (TDD) ⚠️ MUST COMPLETE BEFORE 3.3
 
-### T005 [P]: Create Golden Test Vectors for Handshake
+### T005 [X]: Create Golden Test Vectors for Handshake
 **Description**: Generate binary golden test files for RTMP handshake (C0+C1, S0+S1+S2, C2) following contracts/handshake.md.
 **Files**:
 - `tests/golden/handshake_valid_c0c1.bin`
