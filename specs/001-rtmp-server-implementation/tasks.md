@@ -558,7 +558,7 @@ go mod tidy
 
 ---
 
-### T028 [P]: Implement AMF0 String Encoding/Decoding
+### T028 [P] [X]: Implement AMF0 String Encoding/Decoding
 **Description**: Implement AMF0 String type (0x02) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/string.go`
