@@ -443,7 +443,7 @@ go mod tidy
 
 ### Control Layer
 
-### T022 [P]: Implement Control Message Encoding
+### T022 [P] [X]: Implement Control Message Encoding
 **Description**: Implement encoding functions for all control message types (1-6) following contracts/control.md.
 **Files**:
 - `internal/rtmp/control/encoder.go`
