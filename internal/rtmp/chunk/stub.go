@@ -20,24 +20,7 @@ type Message struct {
 	Payload         []byte
 }
 
-// Reader will dechunk byte streams into Messages. Stub only.
-type Reader struct {
-	chunkSize uint32
-	br        io.Reader
-}
-
-// NewReader creates a new dechunker with an initial inbound chunk size.
-func NewReader(r io.Reader, chunkSize uint32) *Reader {
-	return &Reader{br: r, chunkSize: chunkSize}
-}
-
-// SetChunkSize updates the reader's active chunk size (e.g., after receiving a Set Chunk Size control message).
-func (r *Reader) SetChunkSize(size uint32) { r.chunkSize = size }
-
-// ReadMessage reads and reassembles the next complete message from the stream.
-func (r *Reader) ReadMessage() (*Message, error) {
-	return nil, errors.New("chunk.Reader not implemented (T017-T021 pending)")
-}
+// NOTE: Reader implementation provided in reader.go (T020). This stub file retains Writer stub only.
 
 // Writer fragments Messages into chunks. Stub only.
 type Writer struct {

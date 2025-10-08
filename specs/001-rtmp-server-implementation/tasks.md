@@ -399,7 +399,7 @@ go mod tidy
 
 ---
 
-### T020: Implement Dechunker (Reader)
+### T020 [X]: Implement Dechunker (Reader)
 **Description**: Implement chunk reader that reassembles complete messages from interleaved chunks following contracts/chunking.md.
 **Files**:
 - `internal/rtmp/chunk/reader.go`
