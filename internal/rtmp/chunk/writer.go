@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 )
 
 const (
@@ -132,4 +133,128 @@ func EncodeChunkHeader(h *ChunkHeader, prev *ChunkHeader) ([]byte, error) {
 		buf = append(buf, ext[:]...)
 	}
 	return buf, nil
+}
+
+// -----------------------------------------------------------------------------
+// Writer (T021) – fragments Messages into chunks using FMT0 + FMT3 continuation.
+// -----------------------------------------------------------------------------
+
+// Writer emits RTMP chunks for outbound messages. Not concurrency-safe; expected
+// usage is a single write goroutine per connection.
+type Writer struct {
+	w         io.Writer
+	chunkSize uint32 // outbound chunk size (default 128 if zero)
+}
+
+// NewWriter creates a new chunk Writer.
+func NewWriter(w io.Writer, chunkSize uint32) *Writer {
+	if chunkSize == 0 {
+		chunkSize = 128
+	}
+	return &Writer{w: w, chunkSize: chunkSize}
+}
+
+// SetChunkSize updates the outbound chunk size (validated to sane bounds).
+func (w *Writer) SetChunkSize(size uint32) {
+	if size >= 1 && size <= 65536 {
+		w.chunkSize = size
+	}
+}
+
+// EncodeHeaderOnly helper for header-focused tests (mirrors reader tests style).
+func (w *Writer) EncodeHeaderOnly(h *ChunkHeader, prev *ChunkHeader) (int, error) {
+	b, err := EncodeChunkHeader(h, prev)
+	if err != nil {
+		return 0, err
+	}
+	return w.w.Write(b)
+}
+
+// WriteMessage fragments and writes a full RTMP message as one or more chunks.
+// Requirements:
+//   - First chunk FMT0 (absolute timestamp + full header)
+//   - Continuations FMT3 (header compression) with repeated extended timestamp if used
+//   - Atomic per-chunk Write calls (header+payload together)
+func (w *Writer) WriteMessage(msg *Message) error {
+	if w == nil || w.w == nil {
+		return errors.New("writer: nil underlying writer")
+	}
+	if msg == nil {
+		return errors.New("writer: nil message")
+	}
+	if msg.MessageLength == 0 {
+		msg.MessageLength = uint32(len(msg.Payload))
+	}
+	if int(msg.MessageLength) != len(msg.Payload) {
+		return fmt.Errorf("writer: payload length %d != declared %d", len(msg.Payload), msg.MessageLength)
+	}
+	cs := w.chunkSize
+	if cs == 0 {
+		cs = 128
+	}
+
+	// First (FMT0) header
+	first := &ChunkHeader{
+		FMT:             fmt0,
+		CSID:            msg.CSID,
+		Timestamp:       msg.Timestamp,
+		MessageLength:   msg.MessageLength,
+		MessageTypeID:   msg.TypeID,
+		MessageStreamID: msg.MessageStreamID,
+	}
+	if msg.Timestamp >= extendedTimestampMarker {
+		first.HasExtendedTimestamp = true
+	}
+	hdr, err := EncodeChunkHeader(first, nil)
+	if err != nil {
+		return fmt.Errorf("writer: encode first header: %w", err)
+	}
+	toSend := msg.Payload
+	if uint32(len(toSend)) > cs {
+		toSend = toSend[:cs]
+	}
+	if err := writeChunk(w.w, hdr, toSend); err != nil {
+		return err
+	}
+	written := uint32(len(toSend))
+	prev := first
+
+	// Continuation chunks (FMT3)
+	for written < msg.MessageLength {
+		remain := msg.MessageLength - written
+		sz := remain
+		if sz > cs {
+			sz = cs
+		}
+		cont := &ChunkHeader{FMT: fmt3, CSID: msg.CSID}
+		hdr3, err := EncodeChunkHeader(cont, prev)
+		if err != nil {
+			return fmt.Errorf("writer: encode continuation header: %w", err)
+		}
+		start := written
+		end := written + sz
+		if end > uint32(len(msg.Payload)) {
+			return fmt.Errorf("writer: bounds (end=%d > len=%d)", end, len(msg.Payload))
+		}
+		if err := writeChunk(w.w, hdr3, msg.Payload[start:end]); err != nil {
+			return err
+		}
+		written = end
+		// carry forward extended timestamp semantics implicitly via first.HasExtendedTimestamp
+		prev = cont
+		if first.HasExtendedTimestamp {
+			cont.HasExtendedTimestamp = true
+			cont.Timestamp = first.Timestamp // for EncodeChunkHeader logic if reused later
+		}
+	}
+	return nil
+}
+
+// writeChunk builds a single buffer header+payload and writes it once (atomic chunk emission).
+func writeChunk(w io.Writer, header []byte, payload []byte) error {
+	buf := make([]byte, 0, len(header)+len(payload))
+	buf = append(buf, header...)
+	buf = append(buf, payload...)
+	_, err := w.Write(buf)
+	return err
 }

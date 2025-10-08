@@ -423,7 +423,7 @@ go mod tidy
 
 ---
 
-### T021: Implement Chunker (Writer)
+### T021 [X]: Implement Chunker (Writer)
 **Description**: Implement chunk writer that fragments messages into chunks following contracts/chunking.md.
 **Files**:
 - `internal/rtmp/chunk/writer.go` (update)
