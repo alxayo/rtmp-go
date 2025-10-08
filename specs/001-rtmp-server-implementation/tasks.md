@@ -607,7 +607,7 @@ go mod tidy
 
 ---
 
-### T031 [P]: Implement AMF0 Strict Array Encoding/Decoding
+### T031 [P] [X]: Implement AMF0 Strict Array Encoding/Decoding
 **Description**: Implement AMF0 Strict Array type (0x0A) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/array.go`

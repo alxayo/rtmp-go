@@ -92,6 +92,8 @@ func encodeAny(w io.Writer, v interface{}) error {
 		return EncodeString(w, vv)
 	case map[string]interface{}:
 		return EncodeObject(w, vv)
+	case []interface{}: // Strict Array
+		return EncodeStrictArray(w, vv)
 	default:
 		return fmt.Errorf("unsupported AMF0 value type %T", v)
 	}
@@ -162,6 +164,8 @@ func decodeValueWithMarker(marker byte, r io.Reader) (interface{}, error) {
 	case markerObject:
 		// Nested object: reuse DecodeObject by reconstructing the marker.
 		return DecodeObject(io.MultiReader(bytes.NewReader([]byte{marker}), r))
+	case markerStrictArray:
+		return DecodeStrictArray(io.MultiReader(bytes.NewReader([]byte{marker}), r))
 	default:
 		return nil, fmt.Errorf("unsupported marker 0x%02x", marker)
 	}
