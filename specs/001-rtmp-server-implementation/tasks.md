@@ -574,7 +574,7 @@ go mod tidy
 
 ---
 
-### T029 [P]: Implement AMF0 Null Encoding/Decoding
+### T029 [P] [X]: Implement AMF0 Null Encoding/Decoding
 **Description**: Implement AMF0 Null type (0x05) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/null.go`
