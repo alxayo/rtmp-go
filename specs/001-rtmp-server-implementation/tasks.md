@@ -486,7 +486,7 @@ go mod tidy
 
 ---
 
-### T024: Implement Control Message Handlers
+### T024 [X]: Implement Control Message Handlers
 **Description**: Implement control message handlers that update connection state following contracts/control.md.
 **Files**:
 - `internal/rtmp/control/handler.go`
