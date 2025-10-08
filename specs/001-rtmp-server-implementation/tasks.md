@@ -527,7 +527,7 @@ go mod tidy
 
 ### AMF0 Layer
 
-### T026 [P]: Implement AMF0 Number Encoding/Decoding
+### T026 [P] [X]: Implement AMF0 Number Encoding/Decoding
 **Description**: Implement AMF0 Number type (0x00) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/number.go`
