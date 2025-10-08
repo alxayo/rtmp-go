@@ -466,7 +466,7 @@ go mod tidy
 
 ---
 
-### T023 [P]: Implement Control Message Decoding
+### T023 [P] [X]: Implement Control Message Decoding
 **Description**: Implement decoding functions for all control message types following contracts/control.md.
 **Files**:
 - `internal/rtmp/control/decoder.go`
