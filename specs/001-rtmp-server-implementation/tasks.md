@@ -543,7 +543,7 @@ go mod tidy
 
 ---
 
-### T027 [P]: Implement AMF0 Boolean Encoding/Decoding
+### T027 [P] [X]: Implement AMF0 Boolean Encoding/Decoding
 **Description**: Implement AMF0 Boolean type (0x01) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/boolean.go`
