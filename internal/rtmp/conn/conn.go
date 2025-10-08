@@ -81,11 +81,20 @@ func Accept(l net.Listener) (*Connection, error) {
 	lgr := logger.WithConn(logger.Logger(), id, raw.RemoteAddr().String())
 	lgr.Info("Connection accepted", "handshake_ms", dur.Milliseconds())
 
-	return &Connection{
+	c := &Connection{
 		id:                id,
 		netConn:           raw,
 		acceptedAt:        start,
 		handshakeDuration: dur,
 		log:               lgr,
-	}, nil
+	}
+
+	// Fire control burst (T025) asynchronously so Accept remains non-blocking post-handshake.
+	go func() {
+		if err := sendInitialControlBurst(c); err != nil {
+			c.log.Error("Control burst failed", "error", err)
+		}
+	}()
+
+	return c, nil
 }

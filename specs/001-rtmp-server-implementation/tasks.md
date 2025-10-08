@@ -507,7 +507,7 @@ go mod tidy
 
 ---
 
-### T025: Implement Control Burst Sequence
+### T025 [X]: Implement Control Burst Sequence
 **Description**: Implement control burst (WAS, SPB, SCS) sent immediately after handshake following contracts/control.md.
 **Files**:
 - `internal/rtmp/conn/control_burst.go`
