@@ -589,7 +589,7 @@ go mod tidy
 
 ---
 
-### T030: Implement AMF0 Object Encoding/Decoding
+### T030 [X]: Implement AMF0 Object Encoding/Decoding
 **Description**: Implement AMF0 Object type (0x03) encoding and decoding following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/object.go`
