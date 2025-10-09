@@ -811,7 +811,7 @@ go mod tidy
 
 ---
 
-### T043: Implement Codec Detection Logger
+### T043 [X]: Implement Codec Detection Logger
 **Description**: Implement codec detection logger that extracts and logs codec info from first audio/video messages following contracts/media.md.
 **Files**:
 - `internal/rtmp/media/codec_detector.go`
