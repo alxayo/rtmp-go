@@ -827,7 +827,7 @@ go mod tidy
 
 ---
 
-### T044: Implement Media Message Relay
+### T044 [X]: Implement Media Message Relay
 **Description**: Implement media message broadcast from publisher to all subscribers following data-model.md Stream entity.
 **Files**:
 - `internal/rtmp/media/relay.go`
