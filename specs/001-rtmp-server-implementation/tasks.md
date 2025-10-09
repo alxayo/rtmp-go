@@ -970,7 +970,7 @@ go mod tidy
 
 ---
 
-### T052: Implement RTMP Client (for testing)
+### T052 [X]: Implement RTMP Client (for testing)
 **Description**: Implement simple RTMP client for integration testing following plan.md client structure.
 **Files**:
 - `internal/rtmp/client/client.go`
