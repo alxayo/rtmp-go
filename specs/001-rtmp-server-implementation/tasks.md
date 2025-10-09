@@ -896,7 +896,7 @@ go mod tidy
 
 ---
 
-### T048: Implement Stream Registry
+### T048 [X]: Implement Stream Registry
 **Description**: Implement server-side stream registry for managing active streams following data-model.md Stream entity.
 **Files**:
 - `internal/rtmp/server/registry.go`
