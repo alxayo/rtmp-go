@@ -717,7 +717,7 @@ go mod tidy
 
 ---
 
-### T038: Implement Play Command Parsing
+### T038 [X]: Implement Play Command Parsing
 **Description**: Implement `play` command parsing following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/play.go`
