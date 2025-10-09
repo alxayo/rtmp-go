@@ -931,7 +931,7 @@ go mod tidy
 
 ---
 
-### T050: Implement Play Handler
+### T050 [X]: Implement Play Handler
 **Description**: Implement play command handler that subscribes player to stream following contracts/commands.md.
 **Files**:
 - `internal/rtmp/server/play_handler.go`

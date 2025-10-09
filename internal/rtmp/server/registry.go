@@ -120,6 +120,28 @@ func (s *Stream) AddSubscriber(sub media.Subscriber) {
 	s.mu.Unlock()
 }
 
+// RemoveSubscriber removes the first matching subscriber reference (identity
+// comparison) from the slice. This helper is added by T050 (play handler) so
+// tests can simulate disconnect without a full connection lifecycle yet.
+func (s *Stream) RemoveSubscriber(sub media.Subscriber) {
+	if s == nil || sub == nil {
+		return
+	}
+	s.mu.Lock()
+	for i, existing := range s.Subscribers {
+		if existing == sub {
+			// Remove without preserving order (swap delete) since order is
+			// not semantically relevant.
+			last := len(s.Subscribers) - 1
+			s.Subscribers[i] = s.Subscribers[last]
+			s.Subscribers[last] = nil
+			s.Subscribers = s.Subscribers[:last]
+			break
+		}
+	}
+	s.mu.Unlock()
+}
+
 // SubscriberCount returns a snapshot count of subscribers.
 func (s *Stream) SubscriberCount() int {
 	if s == nil {
