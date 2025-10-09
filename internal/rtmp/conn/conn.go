@@ -33,8 +33,7 @@ import (
 // Future tasks will add read/write goroutines, control message negotiation,
 // and command handling. For now we only retain metadata useful for logging
 // and tests.
-// Session placeholder until T047 implements full session entity.
-type Session struct{}
+// (Session entity implemented in session.go – placeholder removed)
 
 type Connection struct {
 	// Immutable / identity

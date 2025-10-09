@@ -880,7 +880,7 @@ go mod tidy
 
 ---
 
-### T047: Implement Session Entity
+### T047 [X]: Implement Session Entity
 **Description**: Implement Session entity for RTMP session state following data-model.md Session entity.
 **Files**:
 - `internal/rtmp/conn/session.go`
