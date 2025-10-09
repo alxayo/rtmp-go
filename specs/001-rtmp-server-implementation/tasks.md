@@ -623,7 +623,7 @@ go mod tidy
 
 ---
 
-### T032: Implement AMF0 Generic Encoder/Decoder
+### T032 [X]: Implement AMF0 Generic Encoder/Decoder
 **Description**: Implement generic AMF0 encoder/decoder that dispatches based on Go type or type marker following contracts/amf0.md.
 **Files**:
 - `internal/rtmp/amf/amf.go`
@@ -643,7 +643,7 @@ go mod tidy
 
 ### RPC/Commands Layer
 
-### T033 [P]: Implement Connect Command Parsing
+### T033 [P] [X]: Implement Connect Command Parsing
 **Description**: Implement `connect` command parsing following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/connect.go`
