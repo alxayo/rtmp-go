@@ -988,7 +988,7 @@ go mod tidy
 
 ## Phase 3.5: Polish & Validation
 
-### T053 [P]: Implement Server CLI
+### T053 [P] [X]: Implement Server CLI
 **Description**: Implement command-line interface for RTMP server following quickstart.md.
 **Files**:
 - `cmd/rtmp-server/main.go`
