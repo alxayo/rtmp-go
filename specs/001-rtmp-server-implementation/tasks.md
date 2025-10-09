@@ -774,7 +774,7 @@ go mod tidy
 
 ### Media Layer
 
-### T041 [P]: Implement Audio Message Parsing
+### T041 [P] [X]: Implement Audio Message Parsing
 **Description**: Implement audio message (type 8) parsing for codec detection following contracts/media.md.
 **Files**:
 - `internal/rtmp/media/audio.go`
