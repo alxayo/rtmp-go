@@ -913,7 +913,7 @@ go mod tidy
 
 ---
 
-### T049: Implement Publish Handler
+### T049 [X]: Implement Publish Handler
 **Description**: Implement publish command handler that registers publisher in stream registry following contracts/commands.md.
 **Files**:
 - `internal/rtmp/server/publish_handler.go`

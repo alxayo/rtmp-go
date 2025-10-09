@@ -11,6 +11,12 @@ import (
 // RTMP message type ID for AMF0 command messages.
 const commandMessageAMF0TypeID = 20
 
+// CommandMessageAMF0TypeIDForTest exposes the command message type id (20)
+// to other packages that need to build AMF0 command messages (e.g. server
+// handlers) without exporting the constant itself. Kept small to avoid
+// broadening the public API surface prematurely.
+func CommandMessageAMF0TypeIDForTest() uint8 { return commandMessageAMF0TypeID }
+
 // ConnectCommand represents the parsed contents of a "connect" command.
 // Only the fields required by our current implementation scope are captured.
 type ConnectCommand struct {
