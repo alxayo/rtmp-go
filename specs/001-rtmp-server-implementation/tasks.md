@@ -660,7 +660,7 @@ go mod tidy
 
 ---
 
-### T034 [P]: Implement Connect Response Builder
+### T034 [P] [X]: Implement Connect Response Builder
 **Description**: Implement `_result` response builder for connect command following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/connect_response.go`
