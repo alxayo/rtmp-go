@@ -13,13 +13,18 @@ package conn
 // subsequent tasks (control burst, read/write loops, stream registry, etc.).
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
+	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
@@ -28,12 +33,33 @@ import (
 // Future tasks will add read/write goroutines, control message negotiation,
 // and command handling. For now we only retain metadata useful for logging
 // and tests.
+// Session placeholder until T047 implements full session entity.
+type Session struct{}
+
 type Connection struct {
+	// Immutable / identity
 	id                string
 	netConn           net.Conn
+	remoteAddr        net.Addr
 	acceptedAt        time.Time
 	handshakeDuration time.Duration
 	log               *slog.Logger
+
+	// Context & lifecycle
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	// Protocol state (subset per T046 requirements)
+	readChunkSize  uint32
+	writeChunkSize uint32
+	windowAckSize  uint32
+	chunkStreams   map[uint32]*chunk.ChunkStreamState // accessed only by readLoop
+	outboundQueue  chan *chunk.Message
+	session        *Session // placeholder (T047)
+
+	// Internal helpers
+	onMessage func(*chunk.Message) // test hook / dispatcher injection
 }
 
 // ID returns the logical connection id.
@@ -46,7 +72,103 @@ func (c *Connection) NetConn() net.Conn { return c.netConn }
 func (c *Connection) HandshakeDuration() time.Duration { return c.handshakeDuration }
 
 // Close closes the underlying connection.
-func (c *Connection) Close() error { return c.netConn.Close() }
+func (c *Connection) Close() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	// Closing the underlying net.Conn will unblock reader/writer.
+	_ = c.netConn.Close()
+	// Wait for goroutines (bounded: they exit on ctx cancellation).
+	c.wg.Wait()
+	return nil
+}
+
+// SetMessageHandler installs a callback invoked by the readLoop for every
+// fully reassembled RTMP message. Safe to call before or after Accept returns
+// but should be set before meaningful traffic for tests.
+func (c *Connection) SetMessageHandler(fn func(*chunk.Message)) { c.onMessage = fn }
+
+// SendMessage enqueues a message for outbound transmission (chunked by writeLoop).
+// It enforces a small timeout to provide backpressure behavior.
+func (c *Connection) SendMessage(msg *chunk.Message) error {
+	if c == nil || c.outboundQueue == nil {
+		return errors.New("connection not initialized")
+	}
+	if msg == nil {
+		return errors.New("nil message")
+	}
+	// Derive short timeout context.
+	deadline := time.NewTimer(200 * time.Millisecond)
+	defer deadline.Stop()
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	case c.outboundQueue <- msg:
+		return nil
+	case <-deadline.C:
+		return fmt.Errorf("send queue full (len=%d)", len(c.outboundQueue))
+	}
+}
+
+// startReadLoop begins the dechunk → dispatch loop.
+func (c *Connection) startReadLoop() {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		r := chunk.NewReader(c.netConn, c.readChunkSize)
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			default:
+			}
+			msg, err := r.ReadMessage()
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+					return
+				}
+				// Distinguish expected termination (EOF) vs unexpected errors.
+				if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+					c.log.Debug("readLoop closed", "error", err)
+				} else {
+					c.log.Debug("readLoop error", "error", err)
+				}
+				return
+			}
+			if c.onMessage != nil {
+				c.onMessage(msg)
+			}
+		}
+	}()
+}
+
+// Helper to unify EOF detection without importing io here again in patch context.
+func ioEOF(err error) error { return err }
+
+// startWriteLoop consumes outboundQueue and writes chunked messages.
+func (c *Connection) startWriteLoop() {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		w := chunk.NewWriter(c.netConn, c.writeChunkSize)
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case msg, ok := <-c.outboundQueue:
+				if !ok {
+					return
+				}
+				// Sync writer chunk size with potentially updated field.
+				w.SetChunkSize(c.writeChunkSize)
+				if err := w.WriteMessage(msg); err != nil {
+					c.log.Debug("writeLoop write failed", "error", err)
+					return
+				}
+			}
+		}
+	}()
+}
 
 var connCounter uint64
 
@@ -81,13 +203,26 @@ func Accept(l net.Listener) (*Connection, error) {
 	lgr := logger.WithConn(logger.Logger(), id, raw.RemoteAddr().String())
 	lgr.Info("Connection accepted", "handshake_ms", dur.Milliseconds())
 
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Connection{
 		id:                id,
 		netConn:           raw,
+		remoteAddr:        raw.RemoteAddr(),
 		acceptedAt:        start,
 		handshakeDuration: dur,
 		log:               lgr,
+		ctx:               ctx,
+		cancel:            cancel,
+		readChunkSize:     128,
+		writeChunkSize:    128,
+		windowAckSize:     windowAckSizeValue, // align with control burst constants
+		chunkStreams:      make(map[uint32]*chunk.ChunkStreamState),
+		outboundQueue:     make(chan *chunk.Message, 100),
 	}
+
+	// Start protocol loops (read then write) – after constructing connection.
+	c.startReadLoop()
+	c.startWriteLoop()
 
 	// Fire control burst (T025) asynchronously so Accept remains non-blocking post-handshake.
 	go func() {
