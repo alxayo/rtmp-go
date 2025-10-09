@@ -792,7 +792,7 @@ go mod tidy
 
 ---
 
-### T042 [P]: Implement Video Message Parsing
+### T042 [P] [X]: Implement Video Message Parsing
 **Description**: Implement video message (type 9) parsing for codec detection following contracts/media.md.
 **Files**:
 - `internal/rtmp/media/video.go`
