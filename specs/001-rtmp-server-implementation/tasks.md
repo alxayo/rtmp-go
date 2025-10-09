@@ -692,7 +692,7 @@ go mod tidy
 
 ---
 
-### T036 [P]: Implement CreateStream Response Builder
+### T036 [P] [X]: Implement CreateStream Response Builder
 **Description**: Implement `_result` response builder for createStream following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/createstream_response.go`
