@@ -843,7 +843,7 @@ go mod tidy
 
 ---
 
-### T045 [P]: Implement FLV Recorder
+### T045 [P] [X]: Implement FLV Recorder
 **Description**: Implement optional FLV file recorder for streams following data-model.md Recorder entity.
 **Files**:
 - `internal/rtmp/media/recorder.go`
