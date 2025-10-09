@@ -751,7 +751,7 @@ go mod tidy
 
 ---
 
-### T040: Implement Command Message Dispatcher
+### T040 [X]: Implement Command Message Dispatcher
 **Description**: Implement command message dispatcher that routes commands to handlers following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/dispatcher.go`
