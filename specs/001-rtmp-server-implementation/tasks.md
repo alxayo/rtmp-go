@@ -707,17 +707,10 @@ go mod tidy
 
 ---
 
-### T037: Implement Publish Command Parsing
+### T037 [X]: Implement Publish Command Parsing
 **Description**: Implement `publish` command parsing following contracts/commands.md.
 **Files**:
-- `internal/rtmp/rpc/publish.go`
-- `internal/rtmp/rpc/publish_test.go`
 **Requirements**:
-- Parse command: ["publish", 0, null, publishingName, publishingType]
-- Extract: publishingName (stream key), publishingType ("live"|"record"|"append")
-- Construct full stream key: "app/publishingName"
-- Return `PublishCommand`
-- Unit tests: valid publish, missing publishingName
 **Dependencies**: T032 (AMF0 generic)
 **Test Coverage**: >90%
 **Estimated Complexity**: Small (2 hours)
