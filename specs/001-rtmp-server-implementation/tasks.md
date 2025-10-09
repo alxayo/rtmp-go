@@ -677,7 +677,7 @@ go mod tidy
 
 ---
 
-### T035 [P]: Implement CreateStream Command Parsing
+### T035 [P] [X]: Implement CreateStream Command Parsing
 **Description**: Implement `createStream` command parsing following contracts/commands.md.
 **Files**:
 - `internal/rtmp/rpc/createstream.go`
