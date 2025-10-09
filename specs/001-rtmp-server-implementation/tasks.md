@@ -1003,7 +1003,7 @@ go mod tidy
 
 ---
 
-### T054: FFmpeg Interoperability Test
+### T054 [X]: FFmpeg Interoperability Test
 **Description**: Validate FFmpeg publish and ffplay playback following quickstart.md integration test scenario.
 **Files**:
 - `tests/interop/ffmpeg_test.sh` (or .ps1 for Windows)
