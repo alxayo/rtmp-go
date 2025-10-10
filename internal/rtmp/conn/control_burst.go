@@ -30,17 +30,14 @@ const (
 	serverChunkSize        uint32 = 4096
 )
 
-// sendInitialControlBurst performs the control burst over the raw connection.
-// It is invoked asynchronously by Accept(). A best-effort approach is used:
-// the first encountered error aborts the remaining sends (subsequent tasks
-// may choose to retry / degrade gracefully).
+// sendInitialControlBurst performs the control burst by enqueuing messages
+// to the connection's outbound queue. It is invoked asynchronously by Accept().
+// A best-effort approach is used: the first encountered error aborts the
+// remaining sends (subsequent tasks may choose to retry / degrade gracefully).
 func sendInitialControlBurst(c *Connection) error {
-	if c == nil || c.netConn == nil {
+	if c == nil {
 		return fmt.Errorf("control burst: nil connection")
 	}
-	// Writer with default outbound chunk size (128) – the Set Chunk Size we
-	// send last instructs the peer for subsequent traffic.
-	w := chunk.NewWriter(c.netConn, 128)
 
 	// Build messages in required order.
 	msgs := []*chunk.Message{
@@ -50,8 +47,12 @@ func sendInitialControlBurst(c *Connection) error {
 	}
 
 	for _, m := range msgs {
-		if err := w.WriteMessage(m); err != nil {
-			return fmt.Errorf("control burst write type=%d: %w", m.TypeID, err)
+		// Debug log the message being sent
+		c.log.Debug("Control burst sending", "type_id", m.TypeID, "csid", m.CSID, "msid", m.MessageStreamID, "payload_len", len(m.Payload))
+
+		// Use SendMessage to properly enqueue messages through the writeLoop
+		if err := c.SendMessage(m); err != nil {
+			return fmt.Errorf("control burst enqueue type=%d: %w", m.TypeID, err)
 		}
 		// Per message logging with concise metadata.
 		switch m.TypeID {

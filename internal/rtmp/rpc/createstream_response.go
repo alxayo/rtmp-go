@@ -63,6 +63,7 @@ func BuildCreateStreamResponse(transactionID float64, allocator *StreamIDAllocat
 	}
 
 	msg := &chunk.Message{
+		CSID:            3, // Command messages use CSID 3 per RTMP conventions
 		TypeID:          commandMessageAMF0TypeID,
 		MessageStreamID: 0, // still connection-level
 		Payload:         payload,

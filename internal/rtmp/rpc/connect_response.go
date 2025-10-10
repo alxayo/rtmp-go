@@ -47,7 +47,7 @@ func BuildConnectResponse(transactionID float64, description string) (*chunk.Mes
 	}
 
 	return &chunk.Message{
-		// CSID intentionally 0 (unset) – writer will decide actual chunk stream (usually 3)
+		CSID:            3, // Command messages use CSID 3 per RTMP conventions
 		TypeID:          commandMessageAMF0TypeID,
 		MessageStreamID: 0,
 		Payload:         payload,
