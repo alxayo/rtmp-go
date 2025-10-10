@@ -23,10 +23,12 @@ func main() {
 		return
 	}
 
-	// Initialize global logger level based on flag (simple approach: environment override or logger package extension later)
-	base := logger.Logger()
-	// For now we rely on slog default; future enhancement: dynamic level filter. We'll attach level field.
-	log := base.With("log_level", cfg.logLevel, "component", "cli")
+	// Initialize global logger and set level based on flag
+	logger.Init()
+	if err := logger.SetLevel(cfg.logLevel); err != nil {
+		fmt.Printf("Warning: invalid log level %q, using default\n", cfg.logLevel)
+	}
+	log := logger.Logger().With("component", "cli")
 
 	server := srv.New(srv.Config{
 		ListenAddr:    cfg.listenAddr,
