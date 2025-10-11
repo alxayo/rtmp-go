@@ -83,9 +83,13 @@ func (c *Connection) Close() error {
 }
 
 // SetMessageHandler installs a callback invoked by the readLoop for every
-// fully reassembled RTMP message. Safe to call before or after Accept returns
-// but should be set before meaningful traffic for tests.
+// fully reassembled RTMP message. MUST be called before Start().
 func (c *Connection) SetMessageHandler(fn func(*chunk.Message)) { c.onMessage = fn }
+
+// Start begins the readLoop. MUST be called after SetMessageHandler() to avoid race condition.
+func (c *Connection) Start() {
+	c.startReadLoop()
+}
 
 // SendMessage enqueues a message for outbound transmission (chunked by writeLoop).
 // It enforces a small timeout to provide backpressure behavior.
@@ -239,8 +243,8 @@ func Accept(l net.Listener) (*Connection, error) {
 		return nil, fmt.Errorf("control burst: %w", err)
 	}
 
-	// Start read loop AFTER control burst is sent
-	c.startReadLoop()
+	// NOTE: readLoop is NOT started here to avoid race condition with message handler setup.
+	// Caller MUST call Start() after setting message handler via SetMessageHandler().
 
 	return c, nil
 }

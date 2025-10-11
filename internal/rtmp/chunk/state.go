@@ -65,16 +65,19 @@ func (s *ChunkStreamState) ApplyHeader(h *ChunkHeader) error {
 		s.ResetBuffer()
 		s.inProgress = true
 	case 1: // delta + length + type (reuse stream id)
-		// FMT1 can be first chunk on a CSID if client assumes MessageStreamID=0
-		// This is common for command/control messages. Accept and use MSID=0 as default.
-		if s.LastMsgStreamID == 0 {
-			s.LastMsgStreamID = 0         // Explicit: assume control stream (MSID=0)
-			s.LastTimestamp = h.Timestamp // First use: treat as absolute
+		// FMT1 reuses stream ID from previous message. Header parser should have already
+		// inherited MessageStreamID from prevHeader. Check if this is first message on CSID.
+		isFirstMessage := (s.LastMsgLength == 0 && s.LastMsgTypeID == 0)
+		if isFirstMessage {
+			// First message on this CSID: treat timestamp as absolute
+			s.LastTimestamp = h.Timestamp
 		} else {
-			s.LastTimestamp += h.Timestamp // Subsequent: delta
+			// Subsequent message: timestamp is delta
+			s.LastTimestamp += h.Timestamp
 		}
 		s.LastMsgLength = h.MessageLength
 		s.LastMsgTypeID = h.MessageTypeID
+		s.LastMsgStreamID = h.MessageStreamID // Update from header (inherited by reader)
 		s.ResetBuffer()
 		s.inProgress = true
 	case 2: // delta only (reuse length, type, stream id)
@@ -84,11 +87,19 @@ func (s *ChunkStreamState) ApplyHeader(h *ChunkHeader) error {
 		s.LastTimestamp += h.Timestamp
 		s.ResetBuffer()
 		s.inProgress = true
-	case 3: // continuation – MUST have active in-progress message
-		if !s.inProgress || s.LastMsgLength == 0 {
-			return protoerr.NewChunkError("state.apply_header", fmt.Errorf("FMT3 without active message"))
+	case 3: // continuation OR new message with same header
+		// FMT3 has two uses per spec:
+		// 1. Continuation of current in-progress message (multi-chunk)
+		// 2. New message with all fields identical to previous message
+		if s.LastMsgLength == 0 {
+			return protoerr.NewChunkError("state.apply_header", fmt.Errorf("FMT3 without prior header state"))
 		}
-		// no field changes
+		if !s.inProgress {
+			// Starting a new message (case 2) - reuse all cached header fields
+			s.ResetBuffer()
+			s.inProgress = true
+		}
+		// Otherwise continuing current message (case 1) - no field changes
 	default:
 		return protoerr.NewChunkError("state.apply_header", fmt.Errorf("unsupported fmt %d", h.FMT))
 	}

@@ -144,6 +144,10 @@ func (r *Reader) nextHeader() (*ChunkHeader, error) {
 		h.IsDelta = true
 		h.MessageLength = uint32(mh[3])<<16 | uint32(mh[4])<<8 | uint32(mh[5])
 		h.MessageTypeID = mh[6]
+		// FMT1 reuses MessageStreamID from previous header (per RTMP spec)
+		if prev := r.prevHeader[csid]; prev != nil {
+			h.MessageStreamID = prev.MessageStreamID
+		}
 		if delta == extendedTimestampMarker {
 			var ext [4]byte
 			if _, err = io.ReadFull(r.br, ext[:]); err != nil {

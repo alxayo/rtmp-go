@@ -131,6 +131,7 @@ func TestReadLoopMessageDispatch(t *testing.T) {
 			dispatched.Store(true)
 		}
 	})
+	serverConn.Start() // Start readLoop after handler is set
 
 	// Send a simple command message from client to server.
 	w := chunk.NewWriter(client, 128)

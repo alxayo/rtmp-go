@@ -55,8 +55,13 @@ func ParsePublishCommand(app string, msg *chunk.Message) (*PublishCommand, error
 
 	// 3: publishingName
 	publishingName, ok := vals[3].(string)
-	if !ok || publishingName == "" {
-		return nil, errors.NewProtocolError("publish.parse", fmt.Errorf("publishingName required"))
+	if !ok {
+		return nil, errors.NewProtocolError("publish.parse", fmt.Errorf("publishingName must be string"))
+	}
+	// Allow empty publishingName - some clients send empty string
+	// In this case, use "default" as the stream name
+	if publishingName == "" {
+		publishingName = "default"
 	}
 
 	// 4: publishingType

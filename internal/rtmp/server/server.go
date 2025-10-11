@@ -139,6 +139,8 @@ func (s *Server) acceptLoop() {
 		// Wire command handling so real clients (OBS/ffmpeg) can complete
 		// connect/createStream/publish. (Incremental integration step.)
 		attachCommandHandling(c, s.reg, s.log)
+		// Start readLoop AFTER message handler is attached to avoid race condition
+		c.Start()
 	}
 }
 
