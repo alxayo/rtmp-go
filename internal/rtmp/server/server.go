@@ -138,7 +138,7 @@ func (s *Server) acceptLoop() {
 		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String())
 		// Wire command handling so real clients (OBS/ffmpeg) can complete
 		// connect/createStream/publish. (Incremental integration step.)
-		attachCommandHandling(c, s.reg, s.log)
+		attachCommandHandling(c, s.reg, &s.cfg, s.log)
 		// Start readLoop AFTER message handler is attached to avoid race condition
 		c.Start()
 	}
@@ -161,13 +161,17 @@ func (s *Server) Stop() error {
 	s.mu.Unlock()
 	_ = l.Close()
 
-	// Close all connections.
+	// Close all connections and clean up recorders.
 	s.mu.RLock()
 	for id, c := range s.conns {
 		_ = c.Close()
 		delete(s.conns, id)
 	}
 	s.mu.RUnlock()
+
+	// Clean up all active recorders
+	s.cleanupAllRecorders()
+
 	s.acceptingWg.Wait()
 	s.log.Info("RTMP server stopped")
 	return nil
@@ -213,4 +217,36 @@ func (s *singleConnListener) Addr() net.Addr {
 		return s.conn.LocalAddr()
 	}
 	return &net.TCPAddr{}
+}
+
+// cleanupAllRecorders closes all active recorders in the registry.
+// This is called during server shutdown to ensure all FLV files are properly closed.
+func (s *Server) cleanupAllRecorders() {
+	if s == nil || s.reg == nil {
+		return
+	}
+
+	s.reg.mu.RLock()
+	streams := make([]*Stream, 0, len(s.reg.streams))
+	for _, stream := range s.reg.streams {
+		streams = append(streams, stream)
+	}
+	s.reg.mu.RUnlock()
+
+	for _, stream := range streams {
+		if stream == nil {
+			continue
+		}
+
+		stream.mu.Lock()
+		if stream.Recorder != nil {
+			if err := stream.Recorder.Close(); err != nil {
+				s.log.Error("recorder close error", "error", err, "stream_key", stream.Key)
+			} else {
+				s.log.Info("recorder closed", "stream_key", stream.Key)
+			}
+			stream.Recorder = nil
+		}
+		stream.mu.Unlock()
+	}
 }
