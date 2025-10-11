@@ -65,10 +65,14 @@ func (s *ChunkStreamState) ApplyHeader(h *ChunkHeader) error {
 		s.ResetBuffer()
 		s.inProgress = true
 	case 1: // delta + length + type (reuse stream id)
+		// FMT1 can be first chunk on a CSID if client assumes MessageStreamID=0
+		// This is common for command/control messages. Accept and use MSID=0 as default.
 		if s.LastMsgStreamID == 0 {
-			return protoerr.NewChunkError("state.apply_header", fmt.Errorf("FMT1 without prior state"))
+			s.LastMsgStreamID = 0         // Explicit: assume control stream (MSID=0)
+			s.LastTimestamp = h.Timestamp // First use: treat as absolute
+		} else {
+			s.LastTimestamp += h.Timestamp // Subsequent: delta
 		}
-		s.LastTimestamp += h.Timestamp // Timestamp holds delta per parser contract
 		s.LastMsgLength = h.MessageLength
 		s.LastMsgTypeID = h.MessageTypeID
 		s.ResetBuffer()

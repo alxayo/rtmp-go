@@ -95,22 +95,32 @@ func (d *Dispatcher) Dispatch(msg *chunk.Message) error {
 
 	switch name {
 	case "connect":
+		d.log.Debug("dispatching connect command")
 		if d.OnConnect == nil {
+			d.log.Error("no OnConnect handler registered")
 			return d.noHandlerErr(name)
 		}
+		d.log.Debug("parsing connect command")
 		cc, err := ParseConnectCommand(msg)
 		if err != nil {
+			d.log.Error("connect parse error", "error", err)
 			return err
 		}
+		d.log.Debug("invoking OnConnect handler", "app", cc.App, "tcUrl", cc.TcURL)
 		return d.OnConnect(cc, msg)
 	case "createStream":
+		d.log.Debug("dispatching createStream command")
 		if d.OnCreateStream == nil {
+			d.log.Error("no OnCreateStream handler registered")
 			return d.noHandlerErr(name)
 		}
+		d.log.Debug("parsing createStream command")
 		cs, err := ParseCreateStreamCommand(msg)
 		if err != nil {
+			d.log.Error("createStream parse error", "error", err)
 			return err
 		}
+		d.log.Debug("invoking OnCreateStream handler", "txn_id", cs.TransactionID)
 		return d.OnCreateStream(cs, msg)
 	case "publish":
 		if d.OnPublish == nil {
@@ -137,6 +147,11 @@ func (d *Dispatcher) Dispatch(msg *chunk.Message) error {
 			return d.noHandlerErr(name)
 		}
 		return d.OnDeleteStream(vals, msg)
+	case "releaseStream", "FCPublish", "FCUnpublish":
+		// OBS/FFmpeg pre-publish commands - treat as no-ops for now
+		// These are optional Flash Media Server extensions
+		d.log.Debug("ignoring optional command", "name", name)
+		return nil
 	default:
 		// Unknown command – log warning (requirements) then ignore.
 		// Capture a short hex preview of payload for debugging.

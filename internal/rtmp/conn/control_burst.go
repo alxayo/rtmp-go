@@ -71,7 +71,10 @@ func sendInitialControlBurst(c *Connection) error {
 			}
 		case control.TypeSetChunkSize:
 			if len(m.Payload) == 4 {
-				c.log.Info("Control sent: Set Chunk Size", "size", binary.BigEndian.Uint32(m.Payload))
+				newSize := binary.BigEndian.Uint32(m.Payload)
+				c.log.Info("Control sent: Set Chunk Size", "size", newSize)
+				// CRITICAL: Update the connection's write chunk size to match what we told the peer
+				c.writeChunkSize = newSize
 			} else {
 				c.log.Info("Control sent: Set Chunk Size")
 			}

@@ -115,12 +115,15 @@ func (c *Connection) startReadLoop() {
 	go func() {
 		defer c.wg.Done()
 		r := chunk.NewReader(c.netConn, c.readChunkSize)
+		c.log.Debug("readLoop started", "initial_chunk_size", c.readChunkSize)
 		for {
 			select {
 			case <-c.ctx.Done():
+				c.log.Debug("readLoop context cancelled")
 				return
 			default:
 			}
+			c.log.Debug("readLoop waiting for message")
 			msg, err := r.ReadMessage()
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
@@ -130,10 +133,11 @@ func (c *Connection) startReadLoop() {
 				if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 					c.log.Debug("readLoop closed", "error", err)
 				} else {
-					c.log.Debug("readLoop error", "error", err)
+					c.log.Error("readLoop error", "error", err)
 				}
 				return
 			}
+			c.log.Debug("readLoop received message", "type_id", msg.TypeID, "msid", msg.MessageStreamID, "len", len(msg.Payload))
 			if c.onMessage != nil {
 				c.onMessage(msg)
 			}
@@ -150,20 +154,25 @@ func (c *Connection) startWriteLoop() {
 	go func() {
 		defer c.wg.Done()
 		w := chunk.NewWriter(c.netConn, c.writeChunkSize)
+		c.log.Debug("writeLoop started", "write_chunk_size", c.writeChunkSize)
 		for {
 			select {
 			case <-c.ctx.Done():
+				c.log.Debug("writeLoop context cancelled")
 				return
 			case msg, ok := <-c.outboundQueue:
 				if !ok {
+					c.log.Debug("writeLoop queue closed")
 					return
 				}
+				c.log.Debug("writeLoop sending message", "type_id", msg.TypeID, "csid", msg.CSID, "msid", msg.MessageStreamID, "len", len(msg.Payload))
 				// Sync writer chunk size with potentially updated field.
 				w.SetChunkSize(c.writeChunkSize)
 				if err := w.WriteMessage(msg); err != nil {
-					c.log.Debug("writeLoop write failed", "error", err)
+					c.log.Error("writeLoop write failed", "error", err)
 					return
 				}
+				c.log.Debug("writeLoop message sent successfully", "type_id", msg.TypeID)
 			}
 		}
 	}()
@@ -219,16 +228,19 @@ func Accept(l net.Listener) (*Connection, error) {
 		outboundQueue:     make(chan *chunk.Message, 100),
 	}
 
-	// Start protocol loops (read then write) – after constructing connection.
-	c.startReadLoop()
+	// Start write loop first so control burst can be queued
 	c.startWriteLoop()
 
-	// Fire control burst (T025) asynchronously so Accept remains non-blocking post-handshake.
-	go func() {
-		if err := sendInitialControlBurst(c); err != nil {
-			c.log.Error("Control burst failed", "error", err)
-		}
-	}()
+	// Send control burst synchronously BEFORE starting read loop
+	// This ensures the client receives the burst before we process any client messages
+	if err := sendInitialControlBurst(c); err != nil {
+		c.log.Error("Control burst failed", "error", err)
+		_ = c.Close()
+		return nil, fmt.Errorf("control burst: %w", err)
+	}
+
+	// Start read loop AFTER control burst is sent
+	c.startReadLoop()
 
 	return c, nil
 }

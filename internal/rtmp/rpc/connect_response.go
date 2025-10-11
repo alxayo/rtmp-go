@@ -30,7 +30,7 @@ import (
 // chunk writer layer when serialising for the wire.
 func BuildConnectResponse(transactionID float64, description string) (*chunk.Message, error) {
 	props := map[string]interface{}{
-		"fmsVer":       "FMS/3,5,7,7009", // common version string used by many simple servers
+		"fmsVer":       "FMS/3,0,1,123",
 		"capabilities": 31.0,
 		"mode":         1.0,
 	}
@@ -39,6 +39,7 @@ func BuildConnectResponse(transactionID float64, description string) (*chunk.Mes
 		"level":       "status",
 		"code":        "NetConnection.Connect.Success",
 		"description": description,
+		"data":        map[string]interface{}{"version": "3,0,1,123"},
 	}
 
 	payload, err := amf.EncodeAll("_result", transactionID, props, info)

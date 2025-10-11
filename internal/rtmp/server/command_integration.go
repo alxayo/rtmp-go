@@ -31,6 +31,7 @@ import (
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
+	"github.com/alxayo/go-rtmp/internal/rtmp/control"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
@@ -55,25 +56,50 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, log *slog.Logger)
 	d := rpc.NewDispatcher(func() string { return st.app })
 
 	d.OnConnect = func(cc *rpc.ConnectCommand, msg *chunk.Message) error {
+		log.Debug("OnConnect handler invoked", "app", cc.App, "tcUrl", cc.TcURL, "txn_id", cc.TransactionID)
 		// Persist app for subsequent publish/play parsing.
 		st.app = cc.App
+		log.Debug("building connect response", "txn_id", cc.TransactionID)
 		resp, err := rpc.BuildConnectResponse(cc.TransactionID, "Connection succeeded.")
-		if err == nil {
-			_ = c.SendMessage(resp)
-		}
 		if err != nil {
-			log.Error("connect response build", "error", err)
+			log.Error("connect response build failed", "error", err)
+			return nil // swallow errors to keep connection alive for now
+		}
+		// Debug: log first 64 bytes of response payload
+		previewLen := 64
+		if len(resp.Payload) < previewLen {
+			previewLen = len(resp.Payload)
+		}
+		log.Debug("connect response payload preview", "bytes", resp.Payload[:previewLen])
+		log.Debug("sending connect response", "txn_id", cc.TransactionID, "payload_len", len(resp.Payload))
+		if err := c.SendMessage(resp); err != nil {
+			log.Error("connect response send failed", "error", err)
+		} else {
+			log.Info("connect response sent successfully", "app", cc.App)
 		}
 		return nil // swallow errors to keep connection alive for now
 	}
 
 	d.OnCreateStream = func(cs *rpc.CreateStreamCommand, msg *chunk.Message) error {
-		resp, _, err := rpc.BuildCreateStreamResponse(cs.TransactionID, st.allocator)
-		if err == nil {
-			_ = c.SendMessage(resp)
-		}
+		log.Debug("OnCreateStream handler invoked", "txn_id", cs.TransactionID)
+		resp, streamID, err := rpc.BuildCreateStreamResponse(cs.TransactionID, st.allocator)
 		if err != nil {
-			log.Error("createStream response build", "error", err)
+			log.Error("createStream response build failed", "error", err)
+			return nil
+		}
+		log.Debug("createStream response built", "stream_id", streamID, "payload_len", len(resp.Payload))
+		if err := c.SendMessage(resp); err != nil {
+			log.Error("createStream response send failed", "error", err)
+		} else {
+			log.Info("createStream response sent successfully", "stream_id", streamID, "txn_id", cs.TransactionID)
+		}
+
+		// Send UserControl StreamBegin to signal stream is ready
+		streamBegin := control.EncodeUserControlStreamBegin(streamID)
+		if err := c.SendMessage(streamBegin); err != nil {
+			log.Error("StreamBegin send failed", "error", err, "stream_id", streamID)
+		} else {
+			log.Info("StreamBegin sent", "stream_id", streamID)
 		}
 		return nil
 	}
@@ -91,6 +117,8 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, log *slog.Logger)
 			return
 		}
 
+		log.Debug("message handler invoked", "type_id", m.TypeID, "msid", m.MessageStreamID, "len", len(m.Payload))
+
 		// Process media packets (audio/video) through MediaLogger
 		if m.TypeID == 8 || m.TypeID == 9 {
 			st.mediaLogger.ProcessMessage(m)
@@ -98,10 +126,12 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, log *slog.Logger)
 		}
 
 		if m.TypeID != rpc.CommandMessageAMF0TypeIDForTest() {
+			log.Debug("skipping non-command message", "type_id", m.TypeID)
 			return
 		}
+		log.Debug("dispatching command message", "type_id", m.TypeID)
 		if err := d.Dispatch(m); err != nil {
-			log.Debug("dispatch error", "error", err)
+			log.Error("dispatch error", "error", err)
 		}
 	})
 }
