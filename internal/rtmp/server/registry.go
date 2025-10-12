@@ -14,9 +14,11 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
 )
 
@@ -150,4 +152,95 @@ func (s *Stream) SubscriberCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.Subscribers)
+}
+
+// --- CodecStore interface implementation (required for relay/codec detection) ---
+
+// SetAudioCodec sets the audio codec name in a thread-safe manner.
+func (s *Stream) SetAudioCodec(codec string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.AudioCodec = codec
+	s.mu.Unlock()
+}
+
+// SetVideoCodec sets the video codec name in a thread-safe manner.
+func (s *Stream) SetVideoCodec(codec string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.VideoCodec = codec
+	s.mu.Unlock()
+}
+
+// GetAudioCodec returns the current audio codec in a thread-safe manner.
+func (s *Stream) GetAudioCodec() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.AudioCodec
+}
+
+// GetVideoCodec returns the current video codec in a thread-safe manner.
+func (s *Stream) GetVideoCodec() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.VideoCodec
+}
+
+// StreamKey returns the stream's key (required by CodecStore interface).
+func (s *Stream) StreamKey() string {
+	if s == nil {
+		return ""
+	}
+	return s.Key
+}
+
+// BroadcastMessage relays a publisher's media message to all current subscribers.
+// It also performs one-shot codec detection on the first audio/video frames.
+// This implementation mirrors media.Stream.BroadcastMessage but operates on
+// server.Stream which has additional fields for recording, metadata, etc.
+func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Message, logger *slog.Logger) {
+	if s == nil || msg == nil || logger == nil {
+		return
+	}
+
+	// Codec detection (first frame logic handled inside detector via empty codec check).
+	if msg.TypeID == 8 || msg.TypeID == 9 {
+		if detector == nil {
+			detector = &media.CodecDetector{}
+		}
+		detector.Process(msg.TypeID, msg.Payload, s, logger)
+	}
+
+	// Snapshot subscribers under read lock to avoid holding lock during I/O.
+	s.mu.RLock()
+	subs := make([]media.Subscriber, len(s.Subscribers))
+	copy(subs, s.Subscribers)
+	s.mu.RUnlock()
+
+	// Send to each subscriber with backpressure handling.
+	for _, sub := range subs {
+		if sub == nil {
+			continue
+		}
+		// Non-blocking path if available (TrySendMessage interface).
+		if ts, ok := sub.(media.TrySendMessage); ok {
+			if ok := ts.TrySendMessage(msg); !ok {
+				logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.Key)
+				continue
+			}
+			continue
+		}
+		// Fallback: best effort send (assumes timeout handling in SendMessage).
+		_ = sub.SendMessage(msg)
+	}
 }

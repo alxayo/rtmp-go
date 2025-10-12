@@ -42,10 +42,11 @@ import (
 
 // commandState holds mutable per-connection fields needed by handlers.
 type commandState struct {
-	app         string
-	streamKey   string // current publishing stream key
-	allocator   *rpc.StreamIDAllocator
-	mediaLogger *MediaLogger
+	app           string
+	streamKey     string // current publishing stream key
+	allocator     *rpc.StreamIDAllocator
+	mediaLogger   *MediaLogger
+	codecDetector *media.CodecDetector
 }
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
@@ -55,8 +56,9 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		return
 	}
 	st := &commandState{
-		allocator:   rpc.NewStreamIDAllocator(),
-		mediaLogger: NewMediaLogger(c.ID(), log, 30*time.Second),
+		allocator:     rpc.NewStreamIDAllocator(),
+		mediaLogger:   NewMediaLogger(c.ID(), log, 30*time.Second),
+		codecDetector: &media.CodecDetector{},
 	}
 
 	d := rpc.NewDispatcher(func() string { return st.app })
@@ -135,6 +137,19 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		return nil
 	}
 
+	d.OnPlay = func(pl *rpc.PlayCommand, msg *chunk.Message) error {
+		// Delegate to existing play handler (sends onStatus internally).
+		if _, err := HandlePlay(reg, c, st.app, msg); err != nil {
+			log.Error("play handle", "error", err)
+			return nil
+		}
+
+		// Track stream key for this connection
+		st.streamKey = pl.StreamKey
+
+		return nil
+	}
+
 	c.SetMessageHandler(func(m *chunk.Message) {
 		if m == nil {
 			return
@@ -146,11 +161,15 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		if m.TypeID == 8 || m.TypeID == 9 {
 			st.mediaLogger.ProcessMessage(m)
 
-			// Write to recorder if recording is active
+			// Write to recorder if recording is active AND broadcast to subscribers
 			if st.streamKey != "" {
 				stream := reg.GetStream(st.streamKey)
-				if stream != nil && stream.Recorder != nil {
-					stream.Recorder.WriteMessage(m)
+				if stream != nil {
+					if stream.Recorder != nil {
+						stream.Recorder.WriteMessage(m)
+					}
+					// Broadcast to all subscribers (relay functionality)
+					stream.BroadcastMessage(st.codecDetector, m, log)
 				}
 			}
 
