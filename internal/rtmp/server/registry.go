@@ -14,6 +14,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -48,6 +49,10 @@ type Stream struct {
 	AudioCodec  string
 	StartTime   time.Time
 	Recorder    *media.Recorder
+
+	// Cached sequence headers for late-joining subscribers
+	AudioSequenceHeader *chunk.Message
+	VideoSequenceHeader *chunk.Message
 
 	mu sync.RWMutex // protects Subscribers & Publisher mutation
 }
@@ -221,6 +226,58 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		detector.Process(msg.TypeID, msg.Payload, s, logger)
 	}
 
+	// Cache sequence headers for late-joining subscribers
+	// Video: type_id=9, avc_packet_type=0 (byte offset 1)
+	// Audio: type_id=8, aac_packet_type=0 (high nibble of byte 0 == 0xAF for AAC)
+	if msg.TypeID == 9 && len(msg.Payload) >= 2 && msg.Payload[1] == 0 {
+		// Video sequence header (AVC sequence header with SPS/PPS)
+		s.mu.Lock()
+		s.VideoSequenceHeader = &chunk.Message{
+			CSID:            msg.CSID,
+			TypeID:          msg.TypeID,
+			Timestamp:       msg.Timestamp,
+			MessageStreamID: msg.MessageStreamID,
+			MessageLength:   msg.MessageLength,
+			Payload:         make([]byte, len(msg.Payload)),
+		}
+		copy(s.VideoSequenceHeader.Payload, msg.Payload)
+		s.mu.Unlock()
+		logger.Info("Cached video sequence header", "stream_key", s.Key, "size", len(msg.Payload))
+	} else if msg.TypeID == 8 && len(msg.Payload) >= 2 && (msg.Payload[0]>>4) == 0x0A && msg.Payload[1] == 0 {
+		// Audio sequence header (AAC sequence header with AudioSpecificConfig)
+		s.mu.Lock()
+		s.AudioSequenceHeader = &chunk.Message{
+			CSID:            msg.CSID,
+			TypeID:          msg.TypeID,
+			Timestamp:       msg.Timestamp,
+			MessageStreamID: msg.MessageStreamID,
+			MessageLength:   msg.MessageLength,
+			Payload:         make([]byte, len(msg.Payload)),
+		}
+		copy(s.AudioSequenceHeader.Payload, msg.Payload)
+		s.mu.Unlock()
+		logger.Info("Cached audio sequence header", "stream_key", s.Key, "size", len(msg.Payload))
+	}
+
+	// DIAGNOSTIC: Log video packet structure to verify FLV format integrity
+	if msg.TypeID == 9 && len(msg.Payload) >= 5 {
+		frameType := (msg.Payload[0] >> 4) & 0x0F
+		codecID := msg.Payload[0] & 0x0F
+		avcPacketType := msg.Payload[1]
+		logger.Debug("Video packet structure before relay",
+			"frame_type", frameType,
+			"codec_id", codecID,
+			"avc_packet_type", avcPacketType,
+			"payload_len", len(msg.Payload),
+			"first_10_bytes", fmt.Sprintf("%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+				msg.Payload[0], msg.Payload[1], msg.Payload[2], msg.Payload[3], msg.Payload[4],
+				msg.Payload[5], msg.Payload[6], msg.Payload[7], msg.Payload[8], msg.Payload[9]))
+
+		if codecID != 7 {
+			logger.Warn("Invalid AVC codec ID in video packet", "codec_id", codecID, "expected", 7)
+		}
+	}
+
 	// Snapshot subscribers under read lock to avoid holding lock during I/O.
 	s.mu.RLock()
 	subs := make([]media.Subscriber, len(s.Subscribers))
@@ -228,19 +285,33 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 	s.mu.RUnlock()
 
 	// Send to each subscriber with backpressure handling.
+	// CRITICAL FIX: Clone message payload for each subscriber to prevent
+	// shared slice corruption between publisher and subscriber connections.
 	for _, sub := range subs {
 		if sub == nil {
 			continue
 		}
+
+		// Create independent copy of message to prevent payload sharing issues
+		relayMsg := &chunk.Message{
+			CSID:            msg.CSID,
+			TypeID:          msg.TypeID,
+			Timestamp:       msg.Timestamp,
+			MessageStreamID: msg.MessageStreamID,
+			MessageLength:   msg.MessageLength,
+			Payload:         make([]byte, len(msg.Payload)),
+		}
+		copy(relayMsg.Payload, msg.Payload)
+
 		// Non-blocking path if available (TrySendMessage interface).
 		if ts, ok := sub.(media.TrySendMessage); ok {
-			if ok := ts.TrySendMessage(msg); !ok {
+			if ok := ts.TrySendMessage(relayMsg); !ok {
 				logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.Key)
 				continue
 			}
 			continue
 		}
 		// Fallback: best effort send (assumes timeout handling in SendMessage).
-		_ = sub.SendMessage(msg)
+		_ = sub.SendMessage(relayMsg)
 	}
 }
