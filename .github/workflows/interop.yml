@@ -1,0 +1,78 @@
+name: FFmpeg Interop
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'internal/**'
+      - 'cmd/**'
+      - 'tests/interop/**'
+      - '.github/workflows/interop.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'internal/**'
+      - 'cmd/**'
+      - 'tests/interop/**'
+      - '.github/workflows/interop.yml'
+  workflow_dispatch: {}
+
+jobs:
+  interop-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21.x'
+          cache: true
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Make bash scripts executable
+        run: chmod +x tests/interop/ffmpeg_test.sh || true
+
+      - name: Run Interop Tests (Publish, Play, Concurrency, Recording)
+        env:
+          INCLUDE: PublishOnly,PublishAndPlay,Concurrency,Recording
+        run: |
+          ./tests/interop/ffmpeg_test.sh
+
+      - name: Archive recordings (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-recordings-linux
+          path: /tmp/go-rtmp-interop-*/recordings/*.flv
+          if-no-files-found: ignore
+
+  # Placeholder for future Windows job (PowerShell version) – can be enabled when needed
+  # interop-windows:
+  #   runs-on: windows-latest
+  #   timeout-minutes: 25
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #     - name: Setup Go
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.21.x'
+  #     - name: Install FFmpeg
+  #       run: choco install ffmpeg -y
+  #     - name: Run PowerShell Interop Tests
+  #       shell: pwsh
+  #       run: |
+  #         Set-ExecutionPolicy Bypass -Scope Process -Force
+  #         ./tests/interop/ffmpeg_test.ps1 -Include PublishOnly,PublishAndPlay,Concurrency,Recording -KeepWorkDir
+  #     - name: Archive recordings (always)
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: interop-recordings-windows
+  #         path: $Env:TEMP\go-rtmp-interop-*\recordings\*.flv
+  #         if-no-files-found: ignore
