@@ -264,14 +264,26 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		frameType := (msg.Payload[0] >> 4) & 0x0F
 		codecID := msg.Payload[0] & 0x0F
 		avcPacketType := msg.Payload[1]
+
+		// Build hex string for available bytes (up to 10)
+		hexBytes := ""
+		maxBytes := len(msg.Payload)
+		if maxBytes > 10 {
+			maxBytes = 10
+		}
+		for i := 0; i < maxBytes; i++ {
+			if i > 0 {
+				hexBytes += " "
+			}
+			hexBytes += fmt.Sprintf("%02X", msg.Payload[i])
+		}
+
 		logger.Debug("Video packet structure before relay",
 			"frame_type", frameType,
 			"codec_id", codecID,
 			"avc_packet_type", avcPacketType,
 			"payload_len", len(msg.Payload),
-			"first_10_bytes", fmt.Sprintf("%02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-				msg.Payload[0], msg.Payload[1], msg.Payload[2], msg.Payload[3], msg.Payload[4],
-				msg.Payload[5], msg.Payload[6], msg.Payload[7], msg.Payload[8], msg.Payload[9]))
+			"first_bytes", hexBytes)
 
 		if codecID != 7 {
 			logger.Warn("Invalid AVC codec ID in video packet", "codec_id", codecID, "expected", 7)

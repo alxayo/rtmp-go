@@ -21,18 +21,21 @@ import (
 	"sync"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
+	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
+	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 )
 
 // Config holds server configuration knobs. Future tasks may extend with
 // validation / functional options. For now we keep a plain struct.
 type Config struct {
-	ListenAddr    string
-	ChunkSize     uint32 // initial outbound chunk size (after control burst peer will update)
-	WindowAckSize uint32 // advertised window acknowledgement size
-	RecordAll     bool
-	RecordDir     string
-	LogLevel      string
+	ListenAddr        string
+	ChunkSize         uint32 // initial outbound chunk size (after control burst peer will update)
+	WindowAckSize     uint32 // advertised window acknowledgement size
+	RecordAll         bool
+	RecordDir         string
+	LogLevel          string
+	RelayDestinations []string // NEW: List of destination URLs for relay
 }
 
 // applyDefaults fills zero values with sensible defaults.
@@ -56,10 +59,11 @@ func (c *Config) applyDefaults() {
 
 // Server encapsulates listener + active connection tracking.
 type Server struct {
-	cfg Config
-	l   net.Listener
-	log *slog.Logger
-	reg *Registry
+	cfg                Config
+	l                  net.Listener
+	log                *slog.Logger
+	reg                *Registry
+	destinationManager *relay.DestinationManager // NEW: Multi-destination relay manager
 
 	mu          sync.RWMutex
 	conns       map[string]*iconn.Connection
@@ -70,7 +74,29 @@ type Server struct {
 // New creates a new, unstarted Server instance.
 func New(cfg Config) *Server {
 	cfg.applyDefaults()
-	return &Server{cfg: cfg, reg: NewRegistry(), conns: make(map[string]*iconn.Connection), log: logger.Logger().With("component", "rtmp_server")}
+
+	// Initialize destination manager if destinations are provided
+	var destMgr *relay.DestinationManager
+	if len(cfg.RelayDestinations) > 0 {
+		var err error
+		// Create a client factory that wraps the client.New function
+		clientFactory := func(url string) (relay.RTMPClient, error) {
+			return client.New(url)
+		}
+		destMgr, err = relay.NewDestinationManager(cfg.RelayDestinations, logger.Logger(), clientFactory)
+		if err != nil {
+			logger.Logger().Error("Failed to initialize destination manager", "error", err)
+			// Continue without relay functionality
+		}
+	}
+
+	return &Server{
+		cfg:                cfg,
+		reg:                NewRegistry(),
+		conns:              make(map[string]*iconn.Connection),
+		log:                logger.Logger().With("component", "rtmp_server"),
+		destinationManager: destMgr,
+	}
 }
 
 // Start begins listening and launches the accept loop. It's safe to call
@@ -138,7 +164,7 @@ func (s *Server) acceptLoop() {
 		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String())
 		// Wire command handling so real clients (OBS/ffmpeg) can complete
 		// connect/createStream/publish. (Incremental integration step.)
-		attachCommandHandling(c, s.reg, &s.cfg, s.log)
+		attachCommandHandling(c, s.reg, &s.cfg, s.log, s.destinationManager)
 		// Start readLoop AFTER message handler is attached to avoid race condition
 		c.Start()
 	}
@@ -171,6 +197,13 @@ func (s *Server) Stop() error {
 
 	// Clean up all active recorders
 	s.cleanupAllRecorders()
+
+	// Close destination manager
+	if s.destinationManager != nil {
+		if err := s.destinationManager.Close(); err != nil {
+			s.log.Error("Error closing destination manager", "error", err)
+		}
+	}
 
 	s.acceptingWg.Wait()
 	s.log.Info("RTMP server stopped")

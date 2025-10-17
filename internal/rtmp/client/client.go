@@ -58,6 +58,7 @@ const defaultChunkSize = 128
 type Client struct {
 	conn   net.Conn
 	writer *chunk.Writer
+	reader *chunk.Reader
 	url    *url.URL
 
 	app       string
@@ -107,16 +108,17 @@ func (c *Client) Connect() error {
 	}
 	c.conn = conn
 	c.writer = chunk.NewWriter(conn, defaultChunkSize)
+	c.reader = chunk.NewReader(conn, defaultChunkSize)
 
 	if err := handshake.ClientHandshake(conn); err != nil {
 		_ = conn.Close()
 		return err
 	}
 
-	if err := c.sendConnect(); err != nil {
+	if err := c.sendConnectAndWaitResponse(); err != nil {
 		return err
 	}
-	if err := c.sendCreateStream(); err != nil {
+	if err := c.sendCreateStreamAndWaitResponse(); err != nil {
 		return err
 	}
 	return nil
@@ -160,18 +162,140 @@ func (c *Client) sendCreateStream() error {
 	return nil
 }
 
+func (c *Client) sendConnectAndWaitResponse() error {
+	// Send connect command
+	fmt.Printf("DEBUG: Client sending connect command\n")
+	if err := c.sendConnect(); err != nil {
+		return fmt.Errorf("send connect: %w", err)
+	}
+
+	// Wait for and validate connect response
+	fmt.Printf("DEBUG: Client waiting for connect response\n")
+	if err := c.waitForConnectResponse(); err != nil {
+		return fmt.Errorf("connect response: %w", err)
+	}
+
+	fmt.Printf("DEBUG: Client connect completed successfully\n")
+	return nil
+}
+
+func (c *Client) sendCreateStreamAndWaitResponse() error {
+	// Send createStream command
+	fmt.Printf("DEBUG: Client sending createStream command\n")
+	if err := c.sendCreateStream(); err != nil {
+		return fmt.Errorf("send createStream: %w", err)
+	}
+
+	// Wait for and validate createStream response
+	fmt.Printf("DEBUG: Client waiting for createStream response\n")
+	if err := c.waitForCreateStreamResponse(); err != nil {
+		return fmt.Errorf("createStream response: %w", err)
+	}
+
+	fmt.Printf("DEBUG: Client createStream completed successfully\n")
+	return nil
+}
+
+func (c *Client) waitForConnectResponse() error {
+	for {
+		msg, err := c.reader.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("read message: %w", err)
+		}
+
+		// Only process command messages
+		if msg.TypeID != rpc.CommandMessageAMF0TypeIDForTest() {
+			continue
+		}
+
+		// Decode the command
+		args, err := amf.DecodeAll(msg.Payload)
+		if err != nil {
+			continue // Skip malformed messages
+		}
+
+		if len(args) < 1 {
+			continue
+		}
+
+		cmdName, ok := args[0].(string)
+		if !ok {
+			continue
+		}
+
+		// Look for _result or _error responses to our connect command
+		if cmdName == "_result" {
+			// Connect succeeded
+			fmt.Printf("DEBUG: Client received connect _result response\n")
+			return nil
+		} else if cmdName == "_error" {
+			fmt.Printf("DEBUG: Client received connect _error response\n")
+			return fmt.Errorf("connect command failed")
+		}
+	}
+}
+
+func (c *Client) waitForCreateStreamResponse() error {
+	for {
+		msg, err := c.reader.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("read message: %w", err)
+		}
+
+		// Only process command messages
+		if msg.TypeID != rpc.CommandMessageAMF0TypeIDForTest() {
+			continue
+		}
+
+		// Decode the command
+		args, err := amf.DecodeAll(msg.Payload)
+		if err != nil {
+			continue // Skip malformed messages
+		}
+
+		if len(args) < 3 {
+			continue
+		}
+
+		cmdName, ok := args[0].(string)
+		if !ok {
+			continue
+		}
+
+		// Look for _result response to our createStream command
+		if cmdName == "_result" {
+			// Extract stream ID from response (should be args[3])
+			if len(args) >= 4 {
+				if streamID, ok := args[3].(float64); ok {
+					c.streamID = uint32(streamID)
+				}
+			}
+			fmt.Printf("DEBUG: Client received createStream _result response, streamID=%d\n", c.streamID)
+			return nil
+		} else if cmdName == "_error" {
+			fmt.Printf("DEBUG: Client received createStream _error response\n")
+			return fmt.Errorf("createStream command failed")
+		}
+	}
+}
+
 // Publish sends a publish command for the stream name implied by the RTMP URL.
 func (c *Client) Publish() error {
 	if c.conn == nil {
 		return errors.New("client not connected")
 	}
 	name := strings.TrimPrefix(c.streamKey, c.app+"/")
+	fmt.Printf("DEBUG: Client sending publish command for stream: %s\n", name)
 	payload, err := amf.EncodeAll("publish", float64(0), nil, name, "live")
 	if err != nil {
 		return err
 	}
 	msg := &chunk.Message{CSID: 3, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: c.streamID, MessageLength: uint32(len(payload)), Payload: payload}
-	return c.writer.WriteMessage(msg)
+	if err := c.writer.WriteMessage(msg); err != nil {
+		return err
+	}
+	fmt.Printf("DEBUG: Client publish command sent successfully\n")
+	return nil
 }
 
 // Play sends a play command for the stream name.
@@ -194,8 +318,27 @@ func (c *Client) SendAudio(ts uint32, data []byte) error {
 	if c.conn == nil {
 		return errors.New("client not connected")
 	}
-	msg := &chunk.Message{CSID: 6, TypeID: 8, MessageStreamID: c.streamID, Timestamp: ts, MessageLength: uint32(len(data)), Payload: data}
-	return c.writer.WriteMessage(msg)
+	if c.writer == nil {
+		return errors.New("writer not initialized")
+	}
+	if len(data) == 0 {
+		return errors.New("empty audio payload")
+	}
+
+	msg := &chunk.Message{
+		CSID:            6,
+		TypeID:          8,
+		MessageStreamID: c.streamID,
+		Timestamp:       ts,
+		MessageLength:   uint32(len(data)),
+		Payload:         data,
+	}
+
+	if err := c.writer.WriteMessage(msg); err != nil {
+		return fmt.Errorf("write audio message: %w", err)
+	}
+
+	return nil
 }
 
 // SendVideo sends a raw video message (TypeID=9) with caller-provided payload.
@@ -203,8 +346,27 @@ func (c *Client) SendVideo(ts uint32, data []byte) error {
 	if c.conn == nil {
 		return errors.New("client not connected")
 	}
-	msg := &chunk.Message{CSID: 7, TypeID: 9, MessageStreamID: c.streamID, Timestamp: ts, MessageLength: uint32(len(data)), Payload: data}
-	return c.writer.WriteMessage(msg)
+	if c.writer == nil {
+		return errors.New("writer not initialized")
+	}
+	if len(data) == 0 {
+		return errors.New("empty video payload")
+	}
+
+	msg := &chunk.Message{
+		CSID:            7,
+		TypeID:          9,
+		MessageStreamID: c.streamID,
+		Timestamp:       ts,
+		MessageLength:   uint32(len(data)),
+		Payload:         data,
+	}
+
+	if err := c.writer.WriteMessage(msg); err != nil {
+		return fmt.Errorf("write video message: %w", err)
+	}
+
+	return nil
 }
 
 // Close terminates the underlying TCP connection.
@@ -214,6 +376,8 @@ func (c *Client) Close() error {
 	}
 	err := c.conn.Close()
 	c.conn = nil
+	c.reader = nil
+	c.writer = nil
 	return err
 }
 

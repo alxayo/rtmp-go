@@ -31,12 +31,13 @@ func main() {
 	log := logger.Logger().With("component", "cli")
 
 	server := srv.New(srv.Config{
-		ListenAddr:    cfg.listenAddr,
-		ChunkSize:     uint32(cfg.chunkSize),
-		WindowAckSize: 2_500_000, // matches control burst constant
-		RecordAll:     cfg.recordAll,
-		RecordDir:     cfg.recordDir,
-		LogLevel:      cfg.logLevel,
+		ListenAddr:        cfg.listenAddr,
+		ChunkSize:         uint32(cfg.chunkSize),
+		WindowAckSize:     2_500_000, // matches control burst constant
+		RecordAll:         cfg.recordAll,
+		RecordDir:         cfg.recordDir,
+		LogLevel:          cfg.logLevel,
+		RelayDestinations: cfg.relayDestinations,
 	})
 
 	if err := server.Start(); err != nil {

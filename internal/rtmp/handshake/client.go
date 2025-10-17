@@ -113,6 +113,16 @@ func ClientHandshake(conn net.Conn) error {
 		}
 	}
 
+	// Clear deadlines after successful handshake so subsequent chunk operations
+	// can operate without timeout constraints. This prevents spurious "i/o timeout"
+	// errors during media streaming when connection is used for extended periods.
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		log.Warn("Failed to clear read deadline", "error", err)
+	}
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		log.Warn("Failed to clear write deadline", "error", err)
+	}
+
 	log.Info("Handshake completed", "c1_ts", ts)
 	return nil
 }
