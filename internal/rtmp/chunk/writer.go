@@ -142,8 +142,9 @@ func EncodeChunkHeader(h *ChunkHeader, prev *ChunkHeader) ([]byte, error) {
 // Writer emits RTMP chunks for outbound messages. Not concurrency-safe; expected
 // usage is a single write goroutine per connection.
 type Writer struct {
-	w         io.Writer
-	chunkSize uint32 // outbound chunk size (default 128 if zero)
+	w           io.Writer
+	chunkSize   uint32                  // outbound chunk size (default 128 if zero)
+	lastHeaders map[uint32]*ChunkHeader // per-CSID state for FMT compression
 }
 
 // NewWriter creates a new chunk Writer.
@@ -151,7 +152,11 @@ func NewWriter(w io.Writer, chunkSize uint32) *Writer {
 	if chunkSize == 0 {
 		chunkSize = 128
 	}
-	return &Writer{w: w, chunkSize: chunkSize}
+	return &Writer{
+		w:           w,
+		chunkSize:   chunkSize,
+		lastHeaders: make(map[uint32]*ChunkHeader),
+	}
 }
 
 // SetChunkSize updates the outbound chunk size (validated to sane bounds).
@@ -171,10 +176,11 @@ func (w *Writer) EncodeHeaderOnly(h *ChunkHeader, prev *ChunkHeader) (int, error
 }
 
 // WriteMessage fragments and writes a full RTMP message as one or more chunks.
-// Requirements:
-//   - First chunk FMT0 (absolute timestamp + full header)
-//   - Continuations FMT3 (header compression) with repeated extended timestamp if used
-//   - Atomic per-chunk Write calls (header+payload together)
+// Uses stateful FMT selection based on previous messages sent on the same CSID:
+//   - FMT0: First message on CSID or when all fields change
+//   - FMT1: When message length or type ID changes (delta timestamp)
+//   - FMT2: When only timestamp changes (delta timestamp)
+//   - FMT3: Continuation chunks within same message OR identical header reuse
 func (w *Writer) WriteMessage(msg *Message) error {
 	if w == nil || w.w == nil {
 		return errors.New("writer: nil underlying writer")
@@ -193,19 +199,44 @@ func (w *Writer) WriteMessage(msg *Message) error {
 		cs = 128
 	}
 
-	// First (FMT0) header
+	// Select FMT based on previous state for this CSID
+	var selectedFmt uint8 = fmt0 // default to FMT0
+	var timestampDelta uint32 = msg.Timestamp
+	prev := w.lastHeaders[msg.CSID]
+
+	if prev != nil {
+		// We have previous state for this CSID - determine optimal FMT
+		if msg.MessageLength == prev.MessageLength &&
+			msg.TypeID == prev.MessageTypeID &&
+			msg.MessageStreamID == prev.MessageStreamID {
+			// Only timestamp changed - use FMT2 (delta timestamp only)
+			selectedFmt = fmt2
+			timestampDelta = msg.Timestamp - prev.Timestamp
+		} else {
+			// Length or type changed - use FMT1 (delta + length + type)
+			selectedFmt = fmt1
+			timestampDelta = msg.Timestamp - prev.Timestamp
+		}
+	}
+
+	// Create header for this message
 	first := &ChunkHeader{
-		FMT:             fmt0,
+		FMT:             selectedFmt,
 		CSID:            msg.CSID,
-		Timestamp:       msg.Timestamp,
+		Timestamp:       timestampDelta, // absolute for FMT0, delta for FMT1/2
 		MessageLength:   msg.MessageLength,
 		MessageTypeID:   msg.TypeID,
 		MessageStreamID: msg.MessageStreamID,
 	}
 	if msg.Timestamp >= extendedTimestampMarker {
 		first.HasExtendedTimestamp = true
+		// For FMT1/2 with extended timestamp, use actual timestamp value
+		if selectedFmt == fmt1 || selectedFmt == fmt2 {
+			first.Timestamp = msg.Timestamp
+		}
 	}
-	hdr, err := EncodeChunkHeader(first, nil)
+
+	hdr, err := EncodeChunkHeader(first, prev)
 	if err != nil {
 		return fmt.Errorf("writer: encode first header: %w", err)
 	}
@@ -217,7 +248,19 @@ func (w *Writer) WriteMessage(msg *Message) error {
 		return err
 	}
 	written := uint32(len(toSend))
-	prev := first
+
+	// Store this header as the new "last" header for this CSID
+	// Use absolute timestamp for state tracking
+	lastHeader := &ChunkHeader{
+		FMT:                  first.FMT,
+		CSID:                 msg.CSID,
+		Timestamp:            msg.Timestamp, // store absolute timestamp
+		MessageLength:        msg.MessageLength,
+		MessageTypeID:        msg.TypeID,
+		MessageStreamID:      msg.MessageStreamID,
+		HasExtendedTimestamp: first.HasExtendedTimestamp,
+	}
+	w.lastHeaders[msg.CSID] = lastHeader
 
 	// Continuation chunks (FMT3)
 	for written < msg.MessageLength {
@@ -227,7 +270,7 @@ func (w *Writer) WriteMessage(msg *Message) error {
 			sz = cs
 		}
 		cont := &ChunkHeader{FMT: fmt3, CSID: msg.CSID}
-		hdr3, err := EncodeChunkHeader(cont, prev)
+		hdr3, err := EncodeChunkHeader(cont, first)
 		if err != nil {
 			return fmt.Errorf("writer: encode continuation header: %w", err)
 		}
@@ -240,12 +283,6 @@ func (w *Writer) WriteMessage(msg *Message) error {
 			return err
 		}
 		written = end
-		// carry forward extended timestamp semantics implicitly via first.HasExtendedTimestamp
-		prev = cont
-		if first.HasExtendedTimestamp {
-			cont.HasExtendedTimestamp = true
-			cont.Timestamp = first.Timestamp // for EncodeChunkHeader logic if reused later
-		}
 	}
 	return nil
 }

@@ -228,3 +228,99 @@ func TestWriter_WriteMessage_ExtendedTimestampMultiChunk(t *testing.T) {
 	}
 	_ = io.EOF // silence unused import if build tags change
 }
+
+func TestWriter_StatefulFMTSelection(t *testing.T) {
+	var sw simpleWriter
+	w := NewWriter(&sw, 128)
+
+	// First message on CSID 6 - should use FMT0
+	msg1 := &Message{CSID: 6, Timestamp: 1000, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 100)}
+	if err := w.WriteMessage(msg1); err != nil {
+		t.Fatalf("write msg1: %v", err)
+	}
+
+	// Second message on CSID 6, same length/type, different timestamp - should use FMT2
+	msg2 := &Message{CSID: 6, Timestamp: 1100, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 100)}
+	if err := w.WriteMessage(msg2); err != nil {
+		t.Fatalf("write msg2: %v", err)
+	}
+
+	// Third message on CSID 6, different length - should use FMT1
+	msg3 := &Message{CSID: 6, Timestamp: 1200, MessageLength: 200, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 200)}
+	if err := w.WriteMessage(msg3); err != nil {
+		t.Fatalf("write msg3: %v", err)
+	}
+
+	raw := sw.Bytes()
+
+	// Check first message header (should be FMT0)
+	if raw[0]>>6 != 0 {
+		t.Errorf("msg1: expected FMT0, got FMT%d", raw[0]>>6)
+	}
+
+	// Find second message header position (after first message: 1+11+100 = 112 bytes)
+	pos2 := 112
+	if pos2 >= len(raw) {
+		t.Fatalf("raw too short for msg2 position")
+	}
+	if raw[pos2]>>6 != 2 {
+		t.Errorf("msg2: expected FMT2, got FMT%d", raw[pos2]>>6)
+	}
+
+	// Find third message header position (after second message: pos2 + 1+3+100 = 216 bytes)
+	pos3 := pos2 + 104
+	if pos3 >= len(raw) {
+		t.Fatalf("raw too short for msg3 position")
+	}
+	if raw[pos3]>>6 != 1 {
+		t.Errorf("msg3: expected FMT1, got FMT%d", raw[pos3]>>6)
+	}
+}
+
+func TestWriter_ChunkReaderRoundTrip(t *testing.T) {
+	// Test that our stateful FMT selection produces readable chunks
+	var sw simpleWriter
+	w := NewWriter(&sw, 128)
+
+	// Send messages that should trigger different FMT types
+	messages := []*Message{
+		{CSID: 6, Timestamp: 1000, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 100)},
+		{CSID: 6, Timestamp: 1100, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 100)}, // FMT2
+		{CSID: 7, Timestamp: 1050, MessageLength: 200, TypeID: 9, MessageStreamID: 1, Payload: make([]byte, 200)}, // FMT0 (new CSID)
+		{CSID: 6, Timestamp: 1200, MessageLength: 150, TypeID: 8, MessageStreamID: 1, Payload: make([]byte, 150)}, // FMT1 (length changed)
+	}
+
+	for i, msg := range messages {
+		// Fill payload with unique data
+		for j := range msg.Payload {
+			msg.Payload[j] = byte(i*10 + j%10)
+		}
+		if err := w.WriteMessage(msg); err != nil {
+			t.Fatalf("write message %d: %v", i, err)
+		}
+	}
+
+	// Now read back using chunk reader
+	raw := sw.Bytes()
+	reader := NewReader(bytes.NewReader(raw), 128)
+
+	for i, expectedMsg := range messages {
+		actualMsg, err := reader.ReadMessage()
+		if err != nil {
+			t.Fatalf("read message %d: %v", i, err)
+		}
+
+		if actualMsg.CSID != expectedMsg.CSID {
+			t.Errorf("message %d CSID: expected %d, got %d", i, expectedMsg.CSID, actualMsg.CSID)
+		}
+		if actualMsg.TypeID != expectedMsg.TypeID {
+			t.Errorf("message %d TypeID: expected %d, got %d", i, expectedMsg.TypeID, actualMsg.TypeID)
+		}
+		if actualMsg.Timestamp != expectedMsg.Timestamp {
+			t.Errorf("message %d Timestamp: expected %d, got %d", i, expectedMsg.Timestamp, actualMsg.Timestamp)
+		}
+		if !bytes.Equal(actualMsg.Payload, expectedMsg.Payload) {
+			t.Errorf("message %d payload mismatch", i)
+		}
+	}
+}

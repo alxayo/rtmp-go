@@ -37,6 +37,7 @@ import (
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/control"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
+	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
@@ -51,7 +52,7 @@ type commandState struct {
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
 // provided connection. Safe to call immediately after Accept returns.
-func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger) {
+func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger, destMgr *relay.DestinationManager) {
 	if c == nil || reg == nil || cfg == nil {
 		return
 	}
@@ -168,8 +169,16 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 					if stream.Recorder != nil {
 						stream.Recorder.WriteMessage(m)
 					}
-					// Broadcast to all subscribers (relay functionality)
+					// Broadcast to all subscribers (local relay functionality)
 					stream.BroadcastMessage(st.codecDetector, m, log)
+
+					// Multi-destination relay (NEW)
+					if destMgr != nil {
+						log.Debug("Calling destination manager RelayMessage", "type_id", m.TypeID, "stream_key", st.streamKey)
+						destMgr.RelayMessage(m)
+					} else {
+						log.Debug("No destination manager available", "type_id", m.TypeID, "stream_key", st.streamKey)
+					}
 				}
 			}
 
