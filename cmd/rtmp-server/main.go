@@ -38,6 +38,12 @@ func main() {
 		RecordDir:         cfg.recordDir,
 		LogLevel:          cfg.logLevel,
 		RelayDestinations: cfg.relayDestinations,
+		// Hook configuration (backward compatible - nil/empty values are handled gracefully)
+		HookScripts:     cfg.hookScripts,
+		HookWebhooks:    cfg.hookWebhooks,
+		HookStdioFormat: cfg.hookStdioFormat,
+		HookTimeout:     cfg.hookTimeout,
+		HookConcurrency: cfg.hookConcurrency,
 	})
 
 	if err := server.Start(); err != nil {
