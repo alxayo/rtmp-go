@@ -1,0 +1,211 @@
+name: Build Multi-Platform
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.25.1'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Windows builds
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact_name: rtmp-server-windows-x86_64.exe
+            binary_name: rtmp-server.exe
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            artifact_name: rtmp-server-windows-arm64.exe
+            binary_name: rtmp-server.exe
+          
+          # macOS builds
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact_name: rtmp-server-macos-arm64
+            binary_name: rtmp-server
+          
+          # Linux builds
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact_name: rtmp-server-linux-x86_64
+            binary_name: rtmp-server
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            artifact_name: rtmp-server-linux-arm64
+            binary_name: rtmp-server
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run tests
+      if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+      run: go test -v ./...
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        go build -ldflags="-w -s" -o ${{ matrix.binary_name }} ./cmd/rtmp-server
+
+    - name: Create build info
+      shell: bash
+      run: |
+        echo "Build Information" > build-info.txt
+        echo "=================" >> build-info.txt
+        echo "OS: ${{ matrix.goos }}" >> build-info.txt
+        echo "Architecture: ${{ matrix.goarch }}" >> build-info.txt
+        echo "Go Version: ${{ env.GO_VERSION }}" >> build-info.txt
+        echo "Commit: ${{ github.sha }}" >> build-info.txt
+        echo "Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-info.txt
+        echo "Branch: ${{ github.ref_name }}" >> build-info.txt
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: |
+          ${{ matrix.binary_name }}
+          build-info.txt
+        retention-days: 30
+
+  # Create release if this is a tag
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir release-assets
+        cd artifacts
+        
+        # Package each build
+        for dir in */; do
+          if [ -d "$dir" ]; then
+            cd "$dir"
+            artifact_name=$(basename "$dir")
+            
+            # Determine compression format based on OS
+            if [[ "$artifact_name" == *"windows"* ]]; then
+              zip -r "../../release-assets/${artifact_name}.zip" .
+            else
+              tar -czf "../../release-assets/${artifact_name}.tar.gz" .
+            fi
+            
+            cd ..
+          fi
+        done
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-assets/*
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build summary
+  build-summary:
+    name: Build Summary
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Download all artifacts
+      if: needs.build.result == 'success'
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Generate build summary
+      run: |
+        echo "# Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.build.result }}" == "success" ]; then
+          echo "✅ **Build Status**: Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Built Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows | x86_64 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows | ARM64 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS | ARM64 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux | x86_64 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux | ARM64 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "artifacts" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## Artifact Sizes" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Artifact | Size |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
+            
+            cd artifacts
+            for dir in */; do
+              if [ -d "$dir" ]; then
+                size=$(du -sh "$dir" | cut -f1)
+                artifact_name=$(basename "$dir")
+                echo "| $artifact_name | $size |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi
+        else
+          echo "❌ **Build Status**: Failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+        echo "- **Go Version**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
