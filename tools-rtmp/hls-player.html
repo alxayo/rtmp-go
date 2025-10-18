@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HLS Player - RTMP Stream</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        video {
+            width: 100%;
+            max-width: 800px;
+            height: auto;
+            border-radius: 4px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+        .controls {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .url-input {
+            width: 300px;
+            padding: 8px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 HLS Player - RTMP to HLS Stream</h1>
+        
+        <video id="video" controls muted autoplay>
+            Your browser does not support the video tag.
+        </video>
+        
+        <div class="controls">
+            <h3>Stream URL:</h3>
+            <input type="text" id="streamUrl" class="url-input" 
+                   value="http://localhost:8080/hls-output/playlist.m3u8" 
+                   placeholder="Enter HLS playlist URL">
+            <button onclick="loadStream()">Load Stream</button>
+            <button onclick="stopStream()">Stop</button>
+            
+            <div id="status" class="status"></div>
+            
+            <h4>Quick Options:</h4>
+            <button onclick="loadUrl('http://localhost:8080/hls-output/playlist.m3u8')">Basic HLS</button>
+            <button onclick="loadUrl('http://localhost:8080/hls-output/master.m3u8')">Adaptive HLS</button>
+        </div>
+        
+        <div style="margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 4px;">
+            <h3>📋 Usage Instructions:</h3>
+            <ol>
+                <li><strong>Start RTMP Server:</strong> <code>./rtmp-server -listen localhost:1935 -log-level info</code></li>
+                <li><strong>Publish Stream:</strong> Use OBS or FFmpeg to stream to <code>rtmp://localhost:1935/live/test</code></li>
+                <li><strong>Convert to HLS:</strong> <code>./rtmp-to-hls.sh basic test</code></li>
+                <li><strong>Serve Files:</strong> <code>python3 -m http.server 8080</code></li>
+                <li><strong>Play Stream:</strong> Click "Load Stream" above</li>
+            </ol>
+            
+            <h4>🎯 Conversion Modes:</h4>
+            <ul>
+                <li><strong>Basic:</strong> <code>./rtmp-to-hls.sh basic test</code> - Fast, copies codecs</li>
+                <li><strong>Quality:</strong> <code>./rtmp-to-hls.sh quality test</code> - Re-encodes for compatibility</li>
+                <li><strong>Adaptive:</strong> <code>./rtmp-to-hls.sh adaptive test</code> - Multi-bitrate streaming</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const statusDiv = document.getElementById('status');
+        let hls;
+
+        function showStatus(message, type = 'success') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 3000);
+        }
+
+        function loadUrl(url) {
+            document.getElementById('streamUrl').value = url;
+            loadStream();
+        }
+
+        function loadStream() {
+            const url = document.getElementById('streamUrl').value;
+            
+            if (!url) {
+                showStatus('Please enter a stream URL', 'error');
+                return;
+            }
+
+            stopStream();
+
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    debug: false,
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    backBufferLength: 90
+                });
+                
+                hls.loadSource(url);
+                hls.attachMedia(video);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    showStatus('✅ Stream loaded successfully!', 'success');
+                    video.play().catch(e => {
+                        console.log('Autoplay prevented:', e);
+                        showStatus('Stream ready - click play button', 'success');
+                    });
+                });
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS Error:', data);
+                    showStatus(`❌ Error: ${data.details}`, 'error');
+                });
+                
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari native HLS support
+                video.src = url;
+                video.addEventListener('loadedmetadata', function() {
+                    showStatus('✅ Stream loaded successfully!', 'success');
+                    video.play().catch(e => {
+                        console.log('Autoplay prevented:', e);
+                        showStatus('Stream ready - click play button', 'success');
+                    });
+                });
+            } else {
+                showStatus('❌ HLS not supported in this browser', 'error');
+            }
+        }
+
+        function stopStream() {
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            video.src = '';
+            showStatus('Stream stopped', 'success');
+        }
+
+        // Auto-load default stream if available
+        window.addEventListener('load', function() {
+            // Optional: auto-load stream on page load
+            // loadStream();
+        });
+    </script>
+</body>
+</html>
