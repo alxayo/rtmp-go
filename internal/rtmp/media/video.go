@@ -25,10 +25,13 @@ const (
 // (excluding the FLV header + avc packet type if present) are left untouched for transparent relay.
 //
 // Tag layout (FLV spec / RTMP encapsulated video tag data):
-//   [VideoHeader][AVCPacketType?][CompositionTime?][Data...]
+//
+//	[VideoHeader][AVCPacketType?][CompositionTime?][Data...]
+//
 // For our limited purposes we only look at:
 //   - VideoHeader first byte: frameType (bits 7-4), codecID (bits 3-0)
 //   - If codecID == 7 (AVC): second byte AVCPacketType (0=Sequence Header, 1=NALU)
+//
 // We intentionally do not parse composition time / NALUs.
 //
 // Error conditions are conservative so upstream logic can decide how to handle unsupported codecs.

@@ -2,7 +2,9 @@ package conn
 
 // SessionState represents the lifecycle state of an RTMP session.
 // The progression follows the spec/data-model:
-//   Uninitialized → Connected → StreamCreated → Publishing/Playing
+//
+//	Uninitialized → Connected → StreamCreated → Publishing/Playing
+//
 // For this task we model Publishing and Playing distinctly but the
 // transition mechanics (publish vs play command) will be handled by
 // higher RPC/command layers – here we just provide helpers.
