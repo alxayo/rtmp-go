@@ -1,6 +1,7 @@
 package bufpool
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -86,16 +87,19 @@ func TestPoolConcurrentAccess(t *testing.T) {
 
 	p := New()
 	var wg sync.WaitGroup
+	errCh := make(chan error, 5) // Buffer for potential errors from all goroutines
 
 	worker := func(size int) {
 		defer wg.Done()
 		for i := 0; i < 1000; i++ {
 			buf := p.Get(size)
 			if len(buf) != size {
-				t.Fatalf("expected len=%d, got %d", size, len(buf))
+				errCh <- fmt.Errorf("expected len=%d, got %d", size, len(buf))
+				return
 			}
 			if cap(buf) < size {
-				t.Fatalf("expected cap >= %d, got %d", size, cap(buf))
+				errCh <- fmt.Errorf("expected cap >= %d, got %d", size, cap(buf))
+				return
 			}
 			for j := range buf {
 				buf[j] = byte(i)
@@ -112,4 +116,10 @@ func TestPoolConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
+	close(errCh)
+
+	// Check for any errors from the goroutines
+	for err := range errCh {
+		t.Fatal(err)
+	}
 }
