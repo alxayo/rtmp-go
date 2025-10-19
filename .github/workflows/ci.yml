@@ -5,6 +5,7 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # Enables manual triggering from GitHub UI
 
 env:
   GO_VERSION: '1.25.1'
