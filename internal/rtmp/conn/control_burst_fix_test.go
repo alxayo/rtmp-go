@@ -2,6 +2,7 @@ package conn
 
 import (
 	"net"
+	"sync/atomic"
 	"testing"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
@@ -58,14 +59,15 @@ func TestControlBurstUpdatesWriteChunkSize(t *testing.T) {
 
 	// Verify that writeChunkSize was updated to 4096 by the control burst
 	// (The control burst is sent automatically by Accept())
-	if serverConn.writeChunkSize != serverChunkSize {
-		t.Errorf("writeChunkSize = %d, want %d (should match advertised chunk size)", serverConn.writeChunkSize, serverChunkSize)
+	actualWriteChunkSize := atomic.LoadUint32(&serverConn.writeChunkSize)
+	if actualWriteChunkSize != serverChunkSize {
+		t.Errorf("writeChunkSize = %d, want %d (should match advertised chunk size)", actualWriteChunkSize, serverChunkSize)
 	}
 
 	// Verify it's not still 128 (the bug we're fixing)
-	if serverConn.writeChunkSize == 128 {
+	if actualWriteChunkSize == 128 {
 		t.Error("writeChunkSize still 128 - control burst did not update it! This is the bug.")
 	}
 
-	t.Logf("SUCCESS: writeChunkSize correctly set to %d", serverConn.writeChunkSize)
+	t.Logf("SUCCESS: writeChunkSize correctly set to %d", actualWriteChunkSize)
 }

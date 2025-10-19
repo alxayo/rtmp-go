@@ -167,7 +167,7 @@ func TestWriteLoopChunkingAndSend(t *testing.T) {
 	if serverConn == nil {
 		t.Fatalf("nil server conn")
 	}
-	serverConn.writeChunkSize = 5 // force fragmentation
+	atomic.StoreUint32(&serverConn.writeChunkSize, 5) // force fragmentation
 
 	payload := []byte("abcdefghij") // 10 bytes -> 2 chunks of 5
 	msg := &chunk.Message{CSID: 3, Timestamp: 0, MessageLength: uint32(len(payload)), TypeID: 20, MessageStreamID: 0, Payload: payload}

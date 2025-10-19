@@ -51,7 +51,7 @@ type Connection struct {
 
 	// Protocol state (subset per T046 requirements)
 	readChunkSize  uint32
-	writeChunkSize uint32
+	writeChunkSize uint32 // accessed atomically by multiple goroutines
 	windowAckSize  uint32
 	chunkStreams   map[uint32]*chunk.ChunkStreamState // accessed only by readLoop
 	outboundQueue  chan *chunk.Message
@@ -157,8 +157,9 @@ func (c *Connection) startWriteLoop() {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		w := chunk.NewWriter(c.netConn, c.writeChunkSize)
-		c.log.Debug("writeLoop started", "write_chunk_size", c.writeChunkSize)
+		writeChunkSize := atomic.LoadUint32(&c.writeChunkSize)
+		w := chunk.NewWriter(c.netConn, writeChunkSize)
+		c.log.Debug("writeLoop started", "write_chunk_size", writeChunkSize)
 		for {
 			select {
 			case <-c.ctx.Done():
@@ -171,7 +172,8 @@ func (c *Connection) startWriteLoop() {
 				}
 				c.log.Debug("writeLoop sending message", "type_id", msg.TypeID, "csid", msg.CSID, "msid", msg.MessageStreamID, "len", len(msg.Payload))
 				// Sync writer chunk size with potentially updated field.
-				w.SetChunkSize(c.writeChunkSize)
+				currentChunkSize := atomic.LoadUint32(&c.writeChunkSize)
+				w.SetChunkSize(currentChunkSize)
 				if err := w.WriteMessage(msg); err != nil {
 					c.log.Error("writeLoop write failed", "error", err)
 					return
@@ -216,7 +218,7 @@ func Accept(l net.Listener) (*Connection, error) {
 	lgr.Info("Connection accepted", "handshake_ms", dur.Milliseconds())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Connection{
+	conn := &Connection{
 		id:                id,
 		netConn:           raw,
 		remoteAddr:        raw.RemoteAddr(),
@@ -226,25 +228,25 @@ func Accept(l net.Listener) (*Connection, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		readChunkSize:     128,
-		writeChunkSize:    128,
 		windowAckSize:     windowAckSizeValue, // align with control burst constants
 		chunkStreams:      make(map[uint32]*chunk.ChunkStreamState),
 		outboundQueue:     make(chan *chunk.Message, 100),
 	}
+	atomic.StoreUint32(&conn.writeChunkSize, 128)
 
 	// Start write loop first so control burst can be queued
-	c.startWriteLoop()
+	conn.startWriteLoop()
 
 	// Send control burst synchronously BEFORE starting read loop
 	// This ensures the client receives the burst before we process any client messages
-	if err := sendInitialControlBurst(c); err != nil {
-		c.log.Error("Control burst failed", "error", err)
-		_ = c.Close()
+	if err := sendInitialControlBurst(conn); err != nil {
+		conn.log.Error("Control burst failed", "error", err)
+		_ = conn.Close()
 		return nil, fmt.Errorf("control burst: %w", err)
 	}
 
 	// NOTE: readLoop is NOT started here to avoid race condition with message handler setup.
 	// Caller MUST call Start() after setting message handler via SetMessageHandler().
 
-	return c, nil
+	return conn, nil
 }

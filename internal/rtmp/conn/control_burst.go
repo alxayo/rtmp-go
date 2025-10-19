@@ -18,6 +18,7 @@ package conn
 import (
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/control"
@@ -74,7 +75,7 @@ func sendInitialControlBurst(c *Connection) error {
 				newSize := binary.BigEndian.Uint32(m.Payload)
 				c.log.Info("Control sent: Set Chunk Size", "size", newSize)
 				// CRITICAL: Update the connection's write chunk size to match what we told the peer
-				c.writeChunkSize = newSize
+				atomic.StoreUint32(&c.writeChunkSize, newSize)
 			} else {
 				c.log.Info("Control sent: Set Chunk Size")
 			}
