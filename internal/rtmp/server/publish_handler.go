@@ -13,7 +13,6 @@ import (
 	"fmt"
 
 	rtmperrors "github.com/alxayo/go-rtmp/internal/errors"
-	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
@@ -51,32 +50,10 @@ func HandlePublish(reg *Registry, conn sender, app string, msg *chunk.Message) (
 		return nil, err // already a *errors.ProtocolError from registry or ErrPublisherExists
 	}
 
-	// Build onStatus NetStream.Publish.Start (dependency T039). T039 may not
-	// yet be implemented; we inline a minimal builder consistent with the
-	// commands contract so this task can progress independently.
-	info := map[string]interface{}{
-		"level":       "status",
-		"code":        "NetStream.Publish.Start",
-		"description": fmt.Sprintf("Publishing %s.", pcmd.StreamKey),
-		"details":     pcmd.StreamKey,
-	}
-
-	payload, err := amf.EncodeAll(
-		"onStatus", // command name
-		float64(0), // transaction ID (notification)
-		nil,        // command object (null)
-		info,       // info object
-	)
+	// Build onStatus NetStream.Publish.Start (reuses shared builder from play_handler.go).
+	onStatus, err := buildOnStatus(msg.MessageStreamID, pcmd.StreamKey, "NetStream.Publish.Start", fmt.Sprintf("Publishing %s.", pcmd.StreamKey))
 	if err != nil {
 		return nil, rtmperrors.NewProtocolError("publish.handle.encode", err)
-	}
-
-	onStatus := &chunk.Message{
-		CSID:            5,                                     // typical control / onStatus chunk stream id (spec allows 4/5)
-		TypeID:          rpc.CommandMessageAMF0TypeIDForTest(), // expose constant via helper for now
-		MessageStreamID: msg.MessageStreamID,                   // same stream id as publish command
-		MessageLength:   uint32(len(payload)),
-		Payload:         payload,
 	}
 
 	// Send the status message. If this fails we still return it so tests can

@@ -20,12 +20,11 @@ func CommandMessageAMF0TypeIDForTest() uint8 { return commandMessageAMF0TypeID }
 // ConnectCommand represents the parsed contents of a "connect" command.
 // Only the fields required by our current implementation scope are captured.
 type ConnectCommand struct {
-	TransactionID    float64
-	App              string
-	FlashVer         string
-	TcURL            string
-	ObjectEncoding   float64                // must be 0 (AMF0)
-	RawCommandObject map[string]interface{} // retained for any future optional fields
+	TransactionID  float64
+	App            string
+	FlashVer       string
+	TcURL          string
+	ObjectEncoding float64 // must be 0 (AMF0)
 }
 
 // ParseConnectCommand parses an RTMP command message payload (type 20) assumed
@@ -66,7 +65,7 @@ func ParseConnectCommand(msg *chunk.Message) (*ConnectCommand, error) {
 		return nil, errors.NewProtocolError("connect.parse", fmt.Errorf("third value must be object commandObject"))
 	}
 
-	cc := &ConnectCommand{TransactionID: trx, RawCommandObject: obj}
+	cc := &ConnectCommand{TransactionID: trx}
 
 	// Extract required fields
 	if v, ok := obj["app"]; ok {

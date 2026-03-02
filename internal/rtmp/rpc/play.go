@@ -12,13 +12,12 @@ import (
 // Spec form (subset we care about): ["play", 0, null, streamName, start, duration, reset]
 // Only streamName is strictly required for our current feature scope.
 type PlayCommand struct {
-	App        string        // application name (passed in separately, from session)
-	StreamName string        // raw stream name component
-	StreamKey  string        // full key: app/streamName
-	Start      int64         // -2=live, -1=recorded, >=0 offset (seconds)
-	Duration   int64         // duration if provided (seconds), -1 if not provided
-	Reset      bool          // reset flag if provided
-	RawValues  []interface{} // retained for debugging / future use
+	App        string
+	StreamName string // raw stream name component
+	StreamKey  string // full key: app/streamName
+	Start      int64  // -2=live, -1=recorded, >=0 offset (seconds)
+	Duration   int64  // duration if provided (seconds), -1 if not provided
+	Reset      bool   // reset flag if provided
 }
 
 // ParsePlayCommand parses an RTMP AMF0 command message assumed to contain a
@@ -61,7 +60,7 @@ func ParsePlayCommand(msg *chunk.Message, app string) (*PlayCommand, error) {
 		return nil, errors.NewProtocolError("play.parse", fmt.Errorf("missing stream name"))
 	}
 
-	pc := &PlayCommand{App: app, StreamName: streamName, StreamKey: fmt.Sprintf("%s/%s", app, streamName), RawValues: vals}
+	pc := &PlayCommand{App: app, StreamName: streamName, StreamKey: fmt.Sprintf("%s/%s", app, streamName)}
 
 	// Optional arguments
 	if len(vals) >= 5 {

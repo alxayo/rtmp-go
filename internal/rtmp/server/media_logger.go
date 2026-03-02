@@ -6,8 +6,6 @@ package server
 //   * Per-connection packet counters (audio/video separate)
 //   * Codec detection on first audio/video packets
 //   * Periodic stats logging (configurable interval)
-//   * Debug-level per-packet logging
-//   * Info-level summary logging
 
 import (
 	"log/slog"
@@ -41,6 +39,7 @@ type MediaLogger struct {
 	statsInterval time.Duration
 	statsTicker   *time.Ticker
 	stopChan      chan struct{}
+	stopOnce      sync.Once
 }
 
 // NewMediaLogger creates a new media logger for a connection.
@@ -114,14 +113,6 @@ func (ml *MediaLogger) ProcessMessage(msg *chunk.Message) {
 		}
 	}
 
-	// Debug-level per-packet logging
-	ml.log.Debug("Media packet",
-		"type", mediaTypeString(msg.TypeID),
-		"csid", msg.CSID,
-		"msid", msg.MessageStreamID,
-		"timestamp", msg.Timestamp,
-		"length", msg.MessageLength,
-		"payload_size", len(msg.Payload))
 }
 
 // statsLoop periodically logs aggregated statistics.
@@ -160,14 +151,13 @@ func (ml *MediaLogger) logStats() {
 }
 
 // Stop halts the periodic stats logging and logs final statistics.
+// Safe to call multiple times.
 func (ml *MediaLogger) Stop() {
-	close(ml.stopChan)
-	if ml.statsTicker != nil {
+	ml.stopOnce.Do(func() {
+		close(ml.stopChan)
 		ml.statsTicker.Stop()
-	}
-
-	// Log final stats
-	ml.logStats()
+		ml.logStats()
+	})
 }
 
 // GetStats returns current statistics (for testing or external consumers).

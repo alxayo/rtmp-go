@@ -131,13 +131,16 @@ func ServerHandshake(conn net.Conn) error {
 	return nil
 }
 
-// Helper: set deadlines with error wrapping.
+// setReadDeadline sets a timeout for the next read operation on the connection.
+// If the peer doesn't send data within the specified duration, the read will
+// return a timeout error. This prevents the handshake from hanging indefinitely.
 func setReadDeadline(c net.Conn, d time.Duration) error {
 	if err := c.SetReadDeadline(time.Now().Add(d)); err != nil {
 		return rerrors.NewHandshakeError("set read deadline", err)
 	}
 	return nil
 }
+// setWriteDeadline sets a timeout for the next write operation on the connection.
 func setWriteDeadline(c net.Conn, d time.Duration) error {
 	if err := c.SetWriteDeadline(time.Now().Add(d)); err != nil {
 		return rerrors.NewHandshakeError("set write deadline", err)
@@ -145,7 +148,9 @@ func setWriteDeadline(c net.Conn, d time.Duration) error {
 	return nil
 }
 
-// writeFull ensures entire buffer is written.
+// writeFull writes the entire buffer to the writer, retrying partial writes.
+// Go's net.Conn.Write may return fewer bytes than requested; this function
+// loops until all bytes are written or an error occurs.
 func writeFull(w io.Writer, b []byte) error {
 	off := 0
 	for off < len(b) {
@@ -158,7 +163,9 @@ func writeFull(w io.Writer, b []byte) error {
 	return nil
 }
 
-// bytesEqual is a small inline version (avoids importing bytes just for Equal)
+// bytesEqual compares two byte slices for equality.
+// We use a simple inline version to avoid importing the "bytes" package
+// just for this single comparison.
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -171,10 +178,9 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
-// isTimeoutErr performs a lightweight timeout classification so we can convert
-// into TimeoutError. We check for net.Error with Timeout() and io.ErrUnexpectedEOF
-// (the latter combined with a deadline read indicates a premature close, still
-// treat as protocol / timeout layered error).
+// isTimeoutErr checks if an error is a network timeout.
+// This is used to distinguish timeouts (which should be wrapped as TimeoutError)
+// from other I/O errors during the handshake process.
 func isTimeoutErr(err error) bool {
 	if err == nil {
 		return false

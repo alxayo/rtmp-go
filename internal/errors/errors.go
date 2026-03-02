@@ -1,5 +1,17 @@
 package errors
 
+// This package defines domain-specific error types for the RTMP server.
+// Each error type corresponds to a layer of the RTMP protocol stack:
+//   - ProtocolError: generic RTMP protocol violations
+//   - HandshakeError: failures during the initial handshake exchange
+//   - ChunkError: problems parsing or serializing chunk-level framing
+//   - AMFError: failures encoding/decoding AMF0 data format
+//   - TimeoutError: operations that exceeded their deadline
+//
+// All protocol errors implement the protocolMarker interface, enabling
+// callers to check if any error in a chain is protocol-related via
+// IsProtocolError(). Errors support Go 1.13+ unwrapping via Unwrap().
+
 import (
 	"context"
 	stdErrors "errors"
@@ -119,7 +131,9 @@ func IsProtocolError(err error) bool {
 	return stdErrors.As(err, &pm)
 }
 
-// Constructors (encourage contextual wrapping with %w when used by callers).
+// Constructors — these create new error instances wrapping an underlying cause.
+// The 'op' parameter describes what operation failed (e.g. "read C0+C1").
+// The 'cause' parameter is the original error that triggered this failure.
 func NewProtocolError(op string, cause error) error  { return &ProtocolError{Op: op, Err: cause} }
 func NewHandshakeError(op string, cause error) error { return &HandshakeError{Op: op, Err: cause} }
 func NewChunkError(op string, cause error) error     { return &ChunkError{Op: op, Err: cause} }

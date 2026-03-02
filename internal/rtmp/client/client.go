@@ -35,12 +35,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/alxayo/go-rtmp/internal/logger"
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
@@ -54,19 +56,29 @@ const DialTimeout = 5 * time.Second
 // but we start with 128 until the server potentially issues Set Chunk Size.
 const defaultChunkSize = 128
 
-// Client represents a minimal RTMP client instance.
+// Chunk stream IDs per RTMP convention.
+const (
+	commandCSID = 3 // commands (connect, createStream, publish, play)
+	audioCSID   = 6 // audio data
+	videoCSID   = 7 // video data
+)
+
+// Client represents a minimal RTMP client for testing and relay purposes.
+// It handles the full connection lifecycle: TCP dial → handshake → connect
+// command → createStream → publish/play → send audio/video.
 type Client struct {
-	conn   net.Conn
-	writer *chunk.Writer
-	reader *chunk.Reader
-	url    *url.URL
+	conn   net.Conn       // underlying TCP connection
+	writer *chunk.Writer  // encodes outbound messages into chunks
+	reader *chunk.Reader  // decodes inbound chunks into messages
+	url    *url.URL       // parsed RTMP URL
+	log    *slog.Logger   // structured logger with "rtmp_client" component tag
 
-	app       string
-	streamKey string
-	streamID  uint32 // assume 1 for now once createStream succeeds
+	app       string       // application name extracted from URL path (e.g. "live")
+	streamKey string       // full stream key: "app/streamName" (e.g. "live/mystream")
+	streamID  uint32       // message stream ID assigned by server's createStream response
 
-	trxMu sync.Mutex
-	trxID float64
+	trxMu sync.Mutex      // protects trxID from concurrent access
+	trxID float64         // incrementing transaction ID for request-response matching
 }
 
 // New creates a new Client (not yet connected).
@@ -85,7 +97,13 @@ func New(rawurl string) (*Client, error) {
 	}
 	app := parts[0]
 	stream := strings.Join(parts[1:], "/")
-	c := &Client{url: u, app: app, streamKey: app + "/" + stream, trxID: 0}
+	c := &Client{
+		url:       u,
+		app:       app,
+		streamKey: app + "/" + stream,
+		trxID:     0,
+		log:       logger.Logger().With("component", "rtmp_client"),
+	}
 	return c, nil
 }
 
@@ -143,7 +161,7 @@ func (c *Client) sendConnect() error {
 	if err != nil {
 		return err
 	}
-	msg := &chunk.Message{CSID: 3, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: 0, MessageLength: uint32(len(payload)), Payload: payload}
+	msg := &chunk.Message{CSID: commandCSID, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: 0, MessageLength: uint32(len(payload)), Payload: payload}
 	return c.writer.WriteMessage(msg)
 }
 
@@ -153,7 +171,7 @@ func (c *Client) sendCreateStream() error {
 	if err != nil {
 		return err
 	}
-	msg := &chunk.Message{CSID: 3, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: 0, MessageLength: uint32(len(payload)), Payload: payload}
+	msg := &chunk.Message{CSID: commandCSID, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: 0, MessageLength: uint32(len(payload)), Payload: payload}
 	if err := c.writer.WriteMessage(msg); err != nil {
 		return err
 	}
@@ -163,118 +181,74 @@ func (c *Client) sendCreateStream() error {
 }
 
 func (c *Client) sendConnectAndWaitResponse() error {
-	// Send connect command
-	fmt.Printf("DEBUG: Client sending connect command\n")
+	c.log.Debug("sending connect command")
 	if err := c.sendConnect(); err != nil {
 		return fmt.Errorf("send connect: %w", err)
 	}
 
-	// Wait for and validate connect response
-	fmt.Printf("DEBUG: Client waiting for connect response\n")
-	if err := c.waitForConnectResponse(); err != nil {
+	c.log.Debug("waiting for connect response")
+	_, err := c.waitForCommandResponse("connect")
+	if err != nil {
 		return fmt.Errorf("connect response: %w", err)
 	}
-
-	fmt.Printf("DEBUG: Client connect completed successfully\n")
+	c.log.Info("connect completed")
 	return nil
 }
 
 func (c *Client) sendCreateStreamAndWaitResponse() error {
-	// Send createStream command
-	fmt.Printf("DEBUG: Client sending createStream command\n")
+	c.log.Debug("sending createStream command")
 	if err := c.sendCreateStream(); err != nil {
 		return fmt.Errorf("send createStream: %w", err)
 	}
 
-	// Wait for and validate createStream response
-	fmt.Printf("DEBUG: Client waiting for createStream response\n")
-	if err := c.waitForCreateStreamResponse(); err != nil {
+	c.log.Debug("waiting for createStream response")
+	args, err := c.waitForCommandResponse("createStream")
+	if err != nil {
 		return fmt.Errorf("createStream response: %w", err)
 	}
-
-	fmt.Printf("DEBUG: Client createStream completed successfully\n")
+	// Extract stream ID from response (args[3])
+	if len(args) >= 4 {
+		if streamID, ok := args[3].(float64); ok {
+			c.streamID = uint32(streamID)
+		}
+	}
+	c.log.Info("createStream completed", "stream_id", c.streamID)
 	return nil
 }
 
-func (c *Client) waitForConnectResponse() error {
+// waitForCommandResponse reads messages until a _result or _error response is
+// received for the given command name. Returns the decoded AMF values on success.
+func (c *Client) waitForCommandResponse(cmdName string) ([]interface{}, error) {
 	for {
 		msg, err := c.reader.ReadMessage()
 		if err != nil {
-			return fmt.Errorf("read message: %w", err)
+			return nil, fmt.Errorf("read message: %w", err)
 		}
 
-		// Only process command messages
 		if msg.TypeID != rpc.CommandMessageAMF0TypeIDForTest() {
 			continue
 		}
 
-		// Decode the command
 		args, err := amf.DecodeAll(msg.Payload)
 		if err != nil {
-			continue // Skip malformed messages
+			continue // skip malformed messages
 		}
-
 		if len(args) < 1 {
 			continue
 		}
 
-		cmdName, ok := args[0].(string)
+		name, ok := args[0].(string)
 		if !ok {
 			continue
 		}
 
-		// Look for _result or _error responses to our connect command
-		if cmdName == "_result" {
-			// Connect succeeded
-			fmt.Printf("DEBUG: Client received connect _result response\n")
-			return nil
-		} else if cmdName == "_error" {
-			fmt.Printf("DEBUG: Client received connect _error response\n")
-			return fmt.Errorf("connect command failed")
-		}
-	}
-}
-
-func (c *Client) waitForCreateStreamResponse() error {
-	for {
-		msg, err := c.reader.ReadMessage()
-		if err != nil {
-			return fmt.Errorf("read message: %w", err)
-		}
-
-		// Only process command messages
-		if msg.TypeID != rpc.CommandMessageAMF0TypeIDForTest() {
-			continue
-		}
-
-		// Decode the command
-		args, err := amf.DecodeAll(msg.Payload)
-		if err != nil {
-			continue // Skip malformed messages
-		}
-
-		if len(args) < 3 {
-			continue
-		}
-
-		cmdName, ok := args[0].(string)
-		if !ok {
-			continue
-		}
-
-		// Look for _result response to our createStream command
-		if cmdName == "_result" {
-			// Extract stream ID from response (should be args[3])
-			if len(args) >= 4 {
-				if streamID, ok := args[3].(float64); ok {
-					c.streamID = uint32(streamID)
-				}
-			}
-			fmt.Printf("DEBUG: Client received createStream _result response, streamID=%d\n", c.streamID)
-			return nil
-		} else if cmdName == "_error" {
-			fmt.Printf("DEBUG: Client received createStream _error response\n")
-			return fmt.Errorf("createStream command failed")
+		switch name {
+		case "_result":
+			c.log.Debug("received _result", "cmd", cmdName)
+			return args, nil
+		case "_error":
+			c.log.Debug("received _error", "cmd", cmdName)
+			return nil, fmt.Errorf("%s command failed", cmdName)
 		}
 	}
 }
@@ -285,16 +259,16 @@ func (c *Client) Publish() error {
 		return errors.New("client not connected")
 	}
 	name := strings.TrimPrefix(c.streamKey, c.app+"/")
-	fmt.Printf("DEBUG: Client sending publish command for stream: %s\n", name)
+	c.log.Debug("sending publish command", "stream", name)
 	payload, err := amf.EncodeAll("publish", float64(0), nil, name, "live")
 	if err != nil {
 		return err
 	}
-	msg := &chunk.Message{CSID: 3, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: c.streamID, MessageLength: uint32(len(payload)), Payload: payload}
+	msg := &chunk.Message{CSID: commandCSID, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: c.streamID, MessageLength: uint32(len(payload)), Payload: payload}
 	if err := c.writer.WriteMessage(msg); err != nil {
 		return err
 	}
-	fmt.Printf("DEBUG: Client publish command sent successfully\n")
+	c.log.Info("publish command sent", "stream", name)
 	return nil
 }
 
@@ -309,7 +283,7 @@ func (c *Client) Play() error {
 	if err != nil {
 		return err
 	}
-	msg := &chunk.Message{CSID: 3, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: c.streamID, MessageLength: uint32(len(payload)), Payload: payload}
+	msg := &chunk.Message{CSID: commandCSID, TypeID: rpc.CommandMessageAMF0TypeIDForTest(), MessageStreamID: c.streamID, MessageLength: uint32(len(payload)), Payload: payload}
 	return c.writer.WriteMessage(msg)
 }
 
@@ -326,7 +300,7 @@ func (c *Client) SendAudio(ts uint32, data []byte) error {
 	}
 
 	msg := &chunk.Message{
-		CSID:            6,
+		CSID:            audioCSID,
 		TypeID:          8,
 		MessageStreamID: c.streamID,
 		Timestamp:       ts,
@@ -354,7 +328,7 @@ func (c *Client) SendVideo(ts uint32, data []byte) error {
 	}
 
 	msg := &chunk.Message{
-		CSID:            7,
+		CSID:            videoCSID,
 		TypeID:          9,
 		MessageStreamID: c.streamID,
 		Timestamp:       ts,

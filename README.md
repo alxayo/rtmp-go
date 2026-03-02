@@ -9,6 +9,12 @@ An educational yet production‑ready, spec‑driven RTMP (Real‑Time Messaging
 
 ---
 
+## New Here?
+
+If you're new to RTMP or this codebase, start with the **[Architecture Guide](docs/architecture.md)** — it explains the full system from the ground up with diagrams, data flow walkthrough, and a suggested reading order. See also the **[Documentation Index](docs/README.md)** for a map of all available docs.
+
+---
+
 ## 1. Quick Start
 
 **Want to get started immediately?** See **[quick-start.md](quick-start.md)** for a complete step-by-step guide to:

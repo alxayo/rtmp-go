@@ -166,15 +166,6 @@ func (w *Writer) SetChunkSize(size uint32) {
 	}
 }
 
-// EncodeHeaderOnly helper for header-focused tests (mirrors reader tests style).
-func (w *Writer) EncodeHeaderOnly(h *ChunkHeader, prev *ChunkHeader) (int, error) {
-	b, err := EncodeChunkHeader(h, prev)
-	if err != nil {
-		return 0, err
-	}
-	return w.w.Write(b)
-}
-
 // WriteMessage fragments and writes a full RTMP message as one or more chunks.
 // Uses stateful FMT selection based on previous messages sent on the same CSID:
 //   - FMT0: First message on CSID or when all fields change
@@ -199,8 +190,13 @@ func (w *Writer) WriteMessage(msg *Message) error {
 		cs = 128
 	}
 
-	// Select FMT based on previous state for this CSID
-	var selectedFmt uint8 = fmt0 // default to FMT0
+	// Select FMT based on previous state for this CSID.
+	// FMT selection reduces wire overhead by omitting unchanged header fields:
+	//   FMT0: Full header (first message or all fields changed)
+	//   FMT1: Delta timestamp + length + type (stream ID unchanged)
+	//   FMT2: Delta timestamp only (length, type, stream ID unchanged)
+	//   FMT3: No header (continuation chunk within same message)
+	var selectedFmt uint8 = fmt0
 	var timestampDelta uint32 = msg.Timestamp
 	prev := w.lastHeaders[msg.CSID]
 
@@ -287,7 +283,9 @@ func (w *Writer) WriteMessage(msg *Message) error {
 	return nil
 }
 
-// writeChunk builds a single buffer header+payload and writes it once (atomic chunk emission).
+// writeChunk concatenates the header and payload into a single buffer and writes
+// it in one call. This ensures the chunk is sent atomically — the header and
+// payload bytes won't be split across separate TCP packets.
 func writeChunk(w io.Writer, header []byte, payload []byte) error {
 	buf := make([]byte, 0, len(header)+len(payload))
 	buf = append(buf, header...)

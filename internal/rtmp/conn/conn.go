@@ -1,16 +1,7 @@
 package conn
 
-// Package conn provides the TCP connection lifecycle integration glue that
-// sits above the handshake layer and (later) below the chunk/control layers.
-//
-// T016: Integrate Handshake into Connection
-//  - After net.Listener.Accept() perform handshake.ServerHandshake
-//  - Log handshake completion with duration
-//  - On handshake error: close connection and return error
-//
-// The package purposefully keeps scope tiny for this task: a single Accept
-// helper plus a lightweight Connection wrapper that will be expanded by
-// subsequent tasks (control burst, read/write loops, stream registry, etc.).
+// Package conn manages the lifecycle of a single RTMP connection:
+// handshake, control burst, and read/write goroutine pair.
 
 import (
 	"context"
@@ -28,12 +19,15 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// Connection represents an accepted RTMP connection that has successfully
-// completed the RTMP simple handshake and is ready for chunk layer processing.
-// Future tasks will add read/write goroutines, control message negotiation,
-// and command handling. For now we only retain metadata useful for logging
-// and tests.
-// (Session entity implemented in session.go – placeholder removed)
+const (
+	// sendTimeout is the maximum time to wait for the outbound queue to accept a message.
+	sendTimeout = 200 * time.Millisecond
+	// outboundQueueSize is the capacity of the per-connection outbound message queue.
+	outboundQueueSize = 100
+)
+
+// Connection represents an accepted RTMP connection that has completed the
+// handshake and runs read/write loops for chunk-level message I/O.
 
 type Connection struct {
 	// Immutable / identity
@@ -53,9 +47,8 @@ type Connection struct {
 	readChunkSize  uint32
 	writeChunkSize uint32 // accessed atomically by multiple goroutines
 	windowAckSize  uint32
-	chunkStreams   map[uint32]*chunk.ChunkStreamState // accessed only by readLoop
 	outboundQueue  chan *chunk.Message
-	session        *Session // placeholder (T047)
+	session        *Session
 
 	// Internal helpers
 	onMessage func(*chunk.Message) // test hook / dispatcher injection
@@ -101,7 +94,7 @@ func (c *Connection) SendMessage(msg *chunk.Message) error {
 		return errors.New("nil message")
 	}
 	// Derive short timeout context.
-	deadline := time.NewTimer(200 * time.Millisecond)
+	deadline := time.NewTimer(sendTimeout)
 	defer deadline.Stop()
 	select {
 	case <-c.ctx.Done():
@@ -119,38 +112,26 @@ func (c *Connection) startReadLoop() {
 	go func() {
 		defer c.wg.Done()
 		r := chunk.NewReader(c.netConn, c.readChunkSize)
-		c.log.Debug("readLoop started", "initial_chunk_size", c.readChunkSize)
 		for {
 			select {
 			case <-c.ctx.Done():
-				c.log.Debug("readLoop context cancelled")
 				return
 			default:
 			}
-			c.log.Debug("readLoop waiting for message")
 			msg, err := r.ReadMessage()
 			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 					return
 				}
-				// Distinguish expected termination (EOF) vs unexpected errors.
-				if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-					c.log.Debug("readLoop closed", "error", err)
-				} else {
-					c.log.Error("readLoop error", "error", err)
-				}
+				c.log.Error("readLoop error", "error", err)
 				return
 			}
-			c.log.Debug("readLoop received message", "type_id", msg.TypeID, "msid", msg.MessageStreamID, "len", len(msg.Payload))
 			if c.onMessage != nil {
 				c.onMessage(msg)
 			}
 		}
 	}()
 }
-
-// Helper to unify EOF detection without importing io here again in patch context.
-func ioEOF(err error) error { return err }
 
 // startWriteLoop consumes outboundQueue and writes chunked messages.
 func (c *Connection) startWriteLoop() {
@@ -159,26 +140,20 @@ func (c *Connection) startWriteLoop() {
 		defer c.wg.Done()
 		writeChunkSize := atomic.LoadUint32(&c.writeChunkSize)
 		w := chunk.NewWriter(c.netConn, writeChunkSize)
-		c.log.Debug("writeLoop started", "write_chunk_size", writeChunkSize)
 		for {
 			select {
 			case <-c.ctx.Done():
-				c.log.Debug("writeLoop context cancelled")
 				return
 			case msg, ok := <-c.outboundQueue:
 				if !ok {
-					c.log.Debug("writeLoop queue closed")
 					return
 				}
-				c.log.Debug("writeLoop sending message", "type_id", msg.TypeID, "csid", msg.CSID, "msid", msg.MessageStreamID, "len", len(msg.Payload))
-				// Sync writer chunk size with potentially updated field.
 				currentChunkSize := atomic.LoadUint32(&c.writeChunkSize)
 				w.SetChunkSize(currentChunkSize)
 				if err := w.WriteMessage(msg); err != nil {
 					c.log.Error("writeLoop write failed", "error", err)
 					return
 				}
-				c.log.Debug("writeLoop message sent successfully", "type_id", msg.TypeID)
 			}
 		}
 	}()
@@ -229,8 +204,7 @@ func Accept(l net.Listener) (*Connection, error) {
 		cancel:            cancel,
 		readChunkSize:     128,
 		windowAckSize:     windowAckSizeValue, // align with control burst constants
-		chunkStreams:      make(map[uint32]*chunk.ChunkStreamState),
-		outboundQueue:     make(chan *chunk.Message, 100),
+		outboundQueue:     make(chan *chunk.Message, outboundQueueSize),
 	}
 	atomic.StoreUint32(&conn.writeChunkSize, 128)
 

@@ -4,22 +4,21 @@ import (
 	"log/slog"
 )
 
-// CodecStore is an interface satisfied by the future Stream entity (see data-model.md)
-// and by test fakes. It lets the codec detector store discovered audio/video codecs
-// without depending on the concrete Stream implementation (which may be added later
-// in a different task phase).
+// CodecStore is the interface for storing detected codec information.
+// Both server.Stream and test fakes implement this, allowing the codec
+// detector to work independently of the concrete stream implementation.
 type CodecStore interface {
-	SetAudioCodec(string)
-	SetVideoCodec(string)
-	GetAudioCodec() string
-	GetVideoCodec() string
-	StreamKey() string
+	SetAudioCodec(string)  // Store the detected audio codec name (e.g. "AAC")
+	SetVideoCodec(string)  // Store the detected video codec name (e.g. "H264")
+	GetAudioCodec() string // Retrieve current audio codec (empty if not yet detected)
+	GetVideoCodec() string // Retrieve current video codec (empty if not yet detected)
+	StreamKey() string     // Return the stream's key for logging (e.g. "live/mystream")
 }
 
-// CodecDetector performs one-shot detection of audio and video codecs based on the
-// first audio (type 8) and video (type 9) messages received on a stream.
-// It is concurrency-safe for single goroutine usage (called from a media relay loop)
-// and keeps no internal state; state lives in the CodecStore implementation.
+// CodecDetector identifies audio and video codecs by examining the first
+// media message on each stream. It is stateless — detection results are
+// stored in the CodecStore, and detection only runs when the store's codec
+// field is still empty (one-shot detection).
 type CodecDetector struct{}
 
 // Process inspects an incoming RTMP message (by its type ID and raw payload) and

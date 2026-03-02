@@ -2,8 +2,16 @@ package bufpool
 
 import "sync"
 
+// sizeClasses defines the predefined buffer sizes available in the pool.
+// These are tuned for RTMP workloads:
+//   - 128 bytes: default RTMP chunk size (spec default)
+//   - 4096 bytes: recommended chunk size after server negotiation
+//   - 65536 bytes: maximum chunk size allowed by the protocol
 var sizeClasses = []int{128, 4096, 65536}
 
+// classPool pairs a size class with its Go sync.Pool.
+// sync.Pool is a built-in Go structure that caches allocated objects
+// for reuse, reducing garbage collector pressure.
 type classPool struct {
 	size int
 	pool *sync.Pool
@@ -14,6 +22,8 @@ type Pool struct {
 	pools []classPool
 }
 
+// defaultPool is the package-level pool used by the convenience Get/Put functions.
+// Most callers should use the top-level Get() and Put() instead of creating their own pool.
 var defaultPool = New()
 
 // Get acquires a buffer from the package-level default pool.

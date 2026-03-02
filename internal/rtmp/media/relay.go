@@ -24,11 +24,16 @@ import (
 // back to the blocking SendMessage(*chunk.Message) error which is assumed to handle
 // its own timeout (future connection implementation will provide TrySendMessage).
 
+// Subscriber is the interface that play clients must implement to receive
+// media messages. Any type with a SendMessage method qualifies.
 type Subscriber interface {
 	SendMessage(*chunk.Message) error
 }
 
-// TrySendMessage is an optional interface for non‑blocking enqueue semantics.
+// TrySendMessage is an optional interface for non-blocking message delivery.
+// If a subscriber implements this, BroadcastMessage will try the non-blocking
+// path first. If TrySendMessage returns false (queue full), the message is
+// dropped rather than blocking the publisher.
 type TrySendMessage interface {
 	TrySendMessage(*chunk.Message) bool
 }

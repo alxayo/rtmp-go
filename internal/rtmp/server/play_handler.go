@@ -49,8 +49,12 @@ func HandlePlay(reg *Registry, conn sender, app string, msg *chunk.Message) (*ch
 		return notFound, nil
 	}
 
-	// Add subscriber (connection implements sender -> minimal interface; tests use stub implementing SendMessage).
-	stream.AddSubscriber(conn.(interface{ SendMessage(*chunk.Message) error }))
+	// Add subscriber.
+	sub, ok := conn.(interface{ SendMessage(*chunk.Message) error })
+	if !ok {
+		return nil, rtmperrors.NewProtocolError("play.handle", fmt.Errorf("connection does not implement Subscriber interface"))
+	}
+	stream.AddSubscriber(sub)
 	log.Info("Subscriber added", "stream_key", pcmd.StreamKey, "total_subscribers", len(stream.Subscribers))
 
 	// 1. User Control Stream Begin (event 0) with the play command's message stream id.
@@ -105,8 +109,7 @@ func HandlePlay(reg *Registry, conn sender, app string, msg *chunk.Message) (*ch
 	return started, nil
 }
 
-// buildOnStatus creates an AMF0 onStatus message consistent with the pattern used
-// in publish_handler.go (we replicate instead of factoring early to keep task scope small).
+// buildOnStatus creates an AMF0 onStatus command message.
 func buildOnStatus(streamID uint32, streamKey, code, description string) (*chunk.Message, error) {
 	info := map[string]interface{}{
 		"level":       "status",
@@ -127,8 +130,7 @@ func buildOnStatus(streamID uint32, streamKey, code, description string) (*chunk
 	}, nil
 }
 
-// SubscriberDisconnected removes the subscriber from the stream's list (if present).
-// This mirrors PublisherDisconnected for symmetry and test support.
+// SubscriberDisconnected removes the subscriber from the stream's list.
 func SubscriberDisconnected(reg *Registry, streamKey string, sub sender) {
 	if reg == nil || streamKey == "" || sub == nil {
 		return
@@ -137,10 +139,7 @@ func SubscriberDisconnected(reg *Registry, streamKey string, sub sender) {
 	if s == nil {
 		return
 	}
-	// The registry Stream has a RemoveSubscriber helper added in this task.
-	if rs, ok := any(sub).(interface{ SendMessage(*chunk.Message) error }); ok {
-		_ = rs // unused – presence ensures type alignment
+	if ms, ok := sub.(interface{ SendMessage(*chunk.Message) error }); ok {
+		s.RemoveSubscriber(ms)
 	}
-	// Convert to media.Subscriber via duck typing: it only needs SendMessage(*chunk.Message) error.
-	s.RemoveSubscriber(sub.(interface{ SendMessage(*chunk.Message) error }))
 }

@@ -92,18 +92,12 @@ func DecodeAll(data []byte) ([]interface{}, error) {
 	return out, nil
 }
 
-// Marshal is a convenience alias for EncodeValue returning the produced bytes.
+// Marshal encodes a single AMF0 value and returns the bytes.
 func Marshal(v interface{}) ([]byte, error) { return EncodeAll(v) }
 
-// Unmarshal decodes a single AMF0 value from data. If extra bytes remain after
-// one value they are ignored (mirroring common JSON-like unmarshal semantics).
+// Unmarshal decodes a single AMF0 value from data.
 func Unmarshal(data []byte) (interface{}, error) {
-	r := bytes.NewReader(data)
-	v, err := DecodeValue(r)
-	if err != nil {
-		return nil, err
-	}
-	return v, nil
+	return DecodeValue(bytes.NewReader(data))
 }
 
 // unsupportedMarker returns true if the marker is explicitly listed by task

@@ -1,41 +1,40 @@
 package chunk
 
-// Dechunker implementation (T020)
-// Reassembles RTMP messages from an interleaved stream of chunks, honoring
-// per-CSID state, header compression, extended timestamps, and dynamic
-// inbound chunk size changes (Set Chunk Size control message, type id 1).
+// Chunk Reader (Dechunker)
+// =======================
+// RTMP transmits data as interleaved "chunks" — small fragments of larger messages.
+// Multiple messages from different streams can be interleaved chunk by chunk.
+// The Reader's job is to reassemble these chunks back into complete Messages.
 //
-// Design goals:
-//  - Single pass streaming: no buffering beyond current chunk & in‑flight message buffers.
-//  - Stateful per CSID using ChunkStreamState from state.go.
-//  - Protocol fidelity: header parsing delegated to ParseChunkHeader (header.go).
-//  - Minimal allocations: reuse scratch buffer for chunk payload reads.
+// How it works:
+//   1. Read the next chunk header (determines which stream and message it belongs to)
+//   2. Read the chunk payload (up to chunkSize bytes)
+//   3. Append the payload to the in-progress message for that stream
+//   4. If the message is complete (all bytes received), return it
+//   5. Otherwise, loop back to step 1 (next chunk may be from a different stream)
 //
-// Public contract:
-//  NewReader(r, initialChunkSize) *Reader
-//  (*Reader).SetChunkSize(size)   -- external override (e.g. after control handler)
-//  (*Reader).ReadMessage() (*Message, error) -- blocking read returning next complete message.
-//
-// Error model:
-//  Returns *errors.ChunkError wrapping underlying IO/parse/state issues.
-//  io.EOF is passed through only when encountered before starting a new header.
+// The Reader also handles dynamic chunk size changes: when it receives a
+// Set Chunk Size control message (TypeID 1), it updates its internal chunk
+// size so subsequent chunks are read with the new size.
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 
 	protoerr "github.com/alxayo/go-rtmp/internal/errors"
 )
 
-// Reader converts a byte stream of RTMP chunks into complete Messages.
-// Not safe for concurrent use; expected usage is a single read loop goroutine.
+// Reader converts a byte stream of interleaved RTMP chunks into complete Messages.
+// It maintains per-stream state to handle header compression and multi-chunk reassembly.
+// Not safe for concurrent use; designed for a single read-loop goroutine per connection.
 type Reader struct {
-	br         io.Reader
-	chunkSize  uint32 // inbound chunk size (payload per chunk, sans headers)
-	states     map[uint32]*ChunkStreamState
-	prevHeader map[uint32]*ChunkHeader // last parsed header per CSID (for FMT3 continuity)
-	scratch    []byte                  // reused payload buffer sized to current chunkSize
+	br         io.Reader                       // underlying byte stream (typically a TCP connection)
+	chunkSize  uint32                          // maximum payload bytes per chunk (default 128, server may increase)
+	states     map[uint32]*ChunkStreamState    // per-CSID assembly state (tracks partial messages)
+	prevHeader map[uint32]*ChunkHeader         // last header per CSID (for FMT 1/2/3 field inheritance)
+	scratch    []byte                          // reusable buffer for reading chunk payloads
 }
 
 // NewReader creates a new dechunker with the provided initial inbound chunk size (spec default 128).
@@ -60,149 +59,42 @@ func (r *Reader) SetChunkSize(size uint32) {
 	}
 }
 
-// nextHeader parses the next chunk header, using prior header for CSID when needed (FMT3).
+// nextHeader parses the next chunk header, using prior header for CSID when needed (FMT2/3).
 func (r *Reader) nextHeader() (*ChunkHeader, error) {
-	// Provide prior header for this CSID only when needed; ParseChunkHeader decides usage.
-	// However we don't know CSID until after basic header parse inside ParseChunkHeader.
-	// Strategy: Attempt parse with nil; if FMT3 error complaining about missing previous, retry with stored.
-	// Simpler: Provide stored prev for every call; parser only uses for FMT2/3; safe if nil.
-	// We need CSID to index map; ParseChunkHeader needs prev to inherit for FMT3.
-	// Therefore we must first parse basic header manually? To avoid duplicating logic we adopt two-step:
-	//  1. Peek & parse basic header using a tee reader; easier is to re-implement minimal basic header parse here.
-	// To keep code DRY we'll duplicate tiny basic header parse (few lines) instead of read+unread complexity.
-
-	// Re-parse basic header logic (mirroring parseBasicHeader) so we can supply prev when needed.
-	var first [1]byte
-	if _, err := io.ReadFull(r.br, first[:]); err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			return nil, err
+	// Parse basic header to learn CSID, then supply the stored previous header
+	// so the FMT-specific parsers can inherit fields for FMT1/2/3.
+	fmtVal, csid, basicBytes, err := parseBasicHeader(r.br)
+	if err != nil {
+		// Propagate EOF cleanly (reader shutdown).
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, io.EOF
 		}
 		return nil, protoerr.NewChunkError("reader.basic_header", err)
 	}
-	fmtVal := first[0] >> 6
-	raw := first[0] & 0x3F
-	csid := uint32(0)
-	consumed := 1
-	switch raw {
-	case 0:
-		var b1 [1]byte
-		if _, err := io.ReadFull(r.br, b1[:]); err != nil {
-			return nil, protoerr.NewChunkError("reader.basic_header.2byte", err)
-		}
-		consumed++
-		csid = uint32(b1[0]) + 64
-	case 1:
-		var b2 [2]byte
-		if _, err := io.ReadFull(r.br, b2[:]); err != nil {
-			return nil, protoerr.NewChunkError("reader.basic_header.3byte", err)
-		}
-		consumed += 2
-		csid = uint32(b2[0]) + 64 + (uint32(b2[1]) << 8)
-	default:
-		csid = uint32(raw)
-	}
 
-	// We now need to read the remainder of the chunk header (message + optional extended timestamp).
-	// Rather than reimplement, we'll manually complete message header parse for non-FMT3 based on spec,
-	// replicating logic from ParseChunkHeader but tailored (to avoid double-reading basic header).
-	// For maintainability we could refactor ParseChunkHeader into two pieces, but keeping T017 stable.
-	// Duplicate small logic with care.
+	prev := r.prevHeader[csid]
+	h := &ChunkHeader{FMT: fmtVal, CSID: csid, headerBytes: basicBytes}
 
-	h := &ChunkHeader{FMT: fmtVal, CSID: csid, headerBytes: consumed}
-	var err error
 	switch fmtVal {
 	case 0:
-		var mh [11]byte
-		if _, err = io.ReadFull(r.br, mh[:]); err != nil {
+		if err := h.parseFMT0(r.br); err != nil {
 			return nil, protoerr.NewChunkError("reader.message_header.fmt0", err)
 		}
-		h.headerBytes += 11
-		abs := uint32(mh[0])<<16 | uint32(mh[1])<<8 | uint32(mh[2])
-		h.Timestamp = abs
-		h.MessageLength = uint32(mh[3])<<16 | uint32(mh[4])<<8 | uint32(mh[5])
-		h.MessageTypeID = mh[6]
-		h.MessageStreamID = binary.LittleEndian.Uint32(mh[7:11])
-		if abs == extendedTimestampMarker {
-			var ext [4]byte
-			if _, err = io.ReadFull(r.br, ext[:]); err != nil {
-				return nil, protoerr.NewChunkError("reader.extended_timestamp.fmt0", err)
-			}
-			h.headerBytes += 4
-			h.HasExtendedTimestamp = true
-			val := binary.BigEndian.Uint32(ext[:])
-			h.ExtendedTimestampValue = val
-			h.Timestamp = val
-		}
 	case 1:
-		var mh [7]byte
-		if _, err = io.ReadFull(r.br, mh[:]); err != nil {
+		if err := h.parseFMT1(r.br, prev); err != nil {
 			return nil, protoerr.NewChunkError("reader.message_header.fmt1", err)
 		}
-		h.headerBytes += 7
-		delta := uint32(mh[0])<<16 | uint32(mh[1])<<8 | uint32(mh[2])
-		h.Timestamp = delta
-		h.IsDelta = true
-		h.MessageLength = uint32(mh[3])<<16 | uint32(mh[4])<<8 | uint32(mh[5])
-		h.MessageTypeID = mh[6]
-		// FMT1 reuses MessageStreamID from previous header (per RTMP spec)
-		if prev := r.prevHeader[csid]; prev != nil {
+		// FMT1 inherits MessageStreamID from previous header (per RTMP spec)
+		if prev != nil {
 			h.MessageStreamID = prev.MessageStreamID
-		}
-		if delta == extendedTimestampMarker {
-			var ext [4]byte
-			if _, err = io.ReadFull(r.br, ext[:]); err != nil {
-				return nil, protoerr.NewChunkError("reader.extended_timestamp.fmt1", err)
-			}
-			h.headerBytes += 4
-			h.HasExtendedTimestamp = true
-			val := binary.BigEndian.Uint32(ext[:])
-			h.ExtendedTimestampValue = val
-			h.Timestamp = val
 		}
 	case 2:
-		var mh [3]byte
-		if _, err = io.ReadFull(r.br, mh[:]); err != nil {
+		if err := h.parseFMT2(r.br, prev); err != nil {
 			return nil, protoerr.NewChunkError("reader.message_header.fmt2", err)
 		}
-		h.headerBytes += 3
-		delta := uint32(mh[0])<<16 | uint32(mh[1])<<8 | uint32(mh[2])
-		h.Timestamp = delta
-		h.IsDelta = true
-		if delta == extendedTimestampMarker {
-			var ext [4]byte
-			if _, err = io.ReadFull(r.br, ext[:]); err != nil {
-				return nil, protoerr.NewChunkError("reader.extended_timestamp.fmt2", err)
-			}
-			h.headerBytes += 4
-			h.HasExtendedTimestamp = true
-			val := binary.BigEndian.Uint32(ext[:])
-			h.ExtendedTimestampValue = val
-			h.Timestamp = val
-		}
-		if prev := r.prevHeader[csid]; prev != nil {
-			h.MessageLength = prev.MessageLength
-			h.MessageTypeID = prev.MessageTypeID
-			h.MessageStreamID = prev.MessageStreamID
-		}
 	case 3:
-		prev := r.prevHeader[csid]
-		if prev == nil {
-			return nil, protoerr.NewChunkError("reader.message_header.fmt3", fmt.Errorf("missing previous header for csid %d", csid))
-		}
-		// Copy entire previous header (value semantics)
-		*h = *prev
-		h.FMT = 3
-		// If previous used extended timestamp we must read it again.
-		if prev.HasExtendedTimestamp {
-			var ext [4]byte
-			if _, err = io.ReadFull(r.br, ext[:]); err != nil {
-				return nil, protoerr.NewChunkError("reader.extended_timestamp.fmt3", err)
-			}
-			h.headerBytes += 4
-			val := binary.BigEndian.Uint32(ext[:])
-			h.ExtendedTimestampValue = val
-			// Timestamp semantics same (abs or delta) – just overwrite.
-			h.Timestamp = val
+		if err := h.parseFMT3(r.br, prev, basicBytes); err != nil {
+			return nil, protoerr.NewChunkError("reader.message_header.fmt3", err)
 		}
 	default:
 		return nil, protoerr.NewChunkError("reader.message_header", fmt.Errorf("unsupported fmt %d", fmtVal))
@@ -212,6 +104,10 @@ func (r *Reader) nextHeader() (*ChunkHeader, error) {
 
 // ReadMessage blocks until the next complete RTMP message is reassembled or an error occurs.
 // It transparently updates internal chunk size on receiving a Set Chunk Size (type id 1) control message.
+//
+// The reassembly loop handles chunk interleaving: chunks from different CSIDs can arrive
+// interleaved, so we maintain per-CSID state and keep looping until one CSID's message
+// is fully assembled (bytesReceived == messageLength).
 func (r *Reader) ReadMessage() (*Message, error) {
 	for {
 		// Parse next chunk header
@@ -272,7 +168,10 @@ func (r *Reader) ReadMessage() (*Message, error) {
 	}
 }
 
-// maybeHandleControl inspects message for Set Chunk Size and applies size update immediately.
+// maybeHandleControl checks if a completed message is a Set Chunk Size control
+// message (TypeID 1, MSID 0) and automatically updates the reader's chunk size.
+// This allows the reader to adapt when the sender changes its chunk size mid-stream,
+// which is normal during RTMP session setup (servers typically increase from 128 to 4096).
 func (r *Reader) maybeHandleControl(msg *Message) {
 	if msg == nil {
 		return

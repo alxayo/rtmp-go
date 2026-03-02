@@ -63,10 +63,7 @@ func (dm *DestinationManager) AddDestination(url string) error {
 
 // RelayMessage sends a media message to all connected destinations
 func (dm *DestinationManager) RelayMessage(msg *chunk.Message) {
-	dm.logger.Debug("RelayMessage called", "type_id", msg.TypeID, "payload_len", len(msg.Payload))
-
 	if msg == nil || (msg.TypeID != 8 && msg.TypeID != 9) {
-		dm.logger.Debug("Skipping non-media message", "type_id", msg.TypeID)
 		return // Only relay audio/video messages
 	}
 
@@ -77,27 +74,19 @@ func (dm *DestinationManager) RelayMessage(msg *chunk.Message) {
 	}
 	dm.mu.RUnlock()
 
-	dm.logger.Debug("Relaying to destinations", "count", len(destinations), "type_id", msg.TypeID, "timestamp", msg.Timestamp)
-
 	// Send to all destinations in parallel
 	var wg sync.WaitGroup
 	for _, dest := range destinations {
 		wg.Add(1)
 		go func(d *Destination) {
 			defer wg.Done()
-			dm.logger.Debug("Sending message to destination", "url", d.URL, "type_id", msg.TypeID)
 			if err := d.SendMessage(msg); err != nil {
-				dm.logger.Error("Failed to relay message to destination",
+				dm.logger.Error("Failed to relay message",
 					"url", d.URL, "type_id", msg.TypeID, "error", err)
-			} else {
-				dm.logger.Debug("Successfully relayed message to destination",
-					"url", d.URL, "type_id", msg.TypeID)
 			}
 		}(dest)
 	}
-
-	// Wait for completion to ensure message ordering
-	wg.Wait() // Synchronous relay to prevent message reordering
+	wg.Wait()
 }
 
 // GetStatus returns status of all destinations
@@ -139,11 +128,4 @@ func (dm *DestinationManager) Close() error {
 
 	dm.destinations = make(map[string]*Destination)
 	return lastErr
-}
-
-// GetDestinationCount returns the number of registered destinations
-func (dm *DestinationManager) GetDestinationCount() int {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-	return len(dm.destinations)
 }

@@ -2,22 +2,25 @@ package media
 
 import "fmt"
 
-// Video codec string identifiers used for simple detection.
+// Video codec identifiers. These correspond to the CodecID values in the
+// FLV/RTMP specification (low nibble of the first video payload byte):
+//   H264/AVC = CodecID 7, H265/HEVC = CodecID 12
 const (
-	VideoCodecAVC  = "H264"
-	VideoCodecHEVC = "H265"
+	VideoCodecAVC  = "H264" // H.264 / Advanced Video Coding (most common)
+	VideoCodecHEVC = "H265" // H.265 / High Efficiency Video Coding
 )
 
-// Frame type identifiers (returned as strings for readability / logging).
+// Frame type identifiers (high nibble of the first video payload byte).
 const (
-	VideoFrameTypeKey   = "keyframe"
-	VideoFrameTypeInter = "inter"
+	VideoFrameTypeKey   = "keyframe" // Complete frame that can be decoded independently (I-frame)
+	VideoFrameTypeInter = "inter"    // Requires previous frames to decode (P/B-frame)
 )
 
-// AVC (H.264) packet types.
+// AVC (H.264) packet types distinguish configuration from actual video data.
+// The sequence header contains SPS/PPS data needed by decoders before any frames.
 const (
-	AVCPacketTypeSequenceHeader = "sequence_header"
-	AVCPacketTypeNALU           = "nalu"
+	AVCPacketTypeSequenceHeader = "sequence_header" // Contains SPS/PPS (decoder initialization data)
+	AVCPacketTypeNALU           = "nalu"            // Network Abstraction Layer Unit (actual video data)
 )
 
 // VideoMessage is a lightweight parsed representation of an RTMP video (message type 9) tag.

@@ -14,7 +14,6 @@ package server
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -35,26 +34,29 @@ type Registry struct {
 // NewRegistry creates an empty registry.
 func NewRegistry() *Registry { return &Registry{streams: make(map[string]*Stream)} }
 
-// Stream represents a server side stream (superset of media.Stream fields).
-// Publisher will point to a connection object in later tasks; we keep it as
-// interface{} for now so tests can inject a stub. Subscribers re‑use the media
-// package's Subscriber interface so the media relay can broadcast to them.
-// Recorder is optional (may be nil) and provided by T045.
+// Stream represents a published live stream with its publisher, subscribers,
+// codec info, and optional FLV recorder.
+//
+// When a client publishes media, the stream caches the first audio and video
+// "sequence headers" (codec configuration data). When a new subscriber joins
+// mid-stream, these cached headers are sent immediately so the subscriber's
+// decoder can initialize without waiting for the next keyframe.
 type Stream struct {
-	Key         string
-	Publisher   interface{}
-	Subscribers []media.Subscriber
-	Metadata    map[string]interface{}
-	VideoCodec  string
-	AudioCodec  string
-	StartTime   time.Time
-	Recorder    *media.Recorder
+	Key         string             // unique identifier: "app/streamName" (e.g. "live/mystream")
+	Publisher   interface{}        // the connection that is publishing media to this stream
+	Subscribers []media.Subscriber // connections that are playing/watching this stream
+	VideoCodec  string             // detected video codec (e.g. "H264", "HEVC")
+	AudioCodec  string             // detected audio codec (e.g. "AAC", "MP3")
+	StartTime   time.Time          // when the stream was created
+	Recorder    *media.Recorder    // optional FLV file recorder (nil if not recording)
 
-	// Cached sequence headers for late-joining subscribers
+	// Cached sequence headers for late-joining subscribers.
+	// Sequence headers contain codec configuration (H.264 SPS/PPS, AAC AudioSpecificConfig)
+	// that decoders need before they can process media frames.
 	AudioSequenceHeader *chunk.Message
 	VideoSequenceHeader *chunk.Message
 
-	mu sync.RWMutex // protects Subscribers & Publisher mutation
+	mu sync.RWMutex // protects concurrent access to Subscribers and Publisher
 }
 
 // CreateStream returns the existing stream if present or creates a new one.
@@ -77,7 +79,7 @@ func (r *Registry) CreateStream(key string) (*Stream, bool) {
 	if s, ok := r.streams[key]; ok { // double‑check
 		return s, false
 	}
-	s := &Stream{Key: key, StartTime: time.Now(), Metadata: make(map[string]interface{}), Subscribers: make([]media.Subscriber, 0)}
+	s := &Stream{Key: key, StartTime: time.Now(), Subscribers: make([]media.Subscriber, 0)}
 	r.streams[key] = s
 	return s, true
 }
@@ -265,25 +267,11 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		codecID := msg.Payload[0] & 0x0F
 		avcPacketType := msg.Payload[1]
 
-		// Build hex string for available bytes (up to 10)
-		hexBytes := ""
-		maxBytes := len(msg.Payload)
-		if maxBytes > 10 {
-			maxBytes = 10
-		}
-		for i := 0; i < maxBytes; i++ {
-			if i > 0 {
-				hexBytes += " "
-			}
-			hexBytes += fmt.Sprintf("%02X", msg.Payload[i])
-		}
-
 		logger.Debug("Video packet structure before relay",
 			"frame_type", frameType,
 			"codec_id", codecID,
 			"avc_packet_type", avcPacketType,
-			"payload_len", len(msg.Payload),
-			"first_bytes", hexBytes)
+			"payload_len", len(msg.Payload))
 
 		if codecID != 7 {
 			logger.Warn("Invalid AVC codec ID in video packet", "codec_id", codecID, "expected", 7)

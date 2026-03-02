@@ -1,39 +1,35 @@
 package conn
 
-// SessionState represents the lifecycle state of an RTMP session.
-// The progression follows the spec/data-model:
+// SessionState represents where a connection is in the RTMP session lifecycle.
+// Each connection progresses through these states as commands are exchanged:
 //
-//	Uninitialized → Connected → StreamCreated → Publishing/Playing
+//   Uninitialized → Connected → StreamCreated → Publishing or Playing
 //
-// For this task we model Publishing and Playing distinctly but the
-// transition mechanics (publish vs play command) will be handled by
-// higher RPC/command layers – here we just provide helpers.
+// The client drives transitions by sending connect, createStream, publish/play commands.
 type SessionState uint8
 
 const (
-	SessionStateUninitialized SessionState = iota
-	SessionStateConnected
-	SessionStateStreamCreated
-	SessionStatePublishing
-	SessionStatePlaying
+	SessionStateUninitialized SessionState = iota // Initial state before any commands
+	SessionStateConnected                         // After successful "connect" command
+	SessionStateStreamCreated                     // After "createStream" allocates a stream ID
+	SessionStatePublishing                        // After "publish" command (sending media)
+	SessionStatePlaying                           // After "play" command (receiving media)
 )
 
-// Session holds per-connection RTMP session metadata established
-// after the handshake and connect command. See data-model.md.
-// Concurrency: mutated only by the command handling goroutine; no locks
-// required. transactionID uses a simple increment method – if future
-// parallel command processing is added we can switch to atomic.
+// Session holds per-connection RTMP session metadata established during the
+// command exchange phase. It tracks the application name, stream identifiers,
+// and the current lifecycle state.
 type Session struct {
-	app            string
-	tcUrl          string
-	flashVer       string
-	objectEncoding uint8
+	app            string       // application name from connect command (e.g. "live")
+	tcUrl          string       // target URL from connect (e.g. "rtmp://host/live")
+	flashVer       string       // client's Flash version string
+	objectEncoding uint8        // AMF encoding version (0=AMF0, must be 0 for this server)
 
-	transactionID uint32 // starts at 1 (per data model)
-	streamID      uint32 // allocated by createStream (starts at 0 until set)
-	streamKey     string // app/streamName once publish/play received
+	transactionID uint32        // incrementing counter for request-response matching
+	streamID      uint32        // message stream ID allocated by createStream (typically 1)
+	streamKey     string        // full stream key: "app/streamName" (e.g. "live/mystream")
 
-	state SessionState
+	state SessionState          // current lifecycle state
 }
 
 // NewSession creates a new Session in Uninitialized state.

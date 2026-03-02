@@ -11,27 +11,30 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// RTMPClient interface defines the methods we need from an RTMP client
-// to avoid circular dependencies with the client package
+// RTMPClient defines the interface for connecting to a remote RTMP server
+// and sending media data. This interface exists to decouple the relay system
+// from the concrete client implementation, making it testable with mock clients.
 type RTMPClient interface {
-	Connect() error
-	Publish() error
-	SendAudio(timestamp uint32, payload []byte) error
-	SendVideo(timestamp uint32, payload []byte) error
-	Close() error
+	Connect() error                                  // Perform TCP dial + RTMP handshake + connect command
+	Publish() error                                  // Send publish command to start streaming
+	SendAudio(timestamp uint32, payload []byte) error // Send a raw audio message
+	SendVideo(timestamp uint32, payload []byte) error // Send a raw video message
+	Close() error                                    // Disconnect and clean up
 }
 
-// RTMPClientFactory creates new RTMP clients
+// RTMPClientFactory is a constructor function that creates RTMPClient instances.
+// Using a factory allows the relay system to create fresh clients for each
+// destination without knowing the concrete client type.
 type RTMPClientFactory func(url string) (RTMPClient, error)
 
-// DestinationStatus represents the connection state of a destination
+// DestinationStatus tracks the connection state of a relay destination.
 type DestinationStatus int
 
 const (
-	StatusDisconnected DestinationStatus = iota
-	StatusConnecting
-	StatusConnected
-	StatusError
+	StatusDisconnected DestinationStatus = iota // Not connected (initial state)
+	StatusConnecting                           // Connection attempt in progress
+	StatusConnected                            // Successfully connected and publishing
+	StatusError                                // Connection failed or was lost
 )
 
 // String returns a string representation of the destination status
@@ -51,13 +54,15 @@ func (s DestinationStatus) String() string {
 }
 
 // Destination represents a single RTMP relay destination
+// Destination represents a single relay target — a remote RTMP server that
+// receives a copy of the publisher's audio/video stream.
 type Destination struct {
-	URL           string              // rtmp://example.com/live/stream_key
-	Client        RTMPClient          // Persistent RTMP client connection
-	Status        DestinationStatus   // Current connection status
-	LastError     error               // Last error encountered
-	Metrics       *DestinationMetrics // Performance metrics
-	clientFactory RTMPClientFactory   // Factory to create new clients
+	URL           string              // Full RTMP URL (e.g. rtmp://cdn.example.com/live/key)
+	Client        RTMPClient          // Active RTMP client connection to the destination
+	Status        DestinationStatus   // Current connection state
+	LastError     error               // Most recent error (nil if healthy)
+	Metrics       *DestinationMetrics // Counters for sent/dropped messages and bytes
+	clientFactory RTMPClientFactory   // Creates new client instances for (re)connection
 
 	// Internal state
 	mu              sync.RWMutex
@@ -107,38 +112,31 @@ func (d *Destination) Connect() error {
 	defer d.mu.Unlock()
 
 	if d.Status == StatusConnected {
-		d.logger.Debug("Already connected to destination")
-		return nil // Already connected
+		return nil
 	}
 
 	d.Status = StatusConnecting
-	d.logger.Info("Connecting to destination", "url", d.URL)
+	d.logger.Info("Connecting to destination")
 
-	// Create RTMP client
-	d.logger.Debug("Creating RTMP client", "url", d.URL)
 	client, err := d.clientFactory(d.URL)
 	if err != nil {
 		d.Status = StatusError
 		d.LastError = err
-		d.logger.Error("Failed to create RTMP client", "url", d.URL, "error", err)
+		d.logger.Error("Failed to create RTMP client", "error", err)
 		return fmt.Errorf("create client: %w", err)
 	}
 
-	// Perform RTMP handshake and setup
-	d.logger.Debug("Performing RTMP handshake and connect", "url", d.URL)
 	if err := client.Connect(); err != nil {
 		d.Status = StatusError
 		d.LastError = err
-		d.logger.Error("Failed to connect RTMP client", "url", d.URL, "error", err)
+		d.logger.Error("Failed to connect RTMP client", "error", err)
 		return fmt.Errorf("client connect: %w", err)
 	}
 
-	// Start publishing to the destination
-	d.logger.Debug("Starting publish to destination", "url", d.URL)
 	if err := client.Publish(); err != nil {
 		d.Status = StatusError
 		d.LastError = err
-		d.logger.Error("Failed to publish to destination", "url", d.URL, "error", err)
+		d.logger.Error("Failed to publish to destination", "error", err)
 		return fmt.Errorf("client publish: %w", err)
 	}
 
@@ -146,48 +144,32 @@ func (d *Destination) Connect() error {
 	d.Status = StatusConnected
 	d.Metrics.ConnectTime = time.Now()
 	d.LastError = nil
-
-	d.logger.Info("Successfully connected to destination")
+	d.logger.Info("Connected to destination")
 	return nil
 }
 
 // SendMessage sends a media message to this destination
 func (d *Destination) SendMessage(msg *chunk.Message) error {
-	d.logger.Debug("SendMessage called", "type_id", msg.TypeID, "payload_len", len(msg.Payload), "timestamp", msg.Timestamp)
-
 	d.mu.RLock()
 	client := d.Client
 	status := d.Status
 	d.mu.RUnlock()
 
-	d.logger.Debug("Destination status check", "status", status.String(), "client_nil", client == nil)
-
 	if status != StatusConnected || client == nil {
 		d.mu.Lock()
 		d.Metrics.MessagesDropped++
 		d.mu.Unlock()
-		d.logger.Warn("Destination not connected, dropping message", "status", status.String(), "type_id", msg.TypeID)
 		return fmt.Errorf("destination not connected (status: %v)", status)
 	}
 
-	// Send the message based on type
 	var err error
-	d.logger.Debug("Calling client send method", "type_id", msg.TypeID, "method", func() string {
-		if msg.TypeID == 8 {
-			return "SendAudio"
-		}
-		return "SendVideo"
-	}())
-
 	switch msg.TypeID {
 	case 8: // Audio message
 		err = client.SendAudio(msg.Timestamp, msg.Payload)
 	case 9: // Video message
 		err = client.SendVideo(msg.Timestamp, msg.Payload)
 	default:
-		// Skip non-media messages for relay
-		d.logger.Debug("Skipping non-media message", "type_id", msg.TypeID)
-		return nil
+		return nil // Skip non-media messages
 	}
 
 	if err != nil {
@@ -196,18 +178,15 @@ func (d *Destination) SendMessage(msg *chunk.Message) error {
 		d.LastError = err
 		d.Metrics.MessagesDropped++
 		d.mu.Unlock()
-		d.logger.Error("Client send method failed", "type_id", msg.TypeID, "error", err)
+		d.logger.Error("relay send failed", "type_id", msg.TypeID, "error", err)
 		return fmt.Errorf("send message: %w", err)
 	}
 
-	// Update metrics
 	d.mu.Lock()
 	d.Metrics.MessagesSent++
 	d.Metrics.BytesSent += uint64(len(msg.Payload))
 	d.Metrics.LastSentTime = time.Now()
 	d.mu.Unlock()
-
-	d.logger.Debug("SendMessage completed successfully", "type_id", msg.TypeID, "bytes_sent", len(msg.Payload))
 	return nil
 }
 

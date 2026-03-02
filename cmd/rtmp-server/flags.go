@@ -9,19 +9,20 @@ import (
 	"strings"
 )
 
-// version is injected at build time with -ldflags "-X main.version=...". Defaults to dev.
+// version is set at build time using: go build -ldflags "-X main.version=1.0.0"
+// When building without ldflags, it defaults to "dev".
 var version = "dev"
 
-// cliConfig holds user supplied flag values prior to translation into server.Config
-// so main.go can validate and map.
+// cliConfig holds the parsed command-line flag values.
+// These are validated in parseFlags() before being mapped to server.Config.
 type cliConfig struct {
-	listenAddr        string
-	logLevel          string
-	recordAll         bool
-	recordDir         string
-	chunkSize         uint
-	showVersion       bool
-	relayDestinations []string // NEW: Multiple destination URLs for relay
+	listenAddr        string   // TCP address to listen on (e.g. ":1935")
+	logLevel          string   // log verbosity level (debug/info/warn/error)
+	recordAll         bool     // whether to record all published streams
+	recordDir         string   // directory for FLV recording files
+	chunkSize         uint     // outbound chunk size (1-65536 bytes)
+	showVersion       bool     // print version and exit
+	relayDestinations []string // RTMP URLs to relay published streams to
 }
 
 func parseFlags(args []string) (*cliConfig, error) {

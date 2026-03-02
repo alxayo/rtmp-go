@@ -1,19 +1,12 @@
 package conn
 
-// T025: Implement Control Burst Sequence
-// --------------------------------------
-// After a successful RTMP handshake the server must immediately send (in this
-// strict order) three protocol control messages on CSID=2 / MSID=0:
-//   1. Window Acknowledgement Size (2,500,000 bytes)
-//   2. Set Peer Bandwidth        (2,500,000 bytes, limit type 2 = Dynamic)
-//   3. Set Chunk Size            (4,096 bytes)
-//
-// Requirements:
-//   * Messages are sent sequentially but the burst itself runs in a goroutine
-//     (Accept remains non-blocking after handshake completion).
-//   * Each message is logged.
-//   * Future tasks will integrate connection state mutation; for now we only
-//     emit wire-format messages.
+// Control Burst Sequence
+// =====================
+// After a successful RTMP handshake, the server immediately sends three
+// control messages to configure the connection parameters:
+//   1. Window Acknowledgement Size — flow control (client must ack after N bytes)
+//   2. Set Peer Bandwidth — suggests the client's max output rate
+//   3. Set Chunk Size — increases chunk payload from default 128 to 4096 bytes
 
 import (
 	"encoding/binary"
@@ -25,10 +18,10 @@ import (
 )
 
 const (
-	windowAckSizeValue     uint32 = 2_500_000
-	peerBandwidthValue     uint32 = 2_500_000
-	peerBandwidthLimitType        = 2 // Dynamic
-	serverChunkSize        uint32 = 4096
+	windowAckSizeValue     uint32 = 2_500_000 // bytes before client must send acknowledgement
+	peerBandwidthValue     uint32 = 2_500_000 // suggested maximum output rate for client
+	peerBandwidthLimitType        = 2         // Dynamic: client may adjust this value
+	serverChunkSize        uint32 = 4096      // negotiated chunk size (up from protocol default of 128)
 )
 
 // sendInitialControlBurst performs the control burst by enqueuing messages

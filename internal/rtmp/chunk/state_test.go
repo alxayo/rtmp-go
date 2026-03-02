@@ -131,10 +131,12 @@ func TestChunkStreamState_Flow(t *testing.T) {
 		}
 	})
 
-	t.Run("fmt1_without_prior_state_error", func(t *testing.T) {
+	t.Run("fmt1_first_message_on_csid", func(t *testing.T) {
+		// FMT1 without prior state is treated as first message on the CSID
+		// (timestamp treated as absolute). This is valid per some RTMP implementations.
 		var s ChunkStreamState
-		if err := s.ApplyHeader(h(1, 11, 5, 3, 18, 0)); err == nil {
-			t.Fatalf("expected error")
+		if err := s.ApplyHeader(h(1, 11, 5, 3, 18, 0)); err != nil {
+			t.Fatalf("unexpected error for fmt1 as first message: %v", err)
 		}
 	})
 

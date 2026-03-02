@@ -26,16 +26,15 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 )
 
-// Config holds server configuration knobs. Future tasks may extend with
-// validation / functional options. For now we keep a plain struct.
+// Config holds all settings for the RTMP server.
 type Config struct {
-	ListenAddr        string
-	ChunkSize         uint32 // initial outbound chunk size (after control burst peer will update)
-	WindowAckSize     uint32 // advertised window acknowledgement size
-	RecordAll         bool
-	RecordDir         string
-	LogLevel          string
-	RelayDestinations []string // NEW: List of destination URLs for relay
+	ListenAddr        string   // TCP address to listen on (default ":1935")
+	ChunkSize         uint32   // outbound chunk payload size in bytes (default 4096)
+	WindowAckSize     uint32   // flow control: bytes before client must acknowledge (default 2,500,000)
+	RecordAll         bool     // if true, automatically record all published streams to FLV files
+	RecordDir         string   // directory for FLV recordings (default "recordings")
+	LogLevel          string   // log verbosity: "debug", "info", "warn", "error" (default "info")
+	RelayDestinations []string // RTMP URLs to forward published streams to (e.g. rtmp://cdn/live/key)
 }
 
 // applyDefaults fills zero values with sensible defaults.

@@ -1,8 +1,10 @@
 package control
 
-// T022: Control Message Encoding
-// Provides constructors for RTMP protocol control messages (types 1-6) per contracts/control.md.
-// All control messages use CSID=2, MSID=0.
+// Control Message Encoding
+// ========================
+// RTMP control messages (types 1-6) manage the transport layer: chunk sizes,
+// flow control, and stream lifecycle. They always travel on Chunk Stream ID 2
+// with Message Stream ID 0 (the protocol control channel).
 
 import (
 	"encoding/binary"
@@ -10,24 +12,25 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// RTMP protocol control message type IDs.
+// RTMP protocol control message type IDs (types 1-6 per spec).
 const (
-	TypeSetChunkSize          uint8 = 1
-	TypeAbortMessage          uint8 = 2
-	TypeAcknowledgement       uint8 = 3
-	TypeUserControl           uint8 = 4
-	TypeWindowAcknowledgement uint8 = 5
-	TypeSetPeerBandwidth      uint8 = 6
+	TypeSetChunkSize          uint8 = 1 // Changes the maximum chunk payload size
+	TypeAbortMessage          uint8 = 2 // Discards a partially received message
+	TypeAcknowledgement       uint8 = 3 // Reports total bytes received (flow control)
+	TypeUserControl           uint8 = 4 // Stream lifecycle events (begin, ping, etc.)
+	TypeWindowAcknowledgement uint8 = 5 // Sets the acknowledgement window size
+	TypeSetPeerBandwidth      uint8 = 6 // Limits the peer's output bandwidth
 )
 
-// User Control (Type 4) event type IDs (subset required for current implementation).
+// User Control (Type 4) event type IDs.
 const (
-	UCStreamBegin  uint16 = 0
-	UCPingRequest  uint16 = 6
-	UCPingResponse uint16 = 7
+	UCStreamBegin  uint16 = 0 // Server tells client a stream is ready
+	UCPingRequest  uint16 = 6 // Server checks if client is alive
+	UCPingResponse uint16 = 7 // Client responds to a ping
 )
 
-// newControlMessage builds a *chunk.Message with standard control channel fields.
+// newControlMessage builds a chunk.Message with the standard control channel
+// fields (CSID=2, MSID=0, Timestamp=0) that all control messages use.
 func newControlMessage(typeID uint8, payload []byte) *chunk.Message {
 	return &chunk.Message{
 		CSID:            2, // protocol control channel

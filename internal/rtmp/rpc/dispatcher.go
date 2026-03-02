@@ -1,30 +1,18 @@
 package rpc
 
-// Command dispatcher (T040)
+// Command Dispatcher
+// ==================
+// The dispatcher is the central routing layer for RTMP commands. When an AMF0
+// command message (TypeID 20) arrives, the dispatcher:
+//   1. Decodes the AMF0 payload to find the command name (e.g. "connect", "publish")
+//   2. Parses the full command into a strongly-typed struct (ConnectCommand, etc.)
+//   3. Calls the registered handler function for that command
 //
-// The dispatcher is responsible for:
-//   1. Determining the RTMP command name from an AMF0 command message (type 20)
-//   2. Parsing the command into the appropriate strongly-typed struct using
-//      the existing Parse* helpers (connect, createStream, publish, play)
-//   3. Invoking the registered handler for that command name.
-//   4. Logging and safely ignoring unknown commands (optionally a future
-//      enhancement could emit an "_error" response – out of scope for now).
+// Unknown commands (including OBS/FFmpeg extensions like releaseStream, FCPublish)
+// are logged and gracefully ignored — they don't cause errors.
 //
-// Design notes / assumptions:
-//   * We only support AMF0 command messages (TypeID=20) per current feature set.
-//   * For publish / play parsing we need the application (app) name negotiated
-//     during the connect command. Instead of tightly coupling to a Session
-//     type (not yet implemented in earlier tasks) we accept an appProvider
-//     callback so tests or higher layers can supply the current application
-//     name lazily.
-//   * deleteStream is routed (if a handler is provided) but not parsed into a
-//     dedicated struct yet – it receives the raw decoded AMF value slice so
-//     the handler can perform ad‑hoc extraction.
-//
-// Error handling:
-//   * Parsing errors or handler errors are returned to the caller – the caller
-//     decides whether to terminate the connection or send an _error response.
-//   * Unknown commands return nil (non-fatal) after logging a warning.
+// The dispatcher uses an appProvider callback to lazily retrieve the application
+// name (set during the "connect" command) needed for publish/play parsing.
 
 import (
 	"bytes"

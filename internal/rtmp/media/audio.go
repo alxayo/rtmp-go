@@ -4,17 +4,20 @@ import (
 	"fmt"
 )
 
-// Audio codecs of interest for basic detection.
+// Audio codec identifiers. These correspond to the SoundFormat IDs in the
+// FLV/RTMP specification (high nibble of the first audio payload byte):
+//   MP3 = SoundFormat 2, AAC = SoundFormat 10, Speex = SoundFormat 11
 const (
 	AudioCodecMP3   = "MP3"
 	AudioCodecAAC   = "AAC"
 	AudioCodecSpeex = "Speex"
 )
 
-// AAC packet types.
+// AAC packet types distinguish between codec configuration and actual audio data.
+// The sequence header must be sent before any raw audio frames.
 const (
-	AACPacketTypeSequenceHeader = "sequence_header"
-	AACPacketTypeRaw            = "raw"
+	AACPacketTypeSequenceHeader = "sequence_header" // Contains AudioSpecificConfig (codec init data)
+	AACPacketTypeRaw            = "raw"             // Contains actual compressed audio samples
 )
 
 // AudioMessage is a lightweight parsed representation of an RTMP audio (message type 8) tag.

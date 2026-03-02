@@ -111,7 +111,7 @@ func (s *ChunkStreamState) ApplyHeader(h *ChunkHeader) error {
 // the state's buffer is reset for the next message while header fields persist.
 func (s *ChunkStreamState) AppendChunkData(data []byte) (bool, *Message, error) {
 	if len(data) == 0 {
-		return s.isComplete(), nil, nil
+		return false, nil, nil
 	}
 	if !s.inProgress {
 		return false, nil, protoerr.NewChunkError("state.append", fmt.Errorf("no active message"))
@@ -143,11 +143,6 @@ func (s *ChunkStreamState) AppendChunkData(data []byte) (bool, *Message, error) 
 		return true, msg, nil
 	}
 	return false, nil, nil
-}
-
-// isComplete returns true if current message assembly has reached declared length.
-func (s *ChunkStreamState) isComplete() bool {
-	return s.inProgress && s.bytesReceived == s.LastMsgLength && s.LastMsgLength > 0
 }
 
 // BytesRemaining returns number of bytes still needed for the in-progress message.
