@@ -201,15 +201,15 @@ func (s *Server) Stop() error {
 	_ = l.Close()
 
 	// Close all connections and clean up recorders.
-	s.mu.RLock()
+	s.mu.Lock()
 	for id, c := range s.conns {
 		s.triggerHookEvent(hooks.EventConnectionClose, id, "", map[string]interface{}{
 			"reason": "server_shutdown",
 		})
 		_ = c.Close()
-		delete(s.conns, id)
 	}
-	s.mu.RUnlock()
+	clear(s.conns)
+	s.mu.Unlock()
 
 	// Clean up all active recorders
 	s.cleanupAllRecorders()
