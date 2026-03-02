@@ -1,0 +1,89 @@
+# Design Principles
+
+This document explains the design decisions behind go-rtmp and the rules the codebase follows.
+
+## Core Philosophy
+
+**Correctness over features.** Every byte on the wire must match the RTMP specification. We implement a small set of features correctly rather than many features approximately.
+
+**Simplicity over abstraction.** Each package does one thing. No framework magic, no dependency injection containers, no code generation. A beginner should be able to read any file and understand it in isolation.
+
+**Standard library only.** Zero external dependencies. The entire server is built on Go's `net`, `io`, `encoding/binary`, `log/slog`, and `sync` packages. This eliminates supply-chain risk and makes the codebase easy to audit.
+
+## Architecture Decisions
+
+### Layered Protocol Stack
+
+The RTMP protocol has natural layers, and the code mirrors them exactly:
+
+```
+TCP Connection
+  └─ Handshake       (internal/rtmp/handshake)
+      └─ Chunks      (internal/rtmp/chunk)
+          └─ Control  (internal/rtmp/control)
+          └─ Commands (internal/rtmp/rpc)
+          └─ Media    (internal/rtmp/media)
+```
+
+Each layer only depends on the one below it. There are no circular imports. This means you can test the chunk layer without starting a server, or test AMF encoding without a network connection.
+
+### One Goroutine per Direction
+
+Each connection runs exactly two goroutines:
+- **readLoop**: reads chunks from TCP, reassembles messages, dispatches to handler
+- **writeLoop**: drains the outbound queue, fragments messages into chunks, writes to TCP
+
+This avoids shared-state concurrency bugs. The readLoop owns all inbound state. The writeLoop owns the chunk.Writer. They communicate through a bounded channel (the outbound queue).
+
+### Bounded Queues for Backpressure
+
+The outbound message queue has a fixed size (100 messages). When a slow subscriber can't keep up:
+1. The queue fills up
+2. New sends block briefly (200ms timeout)
+3. If still full, the message is dropped
+
+This prevents a single slow viewer from consuming unbounded memory or blocking the publisher.
+
+### Defensive Copying for Media Relay
+
+When broadcasting media to multiple subscribers, each subscriber receives an independent copy of the message payload. This prevents a race condition where one subscriber's chunk writer could modify shared bytes while another subscriber is still reading them.
+
+### Sequence Header Caching
+
+The first audio and video messages from a publisher typically contain "sequence headers" — codec initialization data (H.264 SPS/PPS, AAC AudioSpecificConfig). The server caches these so that when a new subscriber joins mid-stream, it immediately receives the cached headers. Without this, the subscriber's decoder wouldn't know how to interpret the media data, resulting in a black screen until the next keyframe.
+
+## Concurrency Model
+
+| Resource | Protection | Why |
+|----------|-----------|-----|
+| Stream registry (map of streams) | `sync.RWMutex` | Multiple goroutines look up streams concurrently |
+| Stream subscribers (slice) | Per-stream `sync.RWMutex` | Add/remove subscribers without blocking other streams |
+| Connection outbound queue | Bounded channel | Lock-free producer/consumer between read and write loops |
+| Write chunk size | `sync/atomic` | Updated by control burst, read by write loop |
+| Media logger counters | `sync.RWMutex` | Updated by read loop, read by stats ticker |
+
+## Error Handling
+
+Errors are classified by protocol layer using typed error wrappers:
+- `HandshakeError` — connection setup failures
+- `ChunkError` — framing/parsing issues
+- `AMFError` — serialization failures
+- `ProtocolError` — command/state violations
+- `TimeoutError` — deadline exceeded
+
+Each error includes the operation name (e.g., "read C0+C1") for debuggability. Errors support Go's `errors.Is` / `errors.As` unwrapping.
+
+## Logging Strategy
+
+- **Info**: Connection lifecycle (accept, disconnect), command results (connect, publish, play), recording start/stop
+- **Error**: Failures that lose data (write errors, handshake failures)
+- **Debug**: Protocol details (only enabled during troubleshooting)
+
+Media hot paths (readLoop, writeLoop, relay) produce **zero** log output at Info level per message. This is intentional — at 60fps video that would be 60 log lines per second per subscriber.
+
+## Testing Strategy
+
+- **Golden vectors**: Binary `.bin` files in `tests/golden/` contain exact wire-format bytes. Tests encode/decode against these to ensure bit-level protocol fidelity.
+- **Table-driven tests**: Each protocol feature has parameterized test cases covering normal, edge, and error paths.
+- **Integration tests**: Full server lifecycle tests in `tests/integration/` that exercise the end-to-end publisher → subscriber flow.
+- **No mocks**: Tests use real `net.Pipe()` connections and real chunk readers/writers. This catches issues that mocks would hide.

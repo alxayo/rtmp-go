@@ -1,42 +1,42 @@
 # Documentation Index
 
-Start here to navigate the go-rtmp documentation.
-
-## Getting Started
+## Start Here
 
 | Document | Description |
 |----------|-------------|
-| [architecture.md](architecture.md) | **Start here** — full system overview for beginners |
-| [../quick-start.md](../quick-start.md) | Step-by-step guide: build, run, stream with OBS/FFmpeg |
-| [../README.md](../README.md) | Project overview, features, and build instructions |
+| [Getting Started](getting-started.md) | Build, run, and test the server in 5 minutes |
+| [Architecture](architecture.md) | System overview with diagrams and package map |
+| [Design](design.md) | Design principles, concurrency model, and key decisions |
 
-## Design & Conventions
-
-| Document | Description |
-|----------|-------------|
-| [000-constitution.md](000-constitution.md) | Core design principles and project philosophy |
-| [go.instructions.md](go.instructions.md) | Go coding conventions used in this project |
-
-## RTMP Protocol Reference
+## Deep Dives
 
 | Document | Description |
 |----------|-------------|
-| [RTMP_overview.md](RTMP_overview.md) | High-level protocol overview |
-| [RTMP_basic_handshake_deep_dive.md](RTMP_basic_handshake_deep_dive.md) | Detailed handshake walkthrough |
-| [RTMP Handshake – Step-by-Step Breakdown.md](<RTMP Handshake – Step-by-Step Breakdown.md>) | Visual step-by-step handshake |
-| [rtmp_audio_video_messages_chunking.md](rtmp_audio_video_messages_chunking.md) | Chunks, audio/video message formats |
-| [rtmp_data_exchange.md](rtmp_data_exchange.md) | Data exchange patterns |
-| [001-rtmp_protocol_implementation_guide.md](001-rtmp_protocol_implementation_guide.md) | Full implementation guide |
-| [wireshark_rtmp_capture_guide.md](wireshark_rtmp_capture_guide.md) | How to capture and analyze RTMP traffic |
+| [RTMP Protocol Reference](rtmp-protocol.md) | Wire-level protocol details: chunks, headers, AMF0, commands |
+| [Implementation Guide](implementation.md) | Code walkthrough: connection lifecycle, data structures, media flow |
+| [Testing Guide](testing-guide.md) | How to run tests, golden vectors, manual interop testing |
 
 ## Feature Documentation
 
 | Document | Description |
 |----------|-------------|
-| [features/Feature001-Auto_flv_recording.md](features/Feature001-Auto_flv_recording.md) | FLV recording feature spec |
-| [features/feature002-rtmp-relay.md](features/feature002-rtmp-relay.md) | RTMP relay feature spec |
-| [RECORDING_QUICKREF.md](RECORDING_QUICKREF.md) | Recording quick reference |
-| [MEDIA_LOGGING_QUICKREF.md](MEDIA_LOGGING_QUICKREF.md) | Media logging quick reference |
+| [FLV Recording](features/Feature001-Auto_flv_recording.md) | Automatic stream recording to FLV files |
+| [RTMP Relay](features/feature002-rtmp-relay.md) | Multi-subscriber relay with late-join support |
+
+## Quick References
+
+| Document | Description |
+|----------|-------------|
+| [Recording Quick Ref](RECORDING_QUICKREF.md) | Recording commands and troubleshooting |
+| [Media Logging Quick Ref](MEDIA_LOGGING_QUICKREF.md) | Media packet logging and codec detection |
+| [Wireshark Guide](wireshark_rtmp_capture_guide.md) | Capture and analyze RTMP traffic |
+
+## Project
+
+| Document | Description |
+|----------|-------------|
+| [../README.md](../README.md) | Project overview and feature summary |
+| [../quick-start.md](../quick-start.md) | Original quick-start guide with OBS setup |
 
 ## Specifications
 
