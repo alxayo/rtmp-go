@@ -3,7 +3,7 @@ package conn
 // SessionState represents where a connection is in the RTMP session lifecycle.
 // Each connection progresses through these states as commands are exchanged:
 //
-//   Uninitialized → Connected → StreamCreated → Publishing or Playing
+//	Uninitialized → Connected → StreamCreated → Publishing or Playing
 //
 // The client drives transitions by sending connect, createStream, publish/play commands.
 type SessionState uint8
@@ -20,16 +20,16 @@ const (
 // command exchange phase. It tracks the application name, stream identifiers,
 // and the current lifecycle state.
 type Session struct {
-	app            string       // application name from connect command (e.g. "live")
-	tcUrl          string       // target URL from connect (e.g. "rtmp://host/live")
-	flashVer       string       // client's Flash version string
-	objectEncoding uint8        // AMF encoding version (0=AMF0, must be 0 for this server)
+	app            string // application name from connect command (e.g. "live")
+	tcUrl          string // target URL from connect (e.g. "rtmp://host/live")
+	flashVer       string // client's Flash version string
+	objectEncoding uint8  // AMF encoding version (0=AMF0, must be 0 for this server)
 
-	transactionID uint32        // incrementing counter for request-response matching
-	streamID      uint32        // message stream ID allocated by createStream (typically 1)
-	streamKey     string        // full stream key: "app/streamName" (e.g. "live/mystream")
+	transactionID uint32 // incrementing counter for request-response matching
+	streamID      uint32 // message stream ID allocated by createStream (typically 1)
+	streamKey     string // full stream key: "app/streamName" (e.g. "live/mystream")
 
-	state SessionState          // current lifecycle state
+	state SessionState // current lifecycle state
 }
 
 // NewSession creates a new Session in Uninitialized state.

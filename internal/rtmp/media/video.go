@@ -4,7 +4,8 @@ import "fmt"
 
 // Video codec identifiers. These correspond to the CodecID values in the
 // FLV/RTMP specification (low nibble of the first video payload byte):
-//   H264/AVC = CodecID 7, H265/HEVC = CodecID 12
+//
+//	H264/AVC = CodecID 7, H265/HEVC = CodecID 12
 const (
 	VideoCodecAVC  = "H264" // H.264 / Advanced Video Coding (most common)
 	VideoCodecHEVC = "H265" // H.265 / High Efficiency Video Coding

@@ -140,6 +140,7 @@ func setReadDeadline(c net.Conn, d time.Duration) error {
 	}
 	return nil
 }
+
 // setWriteDeadline sets a timeout for the next write operation on the connection.
 func setWriteDeadline(c net.Conn, d time.Duration) error {
 	if err := c.SetWriteDeadline(time.Now().Add(d)); err != nil {

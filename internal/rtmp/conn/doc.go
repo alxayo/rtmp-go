@@ -6,10 +6,10 @@
 //
 // # Connection Lifecycle
 //
-//	1. Accept(listener) → handshake → control burst → Connection
-//	2. SetMessageHandler(fn)  – install the dispatch callback
-//	3. Start()                – begin the read loop
-//	4. Close()                – cancel context, close TCP, wait for goroutines
+//  1. Accept(listener) → handshake → control burst → Connection
+//  2. SetMessageHandler(fn)  – install the dispatch callback
+//  3. Start()                – begin the read loop
+//  4. Close()                – cancel context, close TCP, wait for goroutines
 //
 // # Concurrency Model
 //

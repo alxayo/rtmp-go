@@ -6,7 +6,8 @@ import (
 
 // Audio codec identifiers. These correspond to the SoundFormat IDs in the
 // FLV/RTMP specification (high nibble of the first audio payload byte):
-//   MP3 = SoundFormat 2, AAC = SoundFormat 10, Speex = SoundFormat 11
+//
+//	MP3 = SoundFormat 2, AAC = SoundFormat 10, Speex = SoundFormat 11
 const (
 	AudioCodecMP3   = "MP3"
 	AudioCodecAAC   = "AAC"

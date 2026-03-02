@@ -30,11 +30,11 @@ import (
 // It maintains per-stream state to handle header compression and multi-chunk reassembly.
 // Not safe for concurrent use; designed for a single read-loop goroutine per connection.
 type Reader struct {
-	br         io.Reader                       // underlying byte stream (typically a TCP connection)
-	chunkSize  uint32                          // maximum payload bytes per chunk (default 128, server may increase)
-	states     map[uint32]*ChunkStreamState    // per-CSID assembly state (tracks partial messages)
-	prevHeader map[uint32]*ChunkHeader         // last header per CSID (for FMT 1/2/3 field inheritance)
-	scratch    []byte                          // reusable buffer for reading chunk payloads
+	br         io.Reader                    // underlying byte stream (typically a TCP connection)
+	chunkSize  uint32                       // maximum payload bytes per chunk (default 128, server may increase)
+	states     map[uint32]*ChunkStreamState // per-CSID assembly state (tracks partial messages)
+	prevHeader map[uint32]*ChunkHeader      // last header per CSID (for FMT 1/2/3 field inheritance)
+	scratch    []byte                       // reusable buffer for reading chunk payloads
 }
 
 // NewReader creates a new dechunker with the provided initial inbound chunk size (spec default 128).
