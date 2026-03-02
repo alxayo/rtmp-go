@@ -1,7 +1,7 @@
 package client
 
-// Minimal RTMP test client (Task T052)
-// ------------------------------------
+// Minimal RTMP test client
+// ------------------------
 // Scope: Provide a tiny RTMP client used only by integration / unit tests to
 // drive the server implementation. It purposefully implements only the pieces
 // required by current tests and specification phases:
@@ -52,8 +52,7 @@ import (
 // DialTimeout used for TCP connections.
 const DialTimeout = 5 * time.Second
 
-// Default outbound chunk size – matches server control burst (T025) value (4096)
-// but we start with 128 until the server potentially issues Set Chunk Size.
+// Default outbound chunk size – starts with 128 until the server potentially issues Set Chunk Size.
 const defaultChunkSize = 128
 
 // Chunk stream IDs per RTMP convention.

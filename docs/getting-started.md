@@ -44,6 +44,27 @@ Every published stream will be saved as an FLV file in the `recordings/` directo
 
 The server will forward all incoming media to the specified destinations.
 
+### With Event Hooks
+
+```bash
+# Log all events as JSON to stderr (for log pipelines)
+./rtmp-server -listen :1935 -hook-stdio-format json
+
+# Call a webhook when a stream starts publishing
+./rtmp-server -listen :1935 -hook-webhook "publish_start=https://api.example.com/on-publish"
+
+# Run a script when a client connects
+./rtmp-server -listen :1935 -hook-script "connection_accept=/opt/scripts/on-connect.sh"
+
+# Combine multiple hooks
+./rtmp-server -listen :1935 \
+  -hook-stdio-format json \
+  -hook-webhook "publish_start=https://api.example.com/on-publish" \
+  -hook-script "connection_accept=/opt/scripts/on-connect.sh"
+```
+
+Available event types: `connection_accept`, `connection_close`, `publish_start`, `play_start`, `codec_detected`.
+
 ### All CLI Flags
 
 | Flag | Default | Description |
@@ -54,6 +75,11 @@ The server will forward all incoming media to the specified destinations.
 | `-record-dir` | `recordings` | Directory for FLV recordings |
 | `-chunk-size` | `4096` | Outbound chunk payload size (1-65536 bytes) |
 | `-relay-to` | (none) | RTMP URL to relay streams to (repeatable) |
+| `-hook-script` | (none) | Shell hook: `event_type=/path/to/script` (repeatable) |
+| `-hook-webhook` | (none) | Webhook: `event_type=https://url` (repeatable) |
+| `-hook-stdio-format` | (disabled) | Stdio output format: `json` or `env` |
+| `-hook-timeout` | `30s` | Hook execution timeout |
+| `-hook-concurrency` | `10` | Max concurrent hook executions |
 | `-version` | | Print version and exit |
 
 ## Test with FFmpeg

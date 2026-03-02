@@ -33,9 +33,10 @@ go test ./internal/rtmp/rpc/         # Command parsing (connect, createStream, p
 ### Server Components
 
 ```bash
-go test ./internal/rtmp/media/       # Audio/video parsing, codec detection, FLV recording
-go test ./internal/rtmp/server/      # Stream registry, publish/play handlers, media logging
-go test ./internal/rtmp/client/      # Minimal RTMP client
+go test ./internal/rtmp/media/         # Audio/video parsing, codec detection, FLV recording
+go test ./internal/rtmp/server/        # Stream registry, publish/play handlers, media logging
+go test ./internal/rtmp/server/hooks/  # Event hook registration, execution, cleanup
+go test ./internal/rtmp/client/        # Minimal RTMP client
 ```
 
 ### Integration Tests
@@ -161,4 +162,5 @@ See [wireshark_rtmp_capture_guide.md](wireshark_rtmp_capture_guide.md) for detai
 | Media logging | `server/media_logger_test.go` | Packet counting, codec detection, stats |
 | Audio/video parsing | `media/*_test.go` | Codec detection, frame type classification |
 | Buffer pool | `bufpool/pool_test.go` | Allocation, reuse, concurrent access safety |
+| Event hooks | `server/hooks/hooks_test.go` | Hook registration, execution, concurrency pool, cleanup |
 | Integration | `tests/integration/*_test.go` | Full publish→play flow, multi-subscriber relay |

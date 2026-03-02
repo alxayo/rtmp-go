@@ -17,6 +17,7 @@ internal/
     ├── rpc/          Command parsing (connect, createStream, publish, play)
     ├── conn/         Connection lifecycle (handshake + read/write loops)
     ├── server/       Listener, stream registry, pub/sub coordination
+    │   └── hooks/    Event hooks (webhooks, shell scripts, stdio output)
     ├── media/        Audio/video parsing, codec detection, FLV recording
     ├── relay/        Multi-destination forwarding to external RTMP servers
     └── client/       Minimal RTMP client for testing
@@ -35,6 +36,7 @@ server.acceptLoop()
   └─ conn := &Connection{...}             // wrap with lifecycle management
   └─ conn.startWriteLoop()                // begin outbound goroutine
   └─ sendInitialControlBurst(conn)        // Set Chunk Size + Window Ack + Bandwidth
+  └─ triggerHookEvent(connection_accept)   // notify external systems
   └─ attachCommandHandling(conn, ...)     // wire up command dispatcher
   └─ conn.Start()                         // begin readLoop goroutine
 ```
@@ -48,7 +50,7 @@ Client                          Server
 ──────                          ──────
 connect("live")          ──►    OnConnect → _result
 createStream()           ──►    OnCreateStream → _result(streamID=1) + StreamBegin
-publish("mystream")      ──►    OnPublish → onStatus(Publish.Start) + start recording
+publish(\"mystream\")      ──►    OnPublish → onStatus(Publish.Start) + hook(publish_start) + recording
 ```
 
 Each command is:
@@ -173,9 +175,24 @@ The `media.Recorder` writes incoming messages to FLV format:
 
 Each tag header contains: TypeID (8=audio, 9=video), data size (24-bit), timestamp (24-bit + 8-bit extended), and stream ID (always 0).
 
+## Event Hooks
+
+The hook system (`internal/rtmp/server/hooks/`) notifies external systems when RTMP events occur. It integrates at two points:
+
+1. **Server accept loop** (`server.go`): Triggers `connection_accept` and `connection_close` events
+2. **Command handlers** (`command_integration.go`): Triggers `publish_start` and `play_start` events
+
+Each hook runs asynchronously in a bounded goroutine pool (default 10 workers). The `HookManager` maps event types to registered hooks and dispatches via `TriggerEvent()`.
+
+Three hook implementations are provided:
+- `WebhookHook`: HTTP POST with JSON payload
+- `ShellHook`: Runs a script with event data as `RTMP_*` environment variables
+- `StdioHook`: Prints to stderr in JSON or env-var format
+
 ## Adding a New Feature
 
 1. **Create the package** under `internal/rtmp/` with a `doc.go` explaining its purpose
 2. **Write tests first** using golden binary vectors if it involves wire format
 3. **Integrate into the server** via `command_integration.go` (for commands) or `media_dispatch.go` (for media processing)
-4. **Document** in `docs/features/` with problem statement, solution, and testing instructions
+4. **Add hook events** if the feature has lifecycle events worth notifying (define in `hooks/events.go`)
+5. **Document** in `docs/features/` with problem statement, solution, and testing instructions

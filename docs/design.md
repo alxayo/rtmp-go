@@ -52,6 +52,16 @@ When broadcasting media to multiple subscribers, each subscriber receives an ind
 
 The first audio and video messages from a publisher typically contain "sequence headers" — codec initialization data (H.264 SPS/PPS, AAC AudioSpecificConfig). The server caches these so that when a new subscriber joins mid-stream, it immediately receives the cached headers. Without this, the subscriber's decoder wouldn't know how to interpret the media data, resulting in a black screen until the next keyframe.
 
+### Event Hooks
+
+The server includes an event hook system that notifies external systems when important events occur (connection accept/close, publish start, play start, codec detected). Three hook types are supported:
+
+- **Webhook**: HTTP POST with JSON event payload to a URL
+- **Shell**: Execute a script with event data as environment variables
+- **Stdio**: Print structured event data to stderr for log pipelines
+
+Hooks execute asynchronously via a bounded concurrency pool (default: 10 workers) so they never block RTMP message processing. Each hook has a configurable timeout (default: 30 seconds).
+
 ## Concurrency Model
 
 | Resource | Protection | Why |
@@ -61,6 +71,7 @@ The first audio and video messages from a publisher typically contain "sequence 
 | Connection outbound queue | Bounded channel | Lock-free producer/consumer between read and write loops |
 | Write chunk size | `sync/atomic` | Updated by control burst, read by write loop |
 | Media logger counters | `sync.RWMutex` | Updated by read loop, read by stats ticker |
+| Hook execution pool | Buffered channel (semaphore) | Limits concurrent hook goroutines |
 
 ## Error Handling
 

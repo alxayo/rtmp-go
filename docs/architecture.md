@@ -54,7 +54,14 @@ This project implements an RTMP server (and minimal client) in pure Go with zero
               │ createStream│                    │  Broadcast  │
               │  publish   │                     │  Relay      │
               │  play      │                     │             │
-              └────────────┘                     └─────────────┘
+              └──────┬─────┘                     └─────────────┘
+                     │
+              ┌──────▼──────┐
+              │ Event Hooks  │
+              │  Webhooks   │
+              │  Shell      │
+              │  Stdio      │
+              └─────────────┘
 ```
 
 ## Data Flow: Step by Step
@@ -111,6 +118,7 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/rpc` | Command parsing & response building | `Dispatcher`, `ConnectCommand`, `PublishCommand` |
 | `internal/rtmp/conn` | Connection lifecycle (handshake + read/write loops) | `Connection`, `Session` |
 | `internal/rtmp/server` | Listener, stream registry, pub/sub | `Server`, `Registry`, `Stream`, `Config` |
+| `internal/rtmp/server/hooks` | Event notification (webhooks, shell, stdio) | `HookManager`, `Event`, `Hook` |
 | `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector`, `Stream` |
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |

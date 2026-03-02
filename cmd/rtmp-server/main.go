@@ -33,11 +33,16 @@ func main() {
 	server := srv.New(srv.Config{
 		ListenAddr:        cfg.listenAddr,
 		ChunkSize:         uint32(cfg.chunkSize),
-		WindowAckSize:     2_500_000, // matches control burst constant
+		WindowAckSize:     2_500_000,
 		RecordAll:         cfg.recordAll,
 		RecordDir:         cfg.recordDir,
 		LogLevel:          cfg.logLevel,
 		RelayDestinations: cfg.relayDestinations,
+		HookScripts:       cfg.hookScripts,
+		HookWebhooks:      cfg.hookWebhooks,
+		HookStdioFormat:   cfg.hookStdioFormat,
+		HookTimeout:       cfg.hookTimeout,
+		HookConcurrency:   cfg.hookConcurrency,
 	})
 
 	if err := server.Start(); err != nil {

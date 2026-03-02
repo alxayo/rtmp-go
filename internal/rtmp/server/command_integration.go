@@ -21,6 +21,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 )
 
 // commandState holds mutable per-connection state needed by the command handlers.
@@ -35,7 +36,7 @@ type commandState struct {
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
 // provided connection. Safe to call immediately after Accept returns.
-func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger, destMgr *relay.DestinationManager) {
+func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger, destMgr *relay.DestinationManager, srv ...*Server) {
 	if c == nil || reg == nil || cfg == nil {
 		return
 	}
@@ -93,6 +94,14 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		// Track stream key for this connection
 		st.streamKey = pc.StreamKey
 
+		// Trigger publish start hook event
+		if len(srv) > 0 && srv[0] != nil {
+			srv[0].triggerHookEvent(hooks.EventPublishStart, c.ID(), pc.StreamKey, map[string]interface{}{
+				"app":             st.app,
+				"publishing_name": pc.PublishingName,
+			})
+		}
+
 		// Initialize recorder if recording is enabled
 		if cfg.RecordAll {
 			stream := reg.GetStream(pc.StreamKey)
@@ -117,6 +126,13 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// Track stream key for this connection
 		st.streamKey = pl.StreamKey
+
+		// Trigger play start hook event
+		if len(srv) > 0 && srv[0] != nil {
+			srv[0].triggerHookEvent(hooks.EventPlayStart, c.ID(), pl.StreamKey, map[string]interface{}{
+				"app": st.app,
+			})
+		}
 
 		return nil
 	}

@@ -23,6 +23,13 @@ type cliConfig struct {
 	chunkSize         uint     // outbound chunk size (1-65536 bytes)
 	showVersion       bool     // print version and exit
 	relayDestinations []string // RTMP URLs to relay published streams to
+
+	// Event hooks
+	hookScripts     []string // shell hooks: "event_type=/path/to/script"
+	hookWebhooks    []string // webhook hooks: "event_type=https://url"
+	hookStdioFormat string   // stdio output: "json", "env", or ""
+	hookTimeout     string   // hook execution timeout (e.g. "30s")
+	hookConcurrency int      // max concurrent hook executions
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -31,6 +38,8 @@ func parseFlags(args []string) (*cliConfig, error) {
 
 	cfg := &cliConfig{}
 	var relayDests stringSliceFlag
+	var hookScripts stringSliceFlag
+	var hookWebhooks stringSliceFlag
 
 	fs.StringVar(&cfg.listenAddr, "listen", ":1935", "TCP listen address (e.g. :1935 or 0.0.0.0:1935)")
 	fs.StringVar(&cfg.logLevel, "log-level", "info", "Log level: debug|info|warn|error")
@@ -39,12 +48,19 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.UintVar(&cfg.chunkSize, "chunk-size", 4096, "Initial outbound chunk size")
 	fs.BoolVar(&cfg.showVersion, "version", false, "Print version and exit")
 	fs.Var(&relayDests, "relay-to", "RTMP destination URL (can be specified multiple times)")
+	fs.Var(&hookScripts, "hook-script", "Shell hook: event_type=/path/to/script (repeatable)")
+	fs.Var(&hookWebhooks, "hook-webhook", "Webhook hook: event_type=https://url (repeatable)")
+	fs.StringVar(&cfg.hookStdioFormat, "hook-stdio-format", "", "Stdio hook output format: json|env (empty=disabled)")
+	fs.StringVar(&cfg.hookTimeout, "hook-timeout", "30s", "Hook execution timeout")
+	fs.IntVar(&cfg.hookConcurrency, "hook-concurrency", 10, "Max concurrent hook executions")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 
 	cfg.relayDestinations = relayDests
+	cfg.hookScripts = hookScripts
+	cfg.hookWebhooks = hookWebhooks
 
 	if cfg.chunkSize == 0 || cfg.chunkSize > 65536 {
 		return nil, errors.New("chunk-size must be between 1 and 65536")

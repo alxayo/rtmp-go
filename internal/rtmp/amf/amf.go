@@ -1,10 +1,10 @@
 package amf
 
-// Generic AMF0 encoder/decoder (T032)
+// Generic AMF0 encoder/decoder.
 //
 // This file provides the public entry points for encoding and decoding AMF0
-// values. It builds on the type‑specific implementations (number, boolean,
-// string, null, object, strict array) implemented in earlier tasks (T026–T031).
+// values. It builds on the type-specific implementations (number, boolean,
+// string, null, object, strict array) in their respective files.
 // The generic encoder dispatches on Go value types. The generic decoder reads
 // the leading marker byte and dispatches to the appropriate type‑specific
 // decoder. Unsupported markers (0x06 Undefined, 0x07 Reference, 0x0B+ future /

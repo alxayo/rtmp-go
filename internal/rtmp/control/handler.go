@@ -1,24 +1,17 @@
 package control
 
-// T024: Control Message Handlers
-// --------------------------------
+// Control Message Handlers
+// ========================
 // Provides handler logic that consumes already reassembled RTMP control
-// messages (types 1-6) and mutates caller supplied state. We keep this
-// package decoupled from the higher level \"conn\" package to avoid an
-// import cycle (conn will call into control handlers). Instead we expose a
-// generic Context object composed of pointers to the mutable state fields
-// and a Send function for emitting response control messages (e.g. Ping
-// Response).
+// messages (types 1-6) and mutates caller-supplied state. This package is
+// decoupled from the conn package (to avoid import cycles) by using a
+// generic Context object with pointers to mutable state fields.
 //
 // Design goals:
 //   * Pure functions over explicit state (easy to test)
 //   * No hidden global vars
-//   * Wire format parsing delegated to decoder (T023)
-//   * Emission of outbound control messages delegated to encoder (T022)
-//
-// Integration note (future tasks): The connection read loop should build a
-// Context per connection populating fields backed by the real connection
-// struct (readChunkSize, windowAckSize, peerBandwidth, etc.).
+//   * Wire format parsing delegated to decoder
+//   * Emission of outbound control messages delegated to encoder
 
 import (
 	"fmt"

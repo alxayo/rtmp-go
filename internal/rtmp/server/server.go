@@ -1,29 +1,25 @@
 package server
 
-// RTMP Server Listener (Task T051)
-// --------------------------------
-// Provides a minimal TCP listener + connection manager integrating the
-// existing handshake + control burst + connection lifecycle implemented in
-// the conn package. Scope intentionally small – advanced routing/dispatcher
-// wiring will be layered in later tasks. This satisfies the requirements:
-//   * Listen on configured address (default :1935)
-//   * Accept loop spawning a goroutine per connection (via conn.Accept)
-//   * Track active connections in a concurrent-safe map
-//   * Graceful shutdown: stop accepting, close all connections, wait
-//   * Configuration options (chunk/window sizes, recording placeholders)
-//   * Exposed methods for tests: Start, Stop, Addr, ConnectionCount
+// RTMP Server
+// ===========
+// TCP listener + connection manager with stream registry, pub/sub
+// coordination, media recording, relay, and event hooks.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
 	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 )
 
 // Config holds all settings for the RTMP server.
@@ -35,6 +31,13 @@ type Config struct {
 	RecordDir         string   // directory for FLV recordings (default "recordings")
 	LogLevel          string   // log verbosity: "debug", "info", "warn", "error" (default "info")
 	RelayDestinations []string // RTMP URLs to forward published streams to (e.g. rtmp://cdn/live/key)
+
+	// Event hook configuration (all optional)
+	HookScripts     []string // Shell hooks: "event_type=/path/to/script" pairs
+	HookWebhooks    []string // Webhook hooks: "event_type=https://url" pairs
+	HookStdioFormat string   // Stdio output format: "json", "env", or "" (disabled)
+	HookTimeout     string   // Hook execution timeout (default "30s")
+	HookConcurrency int      // Max concurrent hook executions (default 10)
 }
 
 // applyDefaults fills zero values with sensible defaults.
@@ -62,11 +65,12 @@ type Server struct {
 	l                  net.Listener
 	log                *slog.Logger
 	reg                *Registry
-	destinationManager *relay.DestinationManager // NEW: Multi-destination relay manager
+	destinationManager *relay.DestinationManager
+	hookManager        *hooks.HookManager
 
 	mu          sync.RWMutex
 	conns       map[string]*iconn.Connection
-	acceptingWg sync.WaitGroup // waits for accept loop exit
+	acceptingWg sync.WaitGroup
 	closing     bool
 }
 
@@ -89,12 +93,16 @@ func New(cfg Config) *Server {
 		}
 	}
 
+	// Initialize hook manager
+	hookMgr := initializeHookManager(cfg, logger.Logger())
+
 	return &Server{
 		cfg:                cfg,
 		reg:                NewRegistry(),
 		conns:              make(map[string]*iconn.Connection),
 		log:                logger.Logger().With("component", "rtmp_server"),
 		destinationManager: destMgr,
+		hookManager:        hookMgr,
 	}
 }
 
@@ -161,9 +169,15 @@ func (s *Server) acceptLoop() {
 		s.conns[c.ID()] = c
 		s.mu.Unlock()
 		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String())
+
+		// Trigger connection accept hook event
+		s.triggerHookEvent(hooks.EventConnectionAccept, c.ID(), "", map[string]interface{}{
+			"remote_addr": raw.RemoteAddr().String(),
+		})
+
 		// Wire command handling so real clients (OBS/ffmpeg) can complete
 		// connect/createStream/publish. (Incremental integration step.)
-		attachCommandHandling(c, s.reg, &s.cfg, s.log, s.destinationManager)
+		attachCommandHandling(c, s.reg, &s.cfg, s.log, s.destinationManager, s)
 		// Start readLoop AFTER message handler is attached to avoid race condition
 		c.Start()
 	}
@@ -189,6 +203,9 @@ func (s *Server) Stop() error {
 	// Close all connections and clean up recorders.
 	s.mu.RLock()
 	for id, c := range s.conns {
+		s.triggerHookEvent(hooks.EventConnectionClose, id, "", map[string]interface{}{
+			"reason": "server_shutdown",
+		})
 		_ = c.Close()
 		delete(s.conns, id)
 	}
@@ -201,6 +218,13 @@ func (s *Server) Stop() error {
 	if s.destinationManager != nil {
 		if err := s.destinationManager.Close(); err != nil {
 			s.log.Error("Error closing destination manager", "error", err)
+		}
+	}
+
+	// Close hook manager
+	if s.hookManager != nil {
+		if err := s.hookManager.Close(); err != nil {
+			s.log.Error("Error closing hook manager", "error", err)
 		}
 	}
 
@@ -284,4 +308,66 @@ func (s *Server) cleanupAllRecorders() {
 		}
 		stream.mu.Unlock()
 	}
+}
+
+// triggerHookEvent dispatches an event to all registered hooks for the given event type.
+// Safe to call even if the hook manager is nil (hooks disabled).
+func (s *Server) triggerHookEvent(eventType hooks.EventType, connID, streamKey string, data map[string]interface{}) {
+	if s == nil || s.hookManager == nil {
+		return
+	}
+	event := hooks.NewEvent(eventType).
+		WithConnID(connID).
+		WithStreamKey(streamKey)
+	for k, v := range data {
+		event.WithData(k, v)
+	}
+	s.hookManager.TriggerEvent(context.Background(), *event)
+}
+
+// initializeHookManager creates and configures the hook manager from server config.
+func initializeHookManager(cfg Config, logger *slog.Logger) *hooks.HookManager {
+	hookConfig := hooks.HookConfig{
+		Timeout:     cfg.HookTimeout,
+		Concurrency: cfg.HookConcurrency,
+		StdioFormat: cfg.HookStdioFormat,
+	}
+	if hookConfig.Timeout == "" {
+		hookConfig.Timeout = "30s"
+	}
+	if hookConfig.Concurrency == 0 {
+		hookConfig.Concurrency = 10
+	}
+
+	hookManager := hooks.NewHookManager(hookConfig, logger)
+
+	// Register shell hooks from configuration (format: "event_type=/path/to/script")
+	for i, script := range cfg.HookScripts {
+		parts := strings.SplitN(script, "=", 2)
+		if len(parts) != 2 {
+			logger.Error("Invalid shell hook format (expected event_type=script_path)", "hook", script)
+			continue
+		}
+		eventType := hooks.EventType(parts[0])
+		shellHook := hooks.NewShellHook(fmt.Sprintf("shell_%d", i), parts[1], 30*time.Second)
+		if err := hookManager.RegisterHook(eventType, shellHook); err != nil {
+			logger.Error("Failed to register shell hook", "hook", script, "error", err)
+		}
+	}
+
+	// Register webhook hooks from configuration (format: "event_type=https://url")
+	for i, webhook := range cfg.HookWebhooks {
+		parts := strings.SplitN(webhook, "=", 2)
+		if len(parts) != 2 {
+			logger.Error("Invalid webhook hook format (expected event_type=url)", "hook", webhook)
+			continue
+		}
+		eventType := hooks.EventType(parts[0])
+		webhookHook := hooks.NewWebhookHook(fmt.Sprintf("webhook_%d", i), parts[1], 30*time.Second)
+		if err := hookManager.RegisterHook(eventType, webhookHook); err != nil {
+			logger.Error("Failed to register webhook hook", "hook", webhook, "error", err)
+		}
+	}
+
+	return hookManager
 }
