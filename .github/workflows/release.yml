@@ -1,0 +1,145 @@
+# Release — builds multi-platform binaries and creates a GitHub Release.
+#
+# Triggered by pushing a semver tag: v1.0.0, v1.2.3-beta.1, etc.
+# Can also be triggered manually from the Actions tab.
+#
+# Flow:
+#   1. "test" job — runs full test suite (same as CI)
+#   2. "build" job — cross-compiles for 5 targets in parallel (~2 min)
+#   3. "release" job — uploads all binaries to a GitHub Release
+#
+# To create a release:
+#   git tag v1.1.0
+#   git push origin v1.1.0
+#
+# For pre-releases (alpha/beta/rc):
+#   git tag v1.1.0-beta.1
+#   git push origin v1.1.0-beta.1
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.25.1"
+
+jobs:
+  # Step 1: Run tests before building (fail fast)
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test -count=1 -timeout=5m ./internal/... ./cmd/...
+
+  # Step 2: Cross-compile for all platforms (runs in parallel)
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: rtmp-server-linux-amd64
+          - goos: linux
+            goarch: arm64
+            artifact: rtmp-server-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            artifact: rtmp-server-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            artifact: rtmp-server-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: rtmp-server-windows-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          BINARY="rtmp-server"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY="rtmp-server.exe"
+          fi
+          go build -ldflags="-w -s -X main.version=${VERSION}" -o "${BINARY}" ./cmd/rtmp-server
+
+      - name: Package
+        run: |
+          ARTIFACT="${{ matrix.artifact }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${ARTIFACT}.zip" rtmp-server.exe
+          else
+            tar czf "${ARTIFACT}.tar.gz" rtmp-server
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.*
+          retention-days: 7
+
+  # Step 3: Create GitHub Release with all binaries
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PRERELEASE=""
+          if echo "$TAG" | grep -qE "(alpha|beta|rc)"; then
+            PRERELEASE="--prerelease"
+          fi
+
+          gh release create "$TAG" \
+            --title "go-rtmp $TAG" \
+            --generate-notes \
+            $PRERELEASE \
+            release/*
