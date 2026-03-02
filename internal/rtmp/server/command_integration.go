@@ -27,11 +27,11 @@ import (
 // commandState holds mutable per-connection state needed by the command handlers.
 // Each accepted connection gets its own commandState instance.
 type commandState struct {
-	app           string                  // application name from the connect command (e.g. "live")
-	streamKey     string                  // current stream key (e.g. "live/mystream")
-	allocator     *rpc.StreamIDAllocator  // assigns unique message stream IDs for createStream
-	mediaLogger   *MediaLogger            // tracks audio/video packet statistics
-	codecDetector *media.CodecDetector    // identifies audio/video codecs on first packets
+	app           string                 // application name from the connect command (e.g. "live")
+	streamKey     string                 // current stream key (e.g. "live/mystream")
+	allocator     *rpc.StreamIDAllocator // assigns unique message stream IDs for createStream
+	mediaLogger   *MediaLogger           // tracks audio/video packet statistics
+	codecDetector *media.CodecDetector   // identifies audio/video codecs on first packets
 }
 
 // attachCommandHandling installs a dispatcher-backed message handler on the

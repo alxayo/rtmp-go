@@ -15,11 +15,11 @@ import (
 // and sending media data. This interface exists to decouple the relay system
 // from the concrete client implementation, making it testable with mock clients.
 type RTMPClient interface {
-	Connect() error                                  // Perform TCP dial + RTMP handshake + connect command
-	Publish() error                                  // Send publish command to start streaming
+	Connect() error                                   // Perform TCP dial + RTMP handshake + connect command
+	Publish() error                                   // Send publish command to start streaming
 	SendAudio(timestamp uint32, payload []byte) error // Send a raw audio message
 	SendVideo(timestamp uint32, payload []byte) error // Send a raw video message
-	Close() error                                    // Disconnect and clean up
+	Close() error                                     // Disconnect and clean up
 }
 
 // RTMPClientFactory is a constructor function that creates RTMPClient instances.
@@ -32,9 +32,9 @@ type DestinationStatus int
 
 const (
 	StatusDisconnected DestinationStatus = iota // Not connected (initial state)
-	StatusConnecting                           // Connection attempt in progress
-	StatusConnected                            // Successfully connected and publishing
-	StatusError                                // Connection failed or was lost
+	StatusConnecting                            // Connection attempt in progress
+	StatusConnected                             // Successfully connected and publishing
+	StatusError                                 // Connection failed or was lost
 )
 
 // String returns a string representation of the destination status

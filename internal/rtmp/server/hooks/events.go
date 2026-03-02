@@ -41,11 +41,11 @@ const (
 // which connection (ConnID), which stream (StreamKey), and event-specific
 // details (Data). Events are serialized to JSON for webhooks and stdio output.
 type Event struct {
-	Type      EventType              `json:"type"`                // What happened (e.g. "publish_start")
-	Timestamp int64                  `json:"timestamp"`           // Unix timestamp when the event occurred
-	ConnID    string                 `json:"conn_id,omitempty"`   // Connection that triggered the event
+	Type      EventType              `json:"type"`                 // What happened (e.g. "publish_start")
+	Timestamp int64                  `json:"timestamp"`            // Unix timestamp when the event occurred
+	ConnID    string                 `json:"conn_id,omitempty"`    // Connection that triggered the event
 	StreamKey string                 `json:"stream_key,omitempty"` // Stream key (e.g. "live/mystream")
-	Data      map[string]interface{} `json:"data,omitempty"`      // Event-specific key-value data
+	Data      map[string]interface{} `json:"data,omitempty"`       // Event-specific key-value data
 }
 
 // NewEvent creates a new event with the current timestamp
