@@ -66,18 +66,18 @@ const (
 // It handles the full connection lifecycle: TCP dial → handshake → connect
 // command → createStream → publish/play → send audio/video.
 type Client struct {
-	conn   net.Conn       // underlying TCP connection
-	writer *chunk.Writer  // encodes outbound messages into chunks
-	reader *chunk.Reader  // decodes inbound chunks into messages
-	url    *url.URL       // parsed RTMP URL
-	log    *slog.Logger   // structured logger with "rtmp_client" component tag
+	conn   net.Conn      // underlying TCP connection
+	writer *chunk.Writer // encodes outbound messages into chunks
+	reader *chunk.Reader // decodes inbound chunks into messages
+	url    *url.URL      // parsed RTMP URL
+	log    *slog.Logger  // structured logger with "rtmp_client" component tag
 
-	app       string       // application name extracted from URL path (e.g. "live")
-	streamKey string       // full stream key: "app/streamName" (e.g. "live/mystream")
-	streamID  uint32       // message stream ID assigned by server's createStream response
+	app       string // application name extracted from URL path (e.g. "live")
+	streamKey string // full stream key: "app/streamName" (e.g. "live/mystream")
+	streamID  uint32 // message stream ID assigned by server's createStream response
 
-	trxMu sync.Mutex      // protects trxID from concurrent access
-	trxID float64         // incrementing transaction ID for request-response matching
+	trxMu sync.Mutex // protects trxID from concurrent access
+	trxID float64    // incrementing transaction ID for request-response matching
 }
 
 // New creates a new Client (not yet connected).

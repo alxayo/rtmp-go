@@ -35,10 +35,10 @@ const (
 // (CSID) can omit fields that haven't changed. The FMT field controls which
 // fields are present in the wire format:
 //
-//   FMT 0: All fields present (Timestamp is absolute)
-//   FMT 1: Timestamp delta, MessageLength, MessageTypeID (MessageStreamID inherited)
-//   FMT 2: Timestamp delta only (all other fields inherited)
-//   FMT 3: No fields (everything inherited — used for continuation chunks)
+//	FMT 0: All fields present (Timestamp is absolute)
+//	FMT 1: Timestamp delta, MessageLength, MessageTypeID (MessageStreamID inherited)
+//	FMT 2: Timestamp delta only (all other fields inherited)
+//	FMT 3: No fields (everything inherited — used for continuation chunks)
 //
 // IsDelta indicates whether Timestamp holds a delta (FMT 1/2) or absolute value (FMT 0).
 type ChunkHeader struct {

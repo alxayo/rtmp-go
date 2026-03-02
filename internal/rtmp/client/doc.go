@@ -4,11 +4,11 @@
 // This client implements just enough of the RTMP protocol to drive the
 // server through its connection lifecycle:
 //
-//	1. TCP dial + RTMP handshake
-//	2. connect command → wait for _result
-//	3. createStream command → wait for _result (stream ID)
-//	4. publish or play command
-//	5. Send/receive audio and video messages
+//  1. TCP dial + RTMP handshake
+//  2. connect command → wait for _result
+//  3. createStream command → wait for _result (stream ID)
+//  4. publish or play command
+//  5. Send/receive audio and video messages
 //
 // # Limitations
 //
