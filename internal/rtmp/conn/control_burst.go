@@ -9,7 +9,6 @@ package conn
 //   3. Set Chunk Size — increases chunk payload from default 128 to 4096 bytes
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sync/atomic"
 
@@ -41,40 +40,15 @@ func sendInitialControlBurst(c *Connection) error {
 	}
 
 	for _, m := range msgs {
-		// Debug log the message being sent
-		c.log.Debug("Control burst sending", "type_id", m.TypeID, "csid", m.CSID, "msid", m.MessageStreamID, "payload_len", len(m.Payload))
-
-		// Use SendMessage to properly enqueue messages through the writeLoop
 		if err := c.SendMessage(m); err != nil {
 			return fmt.Errorf("control burst enqueue type=%d: %w", m.TypeID, err)
 		}
-		// Per message logging with concise metadata.
-		switch m.TypeID {
-		case control.TypeWindowAcknowledgement:
-			if len(m.Payload) == 4 {
-				c.log.Info("Control sent: Window Acknowledgement Size", "size", binary.BigEndian.Uint32(m.Payload))
-			} else {
-				c.log.Info("Control sent: Window Acknowledgement Size")
-			}
-		case control.TypeSetPeerBandwidth:
-			if len(m.Payload) == 5 {
-				bw := binary.BigEndian.Uint32(m.Payload[:4])
-				c.log.Info("Control sent: Set Peer Bandwidth", "bandwidth", bw, "limit_type", m.Payload[4])
-			} else {
-				c.log.Info("Control sent: Set Peer Bandwidth")
-			}
-		case control.TypeSetChunkSize:
-			if len(m.Payload) == 4 {
-				newSize := binary.BigEndian.Uint32(m.Payload)
-				c.log.Info("Control sent: Set Chunk Size", "size", newSize)
-				// CRITICAL: Update the connection's write chunk size to match what we told the peer
-				atomic.StoreUint32(&c.writeChunkSize, newSize)
-			} else {
-				c.log.Info("Control sent: Set Chunk Size")
-			}
-		default:
-			c.log.Info("Control sent", "type_id", m.TypeID)
-		}
 	}
+
+	// Log what was sent and update connection's write chunk size to match.
+	c.log.Info("Control sent: Window Acknowledgement Size", "size", windowAckSizeValue)
+	c.log.Info("Control sent: Set Peer Bandwidth", "bandwidth", peerBandwidthValue, "limit_type", peerBandwidthLimitType)
+	c.log.Info("Control sent: Set Chunk Size", "size", serverChunkSize)
+	atomic.StoreUint32(&c.writeChunkSize, serverChunkSize)
 	return nil
 }
