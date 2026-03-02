@@ -76,8 +76,17 @@ func (s *Stream) Subscribers() []Subscriber {
 	return out
 }
 
-// BroadcastMessage relays a publisher's media message to all current subscribers.
-// It also performs one‑shot codec detection on the first audio/video frames.
+// BroadcastMessage sends a media message to all current subscribers of this stream.
+// It performs two tasks:
+//
+//  1. Codec detection: On the first audio/video message, the codec type (e.g. AAC,
+//     H.264) is identified and stored so late-joining clients know what codec to expect.
+//
+//  2. Fan-out delivery: The message is sent to every subscriber. If a subscriber
+//     implements the TrySendMessage interface, a non-blocking send is attempted first.
+//     If the subscriber's queue is full, the message is dropped (logged at debug level)
+//     rather than blocking the publisher. This prevents one slow viewer from stalling
+//     the entire stream.
 func (s *Stream) BroadcastMessage(detector *CodecDetector, msg *chunk.Message, logger *slog.Logger) {
 	if s == nil || msg == nil || logger == nil {
 		return

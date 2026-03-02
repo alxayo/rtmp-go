@@ -191,11 +191,18 @@ func (w *Writer) WriteMessage(msg *Message) error {
 	}
 
 	// Select FMT based on previous state for this CSID.
-	// FMT selection reduces wire overhead by omitting unchanged header fields:
-	//   FMT0: Full header (first message or all fields changed)
-	//   FMT1: Delta timestamp + length + type (stream ID unchanged)
-	//   FMT2: Delta timestamp only (length, type, stream ID unchanged)
-	//   FMT3: No header (continuation chunk within same message)
+	//
+	// RTMP uses header compression to save bandwidth. When consecutive messages
+	// on the same Chunk Stream ID (CSID) share the same fields (length, type,
+	// stream ID), those fields can be omitted from the header:
+	//
+	//   FMT0 (11 bytes): Full header — used for the first message on a CSID
+	//   FMT1 (7 bytes):  Omits stream ID — saves 4 bytes when only timestamp/length/type change
+	//   FMT2 (3 bytes):  Only timestamp delta — saves 8 bytes for same-sized same-type messages
+	//   FMT3 (0 bytes):  No header at all — used for continuation chunks within one message
+	//
+	// For a 30fps video stream with ~1000 chunks/sec, this compression saves
+	// ~8 KB/sec of header overhead.
 	var selectedFmt uint8 = fmt0
 	var timestampDelta uint32 = msg.Timestamp
 	prev := w.lastHeaders[msg.CSID]

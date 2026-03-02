@@ -226,8 +226,11 @@ func (s *Server) ConnectionCount() int {
 	return len(s.conns)
 }
 
-// singleConnListener is a tiny adapter implementing net.Listener for a single
-// pre-accepted net.Conn. It returns the conn once then permanently errors.
+// singleConnListener wraps a single pre-accepted net.Conn as a net.Listener.
+// This adapter exists because conn.Accept() expects a net.Listener (for the
+// handshake flow), but the server's accept loop already called l.Accept() to
+// get the raw TCP connection. Rather than duplicating the handshake logic,
+// we wrap the raw conn in this one-shot listener so conn.Accept() can reuse it.
 type singleConnListener struct{ conn net.Conn }
 
 func (s *singleConnListener) Accept() (net.Conn, error) {

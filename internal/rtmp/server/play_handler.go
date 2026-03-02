@@ -68,9 +68,17 @@ func HandlePlay(reg *Registry, conn sender, app string, msg *chunk.Message) (*ch
 	}
 	_ = conn.SendMessage(started)
 
-	// 3. Send cached sequence headers to late-joining subscriber (CRITICAL for relay)
-	// This ensures the subscriber receives codec initialization (SPS/PPS for H.264,
-	// AudioSpecificConfig for AAC) before receiving media frames.
+	// 3. Send cached sequence headers to late-joining subscriber.
+	//
+	// WHY: When a viewer joins a live stream that's already in progress, their
+	// video/audio decoder needs initialization data before it can process any
+	// media frames. For H.264 video, this is the SPS/PPS (Sequence Parameter Set /
+	// Picture Parameter Set). For AAC audio, this is the AudioSpecificConfig.
+	//
+	// The publisher sends these "sequence headers" once at the start of the stream.
+	// We cache them in the Stream object so we can replay them to any new subscriber
+	// who joins later. Without this, late-joining viewers would see a black screen
+	// until the next keyframe.
 	stream.mu.RLock()
 	audioSeqHdr := stream.AudioSequenceHeader
 	videoSeqHdr := stream.VideoSequenceHeader

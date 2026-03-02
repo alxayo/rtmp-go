@@ -20,9 +20,13 @@ import (
 )
 
 const (
-	// sendTimeout is the maximum time to wait for the outbound queue to accept a message.
+	// sendTimeout is the maximum time SendMessage will wait for space in the outbound
+	// queue. If the queue is full for longer than this, the message is dropped and an
+	// error is returned. This prevents a slow network from blocking the entire server.
 	sendTimeout = 200 * time.Millisecond
-	// outboundQueueSize is the capacity of the per-connection outbound message queue.
+	// outboundQueueSize is the maximum number of messages that can be buffered for
+	// sending. When this limit is reached, new sends will block (up to sendTimeout).
+	// 100 messages provides ~3 seconds of buffer at 30fps video.
 	outboundQueueSize = 100
 )
 

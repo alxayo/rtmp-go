@@ -1,8 +1,10 @@
 package control
 
-// T023: Control Message Decoding
-// Decodes RTMP control message payloads (types 1-6) per contracts/control.md.
-// All validation rules implemented according to task requirements.
+// Control Message Decoding
+// ========================
+// Decodes RTMP control message payloads (types 1-6) into structured Go types.
+// Control messages manage the transport layer: chunk sizes, flow control,
+// and stream lifecycle signals.
 
 import (
 	"encoding/binary"
@@ -28,15 +30,18 @@ type Acknowledgement struct {
 	SequenceNumber uint32
 }
 
-// UserControl represents a Type 4 User Control message. Only a subset of
-// event types are currently interpreted (0,6,7). For unknown event types the
-// remaining payload (beyond the 2-byte event header) is exposed via RawData.
+// UserControl represents a Type 4 User Control message. These messages
+// signal stream lifecycle events. The EventType field determines which
+// optional field is populated:
+//   - EventType 0 (Stream Begin): StreamID is set to the new stream's ID
+//   - EventType 6 (Ping Request): Timestamp is set; client must reply with Ping Response
+//   - EventType 7 (Ping Response): Timestamp echoes the request's timestamp
+//   - Other events: RawData contains the unparsed payload bytes
 type UserControl struct {
 	EventType uint16
-	// Optional fields (only one will be relevant depending on event type)
-	StreamID  uint32 // Event 0: Stream Begin
-	Timestamp uint32 // Event 6/7: Ping Request / Response timestamp
-	RawData   []byte // Any additional unparsed data for unknown events
+	StreamID  uint32 // Event 0: the stream ID that is now active
+	Timestamp uint32 // Event 6/7: ping timestamp for latency measurement
+	RawData   []byte // Unparsed payload for unrecognized event types
 }
 
 // WindowAcknowledgementSize represents a Type 5 Window Ack Size message.

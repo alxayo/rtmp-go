@@ -65,10 +65,10 @@ type Destination struct {
 	clientFactory RTMPClientFactory   // Creates new client instances for (re)connection
 
 	// Internal state
-	mu              sync.RWMutex
-	reconnectCtx    context.Context
-	reconnectCancel context.CancelFunc
-	logger          *slog.Logger
+	mu              sync.RWMutex       // protects concurrent access to Status, Client, Metrics
+	reconnectCtx    context.Context    // cancellation context for shutdown signaling
+	reconnectCancel context.CancelFunc // called during Close() to signal shutdown
+	logger          *slog.Logger       // structured logger tagged with destination URL
 }
 
 // DestinationMetrics tracks performance for each destination
