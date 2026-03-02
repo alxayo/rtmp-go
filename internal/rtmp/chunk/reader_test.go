@@ -1,3 +1,16 @@
+// reader_test.go – tests for the chunk Reader that reassembles fragmented
+// RTMP chunks back into complete messages.
+//
+// The Reader sits between the TCP socket and the application layer. It reads
+// raw bytes, parses chunk headers, collects payload fragments across multiple
+// chunks, and delivers complete Message objects.
+//
+// Key concepts demonstrated:
+//   - buildMessageBytes helper constructs raw FMT0 chunk bytes for testing.
+//   - SetChunkSize – the RTMP protocol lets peers negotiate chunk sizes via
+//     control message type 1; the Reader must update its internal chunk size.
+//   - Interleaved streams – the Reader tracks per-CSID state so audio and
+//     video chunks can be interleaved and reassembled independently.
 package chunk
 
 import (
@@ -12,7 +25,9 @@ import (
 // Test utilities
 func loadGoldenChunk(t *testing.T, name string) []byte { return loadGolden(t, name) }
 
-// buildMessageBytes constructs a single FMT0 single-chunk message (no fragmentation) given parameters.
+// buildMessageBytes constructs a single FMT0 single-chunk message (no
+// fragmentation). It encodes a full chunk header followed by the payload.
+// This helper is used by many tests to prepare input for the Reader.
 func buildMessageBytes(t *testing.T, csid uint32, ts uint32, msgType uint8, msid uint32, payload []byte) []byte {
 	// Construct header
 	h := &ChunkHeader{FMT: 0, CSID: csid, Timestamp: ts, MessageLength: uint32(len(payload)), MessageTypeID: msgType, MessageStreamID: msid}
@@ -23,6 +38,8 @@ func buildMessageBytes(t *testing.T, csid uint32, ts uint32, msgType uint8, msid
 	return append(b, payload...)
 }
 
+// TestReader_SingleMessageSingleChunk feeds the Reader one complete message
+// that fits in a single chunk (payload < chunk size) and verifies all fields.
 func TestReader_SingleMessageSingleChunk(t *testing.T) {
 	payload := []byte("hello rtmp")
 	stream := buildMessageBytes(t, 5, 1000, 8, 1, payload)
@@ -40,6 +57,10 @@ func TestReader_SingleMessageSingleChunk(t *testing.T) {
 	}
 }
 
+// TestReader_InterleavedMultiChunk_Golden reads the golden interleaved binary
+// (audio + video chunks interleaved) and verifies the Reader reassembles
+// two complete messages: audio (CSID 4, type 8, 256 bytes) and video
+// (CSID 6, type 9, 256 bytes).
 func TestReader_InterleavedMultiChunk_Golden(t *testing.T) {
 	data := loadGoldenChunk(t, "chunk_interleaved.bin")
 	r := NewReader(bytes.NewReader(data), 128)
@@ -60,6 +81,14 @@ func TestReader_InterleavedMultiChunk_Golden(t *testing.T) {
 	}
 }
 
+// TestReader_SetChunkSize_Applied simulates the RTMP "Set Chunk Size"
+// control message flow:
+//  1. Send a control message (type 1) setting chunk size to 4096.
+//  2. Send a 3000-byte audio message as a single chunk (fits in 4096).
+//
+// If the Reader doesn't update its chunk size, it would try to split the
+// 3000-byte message at the old 128-byte boundary, parsing payload bytes
+// as headers and failing.
 func TestReader_SetChunkSize_Applied(t *testing.T) {
 	// 1) Control message: Set Chunk Size -> 4096
 	ctrlPayload := make([]byte, 4)
@@ -191,7 +220,9 @@ func TestReader_SetChunkSize_Applied(t *testing.T) {
 	}
 }
 
-// Ensure golden file path resolution (sanity) -- not a protocol test; helps coverage for file IO path.
+// TestReader_GoldenFileExists is a sanity check that the golden files exist
+// in the expected location. If the golden directory is moved, this fails
+// early with a clear message.
 func TestReader_GoldenFileExists(t *testing.T) {
 	p := filepath.Join("..", "..", "..", "tests", "golden", "chunk_fmt0_audio.bin")
 	if _, err := os.Stat(p); err != nil {

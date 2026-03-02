@@ -1,3 +1,14 @@
+// encoder_test.go – tests for RTMP control message encoding.
+//
+// Each Encode* function produces a *chunk.Message with the correct TypeID,
+// payload bytes, and control-channel invariants (CSID=2, MSID=0, TS=0).
+//
+// Testing strategy:
+//   - Golden comparison: encode a message, then compare the payload bytes
+//     against the matching golden binary file (same files used by decoder).
+//   - Invariant checks: every control message must use CSID 2, MSID 0, TS 0.
+//   - Manual validation: for messages without golden files (ping, abort),
+//     verify event bytes and payload length directly.
 package control
 
 import (
@@ -8,9 +19,13 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// goldenPath resolves a golden file path relative to repo root (control package sits at internal/rtmp/control).
+// goldenPath constructs the filesystem path to a golden binary file.
+// Since this package lives at internal/rtmp/control, we walk up three
+// directories to reach the repo root, then into tests/golden/.
 func goldenPath(name string) string { return filepath.Join("..", "..", "..", "tests", "golden", name) }
 
+// readGolden loads a golden binary file. If the file is missing the test
+// fails immediately with a clear message (helps diagnose stale checkouts).
 func readGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	path := goldenPath(name)
@@ -22,6 +37,10 @@ func readGolden(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeControlMessages_Golden encodes each control message type and
+// compares the raw payload bytes against the pre-recorded golden .bin file.
+// Also validates the RTMP control-channel invariants (CSID=2, MSID=0, TS=0)
+// that all control messages must satisfy.
 func TestEncodeControlMessages_Golden(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -63,7 +82,9 @@ func TestEncodeControlMessages_Golden(t *testing.T) {
 	}
 }
 
-// Additional coverage: ping request/response (no golden files yet, validate encoding semantics directly).
+// TestEncodeUserControlPing tests ping request (event 0x0006) and ping
+// response (event 0x0007) encoding. These are 6-byte payloads: 2-byte
+// event type + 4-byte timestamp.
 func TestEncodeUserControlPing(t *testing.T) {
 	const ts = 123456
 	pr := EncodeUserControlPingRequest(ts)
@@ -85,7 +106,10 @@ func TestEncodeUserControlPing(t *testing.T) {
 	}
 }
 
-// TestAdditionalCoverage exercises remaining branches / functions for >95% coverage.
+// TestAdditionalCoverage exercises remaining encoder branches:
+//   - AbortMessage (type 2) – 4-byte CSID payload.
+//   - encodeUserControl with includeData=false – minimal 2-byte payload.
+//   - SetPeerBandwidth limit type field positioning.
 func TestAdditionalCoverage(t *testing.T) {
 	abs := EncodeAbortMessage(4)
 	if abs.TypeID != TypeAbortMessage || len(abs.Payload) != 4 {

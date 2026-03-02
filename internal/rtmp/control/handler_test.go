@@ -1,3 +1,14 @@
+// handler_test.go – tests for RTMP control message handling logic.
+//
+// Handle() receives decoded control messages and updates the corresponding
+// connection-level state pointers (read chunk size, window ack size, etc.)
+// and may send outbound responses (e.g., PingResponse to a PingRequest).
+//
+// Testing strategy:
+//   - captureSender: a fake sender that records outbound messages in a slice,
+//     allowing tests to inspect what Handle() sent without a real network.
+//   - State mutation: each test verifies the correct pointer was updated.
+//   - Error paths: nil context, nil fields → must return an error.
 package control
 
 import (
@@ -8,12 +19,14 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// simple in-memory sender capture for tests
+// captureSender is a test double that collects outbound messages.
+// If err is non-nil, all sends fail with that error.
 type captureSender struct {
 	msgs []*chunk.Message
 	err  error
 }
 
+// send appends the message to the captured list (or returns err if set).
 func (c *captureSender) send(m *chunk.Message) error {
 	if c.err != nil {
 		return c.err
@@ -22,6 +35,12 @@ func (c *captureSender) send(m *chunk.Message) error {
 	return nil
 }
 
+// TestHandle_ControlMessages_StateUpdates feeds four control messages through
+// Handle() in sequence and verifies each one mutates the right Context field:
+//  1. SetChunkSize → ReadChunkSize = 4096
+//  2. WindowAcknowledgementSize → WindowAckSize = 2,500,000
+//  3. SetPeerBandwidth → PeerBandwidth = 2,500,000, LimitType = 2
+//  4. Acknowledgement → LastPeerAck = 1,000,000
 func TestHandle_ControlMessages_StateUpdates(t *testing.T) {
 	readChunkSize := uint32(128)
 	windowAckSize := uint32(0)
@@ -77,6 +96,9 @@ func TestHandle_ControlMessages_StateUpdates(t *testing.T) {
 	}
 }
 
+// TestHandle_UserControl_PingRequestResponse verifies the RTMP ping
+// round-trip: Handle() receives a PingRequest and automatically sends
+// back a PingResponse with the same timestamp echoed.
 func TestHandle_UserControl_PingRequestResponse(t *testing.T) {
 	readChunkSize := uint32(128)
 	windowAckSize := uint32(0)
@@ -104,6 +126,8 @@ func TestHandle_UserControl_PingRequestResponse(t *testing.T) {
 	}
 }
 
+// TestHandle_Errors exercises defensive checks: nil Context and a Context
+// with nil pointer fields must both return errors rather than panicking.
 func TestHandle_Errors(t *testing.T) {
 	// Nil context
 	if err := Handle(nil, &chunk.Message{}); err == nil {

@@ -1,3 +1,19 @@
+// types_test.go – tests for the RTMP handshake finite state machine (FSM).
+//
+// The RTMP v3 simple handshake has 5 states:
+//
+//	StateInitial → StateRecvC0C1 → StateSentS0S1S2 → StateRecvC2 → StateCompleted
+//
+// Each transition is guarded by validation (version byte, packet size, state
+// ordering). These tests verify:
+//   - Happy path: correct transitions through all 5 states.
+//   - Invalid inputs: wrong version, wrong packet size, out-of-order calls.
+//   - Accessor coverage: C1(), S1(), timestamps before/after data arrives.
+//   - String representation for debugging.
+//
+// Key Go concepts:
+//   - errors.As: unwrapping to a typed *HandshakeError for domain checks.
+//   - Table-driven tests for State.String().
 package handshake
 
 import (
@@ -7,7 +23,8 @@ import (
 	rerrors "github.com/alxayo/go-rtmp/internal/errors"
 )
 
-// helper to assert protocol / handshake error
+// isHandshakeErr checks whether err wraps a *rerrors.HandshakeError.
+// Uses Go's errors.As to traverse the error chain.
 func isHandshakeErr(err error) bool {
 	if err == nil {
 		return false
@@ -16,6 +33,8 @@ func isHandshakeErr(err error) bool {
 	return stdErrors.As(err, &he)
 }
 
+// TestStateString verifies the human-readable name for every State constant,
+// including the catch-all "Unknown" for undefined values.
 func TestStateString(t *testing.T) {
 	cases := []struct {
 		s    State
@@ -35,6 +54,8 @@ func TestStateString(t *testing.T) {
 	}
 }
 
+// TestHandshakeTransitions walks the happy path through all five FSM states
+// – from Initial to Completed – with minimal valid 1536-byte buffers.
 func TestHandshakeTransitions(t *testing.T) {
 	h := New()
 	if h.State() != StateInitial {
@@ -82,6 +103,9 @@ func TestHandshakeTransitions(t *testing.T) {
 	}
 }
 
+// TestHandshakeInvalidTransitions exercises every validation guard:
+// wrong version, wrong buffer size at each step, and calling Complete()
+// twice (second call must error).
 func TestHandshakeInvalidTransitions(t *testing.T) {
 	h := New()
 	bad := make([]byte, PacketSize-1)
@@ -130,6 +154,8 @@ func TestHandshakeInvalidTransitions(t *testing.T) {
 	}
 }
 
+// TestInvalidOrder verifies that calling methods out of sequence
+// (e.g. SetS1 before AcceptC0C1) returns a HandshakeError.
 func TestInvalidOrder(t *testing.T) {
 	h := New()
 	// Calling SetS1 before AcceptC0C1
@@ -145,6 +171,9 @@ func TestInvalidOrder(t *testing.T) {
 	}
 }
 
+// TestHandshakeAdditionalCoverage exercises accessor methods (C1, S1) on a
+// fresh handshake (nil before data), and verifies that repeating a
+// transition from a wrong state returns an error.
 func TestHandshakeAdditionalCoverage(t *testing.T) {
 	h := New()
 	// Accessors before data present.

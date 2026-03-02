@@ -1,7 +1,21 @@
+// audio_test.go – tests for RTMP audio message parsing.
+//
+// RTMP audio messages (TypeID 8) encode codec info in the first byte:
+//   - High nibble (bits 7-4) = SoundFormat (10=AAC, 2=MP3, etc.)
+//   - For AAC: second byte = packet type (0=sequence header, 1=raw)
+//
+// Tests verify:
+//   - AAC sequence header: codec=AAC, packetType=sequence_header, payload.
+//   - AAC raw frame: packetType=raw.
+//   - MP3: no packet type sub-field.
+//   - Error cases: empty, truncated AAC, unsupported format.
 package media
 
 import "testing"
 
+// TestParseAudioMessage_AACSequenceHeader verifies parsing of an AAC
+// sequence header (soundFormat=10, aacPacketType=0). The payload after
+// the 2-byte header should be extracted as AudioDecoderSpecificConfig.
 func TestParseAudioMessage_AACSequenceHeader(t *testing.T) {
 	// soundFormat=10 (AAC) in high nibble, rest bits zero.
 	data := []byte{10 << 4, 0x00, 0x12, 0x34, 0x56}
@@ -20,6 +34,8 @@ func TestParseAudioMessage_AACSequenceHeader(t *testing.T) {
 	}
 }
 
+// TestParseAudioMessage_AACRaw verifies parsing of an AAC raw audio
+// frame (aacPacketType=1). Payload should be the raw AAC data.
 func TestParseAudioMessage_AACRaw(t *testing.T) {
 	data := []byte{10 << 4, 0x01, 0xDE, 0xAD, 0xBE, 0xEF}
 	m, err := ParseAudioMessage(data)
@@ -34,6 +50,8 @@ func TestParseAudioMessage_AACRaw(t *testing.T) {
 	}
 }
 
+// TestParseAudioMessage_MP3 verifies that MP3 (soundFormat=2) is
+// recognized. MP3 has no sub-packet-type field, so PacketType is empty.
 func TestParseAudioMessage_MP3(t *testing.T) {
 	data := []byte{2<<4 | 0x02, 0x11, 0x22, 0x33}
 	m, err := ParseAudioMessage(data)
@@ -51,6 +69,8 @@ func TestParseAudioMessage_MP3(t *testing.T) {
 	}
 }
 
+// TestParseAudioMessage_Errors is a table-driven negative test covering:
+// empty data, AAC with truncated header, and unsupported codec (format 15).
 func TestParseAudioMessage_Errors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -67,7 +87,8 @@ func TestParseAudioMessage_Errors(t *testing.T) {
 	}
 }
 
-// Helper to mark failures while keeping test body concise.
+// _tFatalf is a test helper that marks itself with t.Helper() so failure
+// line numbers point to the caller, not this function.
 func _tFatalf(t *testing.T, format string, args ...interface{}) {
 	// Mark as helper for cleaner failure line numbers.
 	// The project uses table-driven style; this is consistent.

@@ -1,3 +1,12 @@
+// client_test.go – placeholder tests for the RTMP client.
+//
+// These tests are currently SKIPPED because the client package imports the
+// server package for in-process testing, causing a Go import cycle. In Go,
+// packages cannot import each other (A imports B and B imports A is illegal).
+//
+// The solution is to move these tests to the tests/integration/ package,
+// which can import both client and server without creating a cycle.
+// Each test is preserved here as a design reference for the future.
 package client
 
 import (
@@ -8,8 +17,12 @@ import (
 	// "github.com/alxayo/go-rtmp/internal/rtmp/server"
 )
 
-// TestConnectFlow dials a real in-process server and exercises handshake + connect + createStream.
-// Temporarily disabled due to import cycle - will be moved to integration tests
+// TestConnectFlow would dial a real in-process server and exercise the
+// handshake → connect → createStream sequence.
+//
+// Why it's skipped: The client package cannot import the server package
+// because server already imports client (import cycle). This test will be
+// moved to tests/integration/ where it can use both packages.
 func TestConnectFlow(t *testing.T) {
 	t.Skip("Temporarily disabled due to import cycle - will move to integration tests")
 	/* TODO: Move to integration tests
@@ -30,9 +43,8 @@ func TestConnectFlow(t *testing.T) {
 	*/
 }
 
-// TestPublishFlow ensures Publish command can be sent after connect.
-// TestPublishFlow ensures Publish command can be sent after connect.
-// Temporarily disabled due to import cycle - will be moved to integration tests
+// TestPublishFlow would connect then send a publish command followed by
+// audio and video frames. Skipped for the same import-cycle reason.
 func TestPublishFlow(t *testing.T) {
 	t.Skip("Temporarily disabled due to import cycle - will move to integration tests")
 	/* TODO: Move to integration tests
@@ -62,8 +74,8 @@ func TestPublishFlow(t *testing.T) {
 	*/
 }
 
-// TestPlayFlow sends the play command and exercises basic reading loop.
-// Temporarily disabled due to import cycle - will be moved to integration tests
+// TestPlayFlow would connect, send a play command, and exercise the read
+// loop for receiving media. Skipped for the same import-cycle reason.
 func TestPlayFlow(t *testing.T) {
 	t.Skip("Temporarily disabled due to import cycle - will move to integration tests")
 	/* TODO: Move to integration tests

@@ -1,3 +1,17 @@
+// conn_test.go – tests for the RTMP Connection lifecycle.
+//
+// A Connection wraps a TCP socket and manages the full RTMP lifecycle:
+//  1. Accept: TCP accept → server-side handshake → control burst
+//  2. ReadLoop: goroutine reads chunks and dispatches Messages via handler
+//  3. SendMessage: queues outbound messages for the write loop
+//  4. Close: graceful shutdown with context cancellation
+//
+// Key Go concepts demonstrated:
+//   - net.Listen + net.Dial for in-process TCP testing.
+//   - handshake.ClientHandshake for completing the 3-way RTMP handshake.
+//   - sync/atomic for thread-safe boolean flags in goroutine communication.
+//   - Channels (acceptCh, errCh) for goroutine result passing.
+//   - time.After for test timeouts (avoids hanging on failure).
 package conn
 
 import (
@@ -12,7 +26,9 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// dialAndClientHandshake dials the given address and performs the client handshake.
+// dialAndClientHandshake is a test helper that dials a TCP address and
+// performs the RTMP client-side handshake (C0+C1 → read S0+S1+S2 → send C2).
+// It fails the test immediately if anything goes wrong.
 func dialAndClientHandshake(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", addr)
@@ -25,12 +41,12 @@ func dialAndClientHandshake(t *testing.T, addr string) net.Conn {
 	return c
 }
 
+// TestAccept_Success verifies the happy path: TCP accept → server handshake
+// completes → Connection has a positive handshake duration. Logger is
+// redirected to io.Discard so the control burst doesn't block on output.
 func TestAccept_Success(t *testing.T) {
-	// Capture logs in-memory to assert handshake logging path executed.
-	pr, pw := io.Pipe()
-	defer pr.Close()
-	defer pw.Close()
-	logger.UseWriter(pw)
+	// Redirect logs to discard to avoid blocking on output.
+	logger.UseWriter(io.Discard)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -68,6 +84,9 @@ func TestAccept_Success(t *testing.T) {
 	}
 }
 
+// TestAccept_HandshakeFailure sends an invalid RTMP version byte (0x06
+// instead of 0x03) and verifies that Accept returns an error rather than
+// accepting the connection.
 func TestAccept_HandshakeFailure(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -108,6 +127,9 @@ func TestAccept_HandshakeFailure(t *testing.T) {
 
 // --- T046 Additional Tests ---
 
+// TestReadLoopMessageDispatch verifies that when a client sends a chunk
+// message, the server Connection's readLoop goroutine delivers it to the
+// registered message handler callback.
 func TestReadLoopMessageDispatch(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -153,6 +175,12 @@ func TestReadLoopMessageDispatch(t *testing.T) {
 	_ = serverConn.Close()
 }
 
+// TestWriteLoopChunkingAndSend forces a tiny write chunk size (5 bytes) on
+// the server connection, then sends a 10-byte message. The client must
+// receive the full payload despite the message being fragmented into 2 chunks.
+//
+// The test also demonstrates reading past the 3 control-burst messages that
+// the server sends automatically upon accepting a connection.
 func TestWriteLoopChunkingAndSend(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -178,17 +206,27 @@ func TestWriteLoopChunkingAndSend(t *testing.T) {
 	r := chunk.NewReader(client, 128)
 	// Skip initial 3 control burst messages if they arrive first.
 	deadline := time.Now().Add(3 * time.Second)
-	var received *chunk.Message
-	for time.Now().Before(deadline) {
+	burstRead := 0
+	for burstRead < 3 && time.Now().Before(deadline) {
 		_ = client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		m, err := r.ReadMessage()
+		_, err := r.ReadMessage()
 		if err != nil {
-			t.Fatalf("read: %v", err)
+			t.Fatalf("read burst message %d: %v", burstRead, err)
 		}
-		if string(m.Payload) == string(payload) {
-			received = m
-			break
-		}
+		burstRead++
+	}
+	// The reader auto-updated to 4096 from the SetChunkSize control message.
+	// Override to match the server's forced writeChunkSize of 5.
+	r.SetChunkSize(5)
+
+	var received *chunk.Message
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	m, err := r.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(m.Payload) == string(payload) {
+		received = m
 	}
 	if received == nil {
 		t.Fatalf("did not receive message")
@@ -199,6 +237,9 @@ func TestWriteLoopChunkingAndSend(t *testing.T) {
 	_ = serverConn.Close()
 }
 
+// TestCloseGraceful verifies that calling Close() on a connection makes
+// subsequent SendMessage calls fail immediately with an error (context
+// canceled) rather than blocking forever.
 func TestCloseGraceful(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

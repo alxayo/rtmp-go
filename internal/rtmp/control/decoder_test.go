@@ -1,3 +1,17 @@
+// decoder_test.go – tests for RTMP control message decoding.
+//
+// RTMP defines six control message types (TypeID 1–6) plus user-control
+// events (TypeID 4). Each is encoded as a fixed-size big-endian payload.
+// These tests verify that Decode() correctly parses every control message
+// type and rejects malformed inputs.
+//
+// Testing strategy:
+//   - Golden vectors: pre-built .bin files with known payloads (tests/golden/)
+//     are loaded at runtime and decoded – guarantees wire-format fidelity.
+//   - Manual construction: for messages without golden files, we build byte
+//     arrays directly using encoding/binary.
+//   - Error table: a table-driven test validates every known error branch
+//     (wrong length, zero values, unknown types, etc.).
 package control
 
 import (
@@ -5,6 +19,9 @@ import (
 	"testing"
 )
 
+// TestDecodeControlMessages_Golden decodes each golden binary file and
+// validates the parsed struct fields. The table-driven approach makes it
+// easy to add new golden vectors – just add a row to the cases slice.
 func TestDecodeControlMessages_Golden(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -81,6 +98,11 @@ func TestDecodeControlMessages_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeControlMessages_AdditionalCoverage exercises control types
+// that don't have dedicated golden files yet: AbortMessage (type 2) and
+// Ping Request/Response (user-control events 0x0006, 0x0007). Also tests
+// that unknown user-control event types are captured in RawData rather
+// than causing an error.
 func TestDecodeControlMessages_AdditionalCoverage(t *testing.T) {
 	// Abort Message (not part of golden vectors) round-trip style test
 	var abortPayload [4]byte
@@ -130,6 +152,10 @@ func TestDecodeControlMessages_AdditionalCoverage(t *testing.T) {
 	}
 }
 
+// TestDecodeControlMessages_Errors is a negative-testing table that
+// ensures every invalid input produces an error. Each row targets a
+// specific validation branch: wrong payload length, zero values, high-bit
+// set, invalid limit types, unsupported message types, etc.
 func TestDecodeControlMessages_Errors(t *testing.T) {
 	tests := []struct {
 		name   string

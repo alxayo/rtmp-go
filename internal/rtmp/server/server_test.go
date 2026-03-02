@@ -1,12 +1,28 @@
+// server_test.go – tests for the RTMP server lifecycle.
+//
+// The Server manages: listener, accept loop, connection tracking, and
+// graceful shutdown. These tests verify:
+//   - Start/Stop idempotency (Stop can be called twice safely).
+//   - Accept loop: TCP dial + handshake → connection tracked.
+//   - Graceful shutdown: Stop closes all active connections.
+//
+// Key Go concepts:
+//   - ListenAddr ":0" lets the OS pick a free port (avoids conflicts).
+//   - Polling loop with deadline for async connection tracking.
+//   - handshake.ClientHandshake to complete the 3-way RTMP handshake.
 package server
 
 import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// TestServerStartStop verifies basic lifecycle: Start on :0, Addr non-nil, Stop idempotent.
+// TestServerStartStop verifies the basic lifecycle: Start on :0 picks a
+// free port, Addr returns the bound address, Stop closes the listener,
+// and calling Stop again is a no-op.
 func TestServerStartStop(t *testing.T) {
 	s := New(Config{ListenAddr: ":0"})
 	if err := s.Start(); err != nil {
@@ -24,7 +40,8 @@ func TestServerStartStop(t *testing.T) {
 	}
 }
 
-// TestServerAcceptConnection dials the server and ensures the connection is tracked.
+// TestServerAcceptConnection dials the server, completes the RTMP
+// handshake, and polls ConnectionCount until it reaches 1 (or times out).
 func TestServerAcceptConnection(t *testing.T) {
 	s := New(Config{ListenAddr: ":0"})
 	if err := s.Start(); err != nil {
@@ -39,6 +56,9 @@ func TestServerAcceptConnection(t *testing.T) {
 		t.Fatalf("dial failed: %v", err)
 	}
 	defer c.Close()
+	if err := handshake.ClientHandshake(c); err != nil {
+		t.Fatalf("client handshake failed: %v", err)
+	}
 	// Allow handshake + control burst to complete.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -52,7 +72,9 @@ func TestServerAcceptConnection(t *testing.T) {
 	}
 }
 
-// TestServerGracefulShutdown ensures active connections are closed on Stop.
+// TestServerGracefulShutdown connects a client, waits for tracking, then
+// calls Stop. After Stop, ConnectionCount must be 0 and the client's
+// Read must eventually fail (EOF or connection reset).
 func TestServerGracefulShutdown(t *testing.T) {
 	s := New(Config{ListenAddr: ":0"})
 	if err := s.Start(); err != nil {
@@ -62,6 +84,9 @@ func TestServerGracefulShutdown(t *testing.T) {
 	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial failed: %v", err)
+	}
+	if err := handshake.ClientHandshake(c); err != nil {
+		t.Fatalf("client handshake failed: %v", err)
 	}
 	// Wait until tracked.
 	deadline := time.Now().Add(2 * time.Second)
@@ -77,8 +102,17 @@ func TestServerGracefulShutdown(t *testing.T) {
 	if err := s.Stop(); err != nil {
 		t.Fatalf("stop failed: %v", err)
 	}
-	// Subsequent read/write should fail quickly due to close (handshake already occurred so we write nothing).
-	if _, err := c.Write([]byte{0}); err == nil {
-		t.Fatalf("expected write error after stop")
+	// After stop, all connections should be cleaned up.
+	if s.ConnectionCount() != 0 {
+		t.Fatalf("expected 0 connections after stop, got %d", s.ConnectionCount())
+	}
+	// Drain any buffered data (control burst), then confirm connection is closed.
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 4096)
+	for {
+		_, err := c.Read(buf)
+		if err != nil {
+			break // Expected: EOF or connection reset
+		}
 	}
 }

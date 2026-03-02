@@ -1,3 +1,18 @@
+// writer_test.go – tests for the chunk Writer (encoder + fragmenter).
+//
+// The Writer takes a complete Message and splits it into chunks that fit
+// within the negotiated chunk size (default 128 bytes). It also tracks
+// per-CSID state to automatically select the most compact header format:
+//
+//	FMT 0 – first message on a CSID (full header)
+//	FMT 1 – same stream, different length/type (8-byte header)
+//	FMT 2 – same stream, same length/type, different timestamp (4 bytes)
+//	FMT 3 – continuation chunk within the same message (1 byte)
+//
+// Key concepts demonstrated:
+//   - simpleWriter type wraps bytes.Buffer for raw byte inspection.
+//   - Writer→Reader round-trip proves the writer output is spec-compliant.
+//   - Extended timestamp propagation through continuation chunks.
 package chunk
 
 import (
@@ -7,7 +22,8 @@ import (
 	"testing"
 )
 
-// helper to slice expected header bytes from golden (we know payload sizes from generator logic)
+// loadGoldenHeader extracts the first `headerLen` bytes from a golden file.
+// This is used to compare encoded headers against known-good reference bytes.
 func loadGoldenHeader(t *testing.T, name string, headerLen int) []byte {
 	b := loadGolden(t, name)
 	if len(b) < headerLen {
@@ -16,6 +32,8 @@ func loadGoldenHeader(t *testing.T, name string, headerLen int) []byte {
 	return b[:headerLen]
 }
 
+// TestEncodeChunkHeader_FMT0 encodes a full FMT 0 header for an audio message
+// and compares against the golden binary.
 func TestEncodeChunkHeader_FMT0(t *testing.T) {
 	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 64, MessageTypeID: 8, MessageStreamID: 1}
 	got, err := EncodeChunkHeader(h, nil)
@@ -28,6 +46,8 @@ func TestEncodeChunkHeader_FMT0(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_FMT1 encodes a FMT 1 header (delta timestamp + new
+// length/type) and compares against the golden binary.
 func TestEncodeChunkHeader_FMT1(t *testing.T) {
 	h := &ChunkHeader{FMT: 1, CSID: 6, Timestamp: 40, MessageLength: 80, MessageTypeID: 9}
 	got, err := EncodeChunkHeader(h, nil)
@@ -40,6 +60,8 @@ func TestEncodeChunkHeader_FMT1(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_FMT2 encodes a FMT 2 header (delta timestamp only,
+// needs prior state for other fields).
 func TestEncodeChunkHeader_FMT2(t *testing.T) {
 	prev := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 64, MessageTypeID: 8, MessageStreamID: 1}
 	h := &ChunkHeader{FMT: 2, CSID: 4, Timestamp: 33}
@@ -53,6 +75,8 @@ func TestEncodeChunkHeader_FMT2(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_FMT3 encodes a FMT 3 (continuation) header – just 1
+// byte carrying the CSID.
 func TestEncodeChunkHeader_FMT3(t *testing.T) {
 	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 2000, MessageLength: 384, MessageTypeID: 9, MessageStreamID: 1}
 	h := &ChunkHeader{FMT: 3, CSID: 6}
@@ -66,6 +90,9 @@ func TestEncodeChunkHeader_FMT3(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_ExtendedTimestamp verifies encoding when the
+// timestamp exceeds 0xFFFFFF (the 3-byte maximum). The encoder must write
+// 0xFFFFFF in the timestamp field and append a 4-byte extended timestamp.
 func TestEncodeChunkHeader_ExtendedTimestamp(t *testing.T) {
 	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 0x01312D00, MessageLength: 64, MessageTypeID: 8, MessageStreamID: 1}
 	got, err := EncodeChunkHeader(h, nil)
@@ -78,6 +105,8 @@ func TestEncodeChunkHeader_ExtendedTimestamp(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_CSIDEncodings verifies all three CSID encoding
+// forms (1-byte, 2-byte, 3-byte) produce the correct basic header prefix.
 func TestEncodeChunkHeader_CSIDEncodings(t *testing.T) {
 	cases := []struct {
 		csid uint32
@@ -101,6 +130,8 @@ func TestEncodeChunkHeader_CSIDEncodings(t *testing.T) {
 	}
 }
 
+// TestEncodeChunkHeader_Errors checks rejection of invalid inputs: nil
+// header, invalid FMT, invalid CSID, and FMT 3 without a previous header.
 func TestEncodeChunkHeader_Errors(t *testing.T) {
 	if _, err := EncodeChunkHeader(nil, nil); err == nil {
 		t.Fatalf("expected nil header error")
@@ -118,9 +149,12 @@ func TestEncodeChunkHeader_Errors(t *testing.T) {
 
 // --- T021: Chunk Writer fragmentation tests ---
 
-// simpleWriter allows us to inspect raw bytes written.
+// simpleWriter wraps bytes.Buffer to capture raw bytes from the Writer.
 type simpleWriter struct{ bytes.Buffer }
 
+// TestWriter_WriteMessage_SingleChunk writes a message that fits in one
+// chunk and checks the output has exactly one FMT 0 header followed by
+// the payload.
 func TestWriter_WriteMessage_SingleChunk(t *testing.T) {
 	var sw simpleWriter
 	w := NewWriter(&sw, 128)
@@ -144,6 +178,9 @@ func TestWriter_WriteMessage_SingleChunk(t *testing.T) {
 	}
 }
 
+// TestWriter_WriteMessage_MultiChunk writes a 300-byte message with chunk
+// size 128, which requires 3 chunks: 128 + 128 + 44 bytes. It counts FMT 3
+// continuation headers and then round-trips through the Reader to verify.
 func TestWriter_WriteMessage_MultiChunk(t *testing.T) {
 	var sw simpleWriter
 	w := NewWriter(&sw, 128)
@@ -178,6 +215,10 @@ func TestWriter_WriteMessage_MultiChunk(t *testing.T) {
 	}
 }
 
+// TestWriter_WriteMessage_ExtendedTimestampMultiChunk verifies that when a
+// message uses an extended timestamp (≥0x01000000), every continuation
+// chunk also carries the 4-byte extended timestamp value. This is a subtle
+// RTMP spec requirement that many implementations get wrong.
 func TestWriter_WriteMessage_ExtendedTimestampMultiChunk(t *testing.T) {
 	var sw simpleWriter
 	w := NewWriter(&sw, 64)                    // small chunk size to force more continuations
@@ -229,6 +270,12 @@ func TestWriter_WriteMessage_ExtendedTimestampMultiChunk(t *testing.T) {
 	_ = io.EOF // silence unused import if build tags change
 }
 
+// TestWriter_StatefulFMTSelection sends 3 messages on the same CSID and
+// verifies the Writer automatically selects the most compact FMT:
+//
+//	msg1 → FMT 0 (first message on CSID 6)
+//	msg2 → FMT 2 (same length/type, only timestamp changed)
+//	msg3 → FMT 1 (length changed, needs to re-send length/type)
 func TestWriter_StatefulFMTSelection(t *testing.T) {
 	var sw simpleWriter
 	w := NewWriter(&sw, 128)
@@ -277,6 +324,10 @@ func TestWriter_StatefulFMTSelection(t *testing.T) {
 	}
 }
 
+// TestWriter_ChunkReaderRoundTrip is an end-to-end test: write multiple
+// messages through the Writer, then read them back through the Reader and
+// compare every field. This proves the Writer output is fully compliant
+// with the Reader's expectations.
 func TestWriter_ChunkReaderRoundTrip(t *testing.T) {
 	// Test that our stateful FMT selection produces readable chunks
 	var sw simpleWriter

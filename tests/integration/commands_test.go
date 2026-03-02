@@ -1,3 +1,23 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// commands_test.go is a TDD scaffold that specifies the full RTMP command
+// exchange sequence:
+//
+//  1. connect       → _result (NetConnection.Connect.Success)
+//  2. createStream   → _result with stream ID 1
+//  3. publish        → onStatus (NetStream.Publish.Start)
+//  4. play           → onStatus (NetStream.Play.Start)
+//
+// Each sub-flow is a separate subtest so failures are independent.
+// At present every subtest deliberately calls t.Fatal because the real
+// RPC / command layers are not yet wired up.  As those layers land,
+// the placeholders will be replaced with actual AMF0 command encoding,
+// chunk writing, and response verification over net.Pipe connections.
+//
+// Key Go patterns demonstrated:
+//   - net.Pipe()     – in-memory connection for protocol exchanges.
+//   - t.Fatal()      – intentional TDD failure to drive implementation.
+//   - Deferred Close – immediate cleanup of both pipe ends.
 package integration
 
 import (
@@ -27,6 +47,14 @@ import (
 //   - No RPC/command implementation yet; this test intentionally fails (TDD) via t.Fatal placeholders.
 //   - When implementing, replace the placeholders with real client/server harness using chunk.Reader/Writer
 //     to exchange AMF0 command messages over an in-memory net.Pipe().
+//
+// TestCommandsFlow encodes the expected RTMP command sequence as a
+// failing specification (TDD).  Four subtests map 1:1 to the protocol
+// command flow: connect → createStream → publish → play.
+//
+// Each currently fails with a descriptive message naming the blocking
+// tasks.  When the AMF0, RPC, and dispatcher layers are complete,
+// replace the t.Fatal placeholders with real handshake + chunk I/O.
 func TestCommandsFlow(t *testing.T) {
 	// Use subtests so individual flows can be debugged independently.
 

@@ -1,3 +1,13 @@
+// codec_detector_test.go – tests for the codec auto-detection subsystem.
+//
+// CodecDetector inspects the first bytes of audio (TypeID 8) and video
+// (TypeID 9) messages to identify the codec and stores the result on the
+// stream via the CodecStore interface.
+//
+// Key Go concepts:
+//   - Interface-based testing: fakeStream implements CodecStore without
+//     importing the full server package (avoids import cycles).
+//   - slog.Logger directed to a bytes.Buffer for verifying log output.
 package media
 
 import (
@@ -7,7 +17,8 @@ import (
 	"testing"
 )
 
-// fakeStream implements CodecStore for tests.
+// fakeStream implements CodecStore for test isolation – it simply stores
+// the codec strings so tests can assert what the detector wrote.
 type fakeStream struct {
 	key        string
 	audioCodec string
@@ -20,10 +31,15 @@ func (f *fakeStream) GetAudioCodec() string  { return f.audioCodec }
 func (f *fakeStream) GetVideoCodec() string  { return f.videoCodec }
 func (f *fakeStream) StreamKey() string      { return f.key }
 
+// newLogger creates a JSON slog.Logger that writes to a buffer for
+// inspecting log messages in tests.
 func newLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
+// TestCodecDetector_H264_AAC sends one video (H.264 keyframe) and one
+// audio (AAC) sequence header through the detector and verifies both
+// codecs are stored on the stream and logged.
 func TestCodecDetector_H264_AAC(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := newLogger(&logBuf)
@@ -52,6 +68,8 @@ func TestCodecDetector_H264_AAC(t *testing.T) {
 	}
 }
 
+// TestCodecDetector_MP3_Only verifies audio-only detection. After
+// processing an MP3 frame, audio codec = MP3 and video codec stays empty.
 func TestCodecDetector_MP3_Only(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := newLogger(&logBuf)

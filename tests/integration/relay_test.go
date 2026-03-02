@@ -1,7 +1,27 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// relay_test.go validates the publish → relay → play pipeline:
+//
+//	TestPublishToPlayRelay       – single publisher, single subscriber.
+//	  Publisher sends audio + video messages; subscriber must receive
+//	  both with identical payloads.
+//
+//	TestRelayMultipleSubscribers – single publisher, three subscribers.
+//	  Publisher sends one audio message; all three subscribers must
+//	  receive it.
+//
+// Both tests spin up a real server.Server on a random port (":0"),
+// connect via raw TCP, perform the handshake manually, then exchange
+// AMF0 commands (connect/createStream/publish or play).
+//
+// Key Go testing patterns demonstrated:
+//   - server.New(cfg) + srv.Start() / defer srv.Stop() for real TCP servers.
+//   - net.Dial("tcp", addr) for client connections.
+//   - chunk.NewWriter / chunk.NewReader for wire-level message I/O.
+//   - amf.EncodeAll to build AMF0 command payloads.
+//   - Helper functions (performHandshake, sendConnectCommand, etc.)
+//     to avoid duplicating boilerplate across tests.
 package integration
-
-// Integration tests for RTMP relay feature (Feature 002)
-// These tests validate end-to-end publish → relay → play flow
 
 import (
 	"bytes"
@@ -15,11 +35,18 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/server"
 )
 
-// TestPublishToPlayRelay validates basic relay functionality:
-// 1. Publisher connects and publishes to "live/test"
-// 2. Subscriber connects and plays "live/test"
-// 3. Publisher sends audio/video messages
-// 4. Subscriber receives the same messages
+// TestPublishToPlayRelay is the basic relay integration test.
+//
+// Flow:
+//  1. Start a server on a random port.
+//  2. Publisher: handshake → connect("live") → createStream → publish("test").
+//  3. Subscriber: handshake → connect("live") → createStream → play("test").
+//  4. Publisher sends one audio (AAC sequence header) and one video
+//     (AVC sequence header) message.
+//  5. Subscriber reads up to 10 messages looking for typeID 8 (audio)
+//     and typeID 9 (video), comparing payloads byte-for-byte.
+//
+// The test fails if the subscriber does not receive both messages.
 func TestPublishToPlayRelay(t *testing.T) {
 	// Start server
 	cfg := server.Config{
@@ -197,7 +224,12 @@ func TestPublishToPlayRelay(t *testing.T) {
 	t.Logf("✅ Relay test passed: subscriber received both audio and video messages")
 }
 
-// TestRelayMultipleSubscribers validates that multiple subscribers receive the same media
+// TestRelayMultipleSubscribers verifies fan-out relay to 3 subscribers.
+//
+// Uses the mustSetupPublisher / mustSetupSubscriber helpers to reduce
+// boilerplate.  After the publisher sends one audio message, the test
+// loops over all three subscriber connections and attempts up to 10
+// reads each, asserting the payload matches.
 func TestRelayMultipleSubscribers(t *testing.T) {
 	// Start server
 	cfg := server.Config{
@@ -268,7 +300,19 @@ func TestRelayMultipleSubscribers(t *testing.T) {
 	t.Logf("✅ Multiple subscribers test passed: all 3 subscribers received the message")
 }
 
-// Helper functions
+// --- Helper functions used by relay integration tests ---
+//
+// performHandshake  – low-level C0+C1 / S0+S1+S2 / C2 exchange.
+// sendConnectCommand, sendCreateStreamCommand, sendPublishCommand,
+// sendPlayCommand   – encode AMF0 command payloads and write them
+//                     via chunk.Writer.
+// sendMessage       – thin wrapper around chunk.NewWriter.WriteMessage.
+// readMessage       – reads one message with a deadline.
+// readAndDiscardMessages – reads and discards N messages (used to
+//                     drain server responses we don’t need to inspect).
+// mustSetupPublisher / mustSetupSubscriber – full setup sequences
+//                     (dial → handshake → connect → createStream →
+//                     publish / play) wrapped in t.Fatalf helpers.
 
 func performHandshake(conn net.Conn) error {
 	// Send C0+C1

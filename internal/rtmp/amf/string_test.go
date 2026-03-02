@@ -1,3 +1,8 @@
+// string_test.go – tests for the AMF0 String type.
+//
+// AMF0 strings are encoded as: 1 marker byte (0x02) + 2-byte big-endian
+// length (max 65535) + UTF-8 payload bytes. These tests verify golden-file
+// fidelity, round-trip correctness, boundary conditions, and error paths.
 package amf
 
 import (
@@ -10,6 +15,7 @@ import (
 
 const goldenDirString = "../../../tests/golden"
 
+// readGoldenString loads a golden vector; mirrors the helper in number_test.go.
 func readGoldenString(t *testing.T, name string) []byte {
 	// mirror helper pattern used in other tests
 	p := filepath.Join(goldenDirString, name)
@@ -20,6 +26,8 @@ func readGoldenString(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeString_Golden_Test verifies encoding the string "test" against
+// its golden binary (0x02 0x00 0x04 t e s t).
 func TestEncodeString_Golden_Test(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeString(&buf, "test"); err != nil {
@@ -31,6 +39,7 @@ func TestEncodeString_Golden_Test(t *testing.T) {
 	}
 }
 
+// TestEncodeString_Golden_Empty – the empty string encodes as marker + 0x0000.
 func TestEncodeString_Golden_Empty(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeString(&buf, ""); err != nil {
@@ -64,6 +73,9 @@ func TestDecodeString_Golden_Empty(t *testing.T) {
 	}
 }
 
+// TestString_RoundTrip_Multibyte ensures multi-byte UTF-8 (e.g. Chinese
+// characters) survives the round trip. AMF0 string length is in bytes, not
+// characters, so "世界" (6 UTF-8 bytes) must encode with length=6.
 func TestString_RoundTrip_Multibyte(t *testing.T) {
 	in := "世界" // multibyte UTF-8
 	var buf bytes.Buffer
@@ -79,6 +91,8 @@ func TestString_RoundTrip_Multibyte(t *testing.T) {
 	}
 }
 
+// TestString_MaxLength checks that the absolute maximum AMF0 string length
+// (65535 bytes = 0xFFFF) encodes and decodes correctly.
 func TestString_MaxLength(t *testing.T) {
 	// 65535 bytes
 	in := strings.Repeat("a", 65535)
@@ -95,6 +109,8 @@ func TestString_MaxLength(t *testing.T) {
 	}
 }
 
+// TestString_TooLong verifies that strings exceeding 65535 bytes are
+// rejected. The 2-byte length field cannot represent longer values.
 func TestString_TooLong(t *testing.T) {
 	in := strings.Repeat("b", 65536)
 	if err := EncodeString(&bytes.Buffer{}, in); err == nil {
@@ -102,6 +118,8 @@ func TestString_TooLong(t *testing.T) {
 	}
 }
 
+// TestDecodeString_InvalidMarker sends a number marker (0x00) where a
+// string marker (0x02) is expected.
 func TestDecodeString_InvalidMarker(t *testing.T) {
 	// number marker (0x00) followed by dummy length bytes
 	data := []byte{0x00, 0x00, 0x00}
@@ -110,6 +128,8 @@ func TestDecodeString_InvalidMarker(t *testing.T) {
 	}
 }
 
+// TestDecodeString_ShortLength provides only 1 length byte where 2 are
+// needed (marker + one byte).
 func TestDecodeString_ShortLength(t *testing.T) {
 	// marker + only one length byte (should need 2)
 	data := []byte{0x02, 0x00}
@@ -118,6 +138,8 @@ func TestDecodeString_ShortLength(t *testing.T) {
 	}
 }
 
+// TestDecodeString_TruncatedBody claims length=4 but only supplies 2
+// body bytes – the decoder must not silently return partial data.
 func TestDecodeString_TruncatedBody(t *testing.T) {
 	// marker + length=0x0004 but only 2 bytes of body
 	data := []byte{0x02, 0x00, 0x04, 't', 'e'}

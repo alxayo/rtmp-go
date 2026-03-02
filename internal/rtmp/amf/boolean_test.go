@@ -1,3 +1,8 @@
+// boolean_test.go – tests for the AMF0 Boolean type.
+//
+// AMF0 booleans are encoded as: 1 marker byte (0x01) + 1 value byte
+// (0x00=false, 0x01=true). These tests use t.Run subtests grouped by
+// encode/decode for cleaner output.
 package amf
 
 import (
@@ -10,6 +15,7 @@ import (
 // Reuse goldenDir constant pattern from number_test.go (keep consistency even if duplicated).
 const goldenDirBoolean = "../../../tests/golden"
 
+// readGoldenBoolean loads a golden binary vector.
 func readGoldenBoolean(t *testing.T, name string) []byte {
 	t.Helper()
 	p := filepath.Join(goldenDirBoolean, name)
@@ -20,6 +26,9 @@ func readGoldenBoolean(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeBoolean_Golden uses t.Run subtests to check both true and false
+// against their golden binaries. t.Run creates named sub-tests that can be
+// run individually with `go test -run TestEncodeBoolean_Golden/true`.
 func TestEncodeBoolean_Golden(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -43,6 +52,7 @@ func TestEncodeBoolean_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeBoolean_Golden reads golden files and checks decoded values.
 func TestDecodeBoolean_Golden(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -66,6 +76,8 @@ func TestDecodeBoolean_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeBoolean_InvalidMarker sends a string marker where boolean is
+// expected. The decoder must reject it.
 func TestDecodeBoolean_InvalidMarker(t *testing.T) {
 	// Marker 0x02 is string, should fail.
 	data := []byte{0x02, 0x01}
@@ -74,6 +86,8 @@ func TestDecodeBoolean_InvalidMarker(t *testing.T) {
 	}
 }
 
+// TestDecodeBoolean_ShortRead_MarkerOnly provides only the marker byte with
+// no value byte – the decoder must not read beyond available data.
 func TestDecodeBoolean_ShortRead_MarkerOnly(t *testing.T) {
 	data := []byte{0x01} // missing value byte
 	if _, err := DecodeBoolean(bytes.NewReader(data)); err == nil {

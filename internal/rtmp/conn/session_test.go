@@ -1,7 +1,17 @@
+// session_test.go – tests for the RTMP Session state machine.
+//
+// A Session tracks the logical state of an RTMP connection:
+//   - Transaction IDs: monotonically increasing counter for command pairing.
+//   - Stream allocation: each createStream call allocates a new stream ID.
+//   - Session state: Connecting → Connected → StreamCreated → Publishing.
+//   - Stream key: "app/streamName" used for pub/sub routing.
 package conn
 
 import "testing"
 
+// TestSessionTransactionIDIncrement verifies that transaction IDs start at 1
+// and increment with each NextTransactionID call. RTMP uses transaction IDs
+// to match command requests with their responses.
 func TestSessionTransactionIDIncrement(t *testing.T) {
 	s := NewSession()
 	if got := s.TransactionID(); got != 1 {
@@ -17,6 +27,9 @@ func TestSessionTransactionIDIncrement(t *testing.T) {
 	}
 }
 
+// TestSessionAllocateStreamID verifies that stream IDs are allocated
+// sequentially (1, 2, 3...) and that the session state transitions from
+// Connected to StreamCreated after the first allocation.
 func TestSessionAllocateStreamID(t *testing.T) {
 	s := NewSession()
 	s.SetConnectInfo("live", "rtmp://example/live", "FMLE/3.0", 0)
@@ -36,6 +49,8 @@ func TestSessionAllocateStreamID(t *testing.T) {
 	}
 }
 
+// TestSessionSetStreamKey verifies the stream key is formed as "app/name"
+// and the session state transitions to Publishing.
 func TestSessionSetStreamKey(t *testing.T) {
 	s := NewSession()
 	s.SetConnectInfo("live", "rtmp://example/live", "FMLE/3.0", 0)

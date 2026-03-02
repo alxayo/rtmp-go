@@ -1,3 +1,12 @@
+// registry_test.go – tests for the stream registry (pub/sub map).
+//
+// The Registry maps stream keys ("app/name") to Stream objects. It
+// supports create-or-get semantics, publisher/subscriber management,
+// and deletion.
+//
+// Key Go concepts:
+//   - Interface compliance check: var _ media.Subscriber = (*stubSubscriber)(nil)
+//     ensures stubSubscriber implements the interface at compile time.
 package server
 
 import (
@@ -7,14 +16,17 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
 )
 
-// stubSubscriber implements media.Subscriber with a no‑op SendMessage.
+// stubSubscriber is a no-op Subscriber used to test subscriber counting.
 type stubSubscriber struct{}
 
 func (s *stubSubscriber) SendMessage(_ *chunk.Message) error { return nil }
 
-// Ensure stub implements the right interface expected (from media package we imported earlier).
+// Compile-time check: stubSubscriber must implement media.Subscriber.
 var _ media.Subscriber = (*stubSubscriber)(nil)
 
+// TestRegistryCreateAndGet verifies that CreateStream returns (stream, true)
+// for a new key, (stream, false) for a duplicate, and GetStream returns nil
+// for a missing key.
 func TestRegistryCreateAndGet(t *testing.T) {
 	r := NewRegistry()
 	if s, ok := r.CreateStream("app/stream1"); !ok || s == nil {
@@ -29,6 +41,8 @@ func TestRegistryCreateAndGet(t *testing.T) {
 	}
 }
 
+// TestRegistryPublisher verifies that only one publisher can be set per
+// stream – the second SetPublisher call must return an error.
 func TestRegistryPublisher(t *testing.T) {
 	r := NewRegistry()
 	s, _ := r.CreateStream("app/stream2")
@@ -40,6 +54,7 @@ func TestRegistryPublisher(t *testing.T) {
 	}
 }
 
+// TestRegistrySubscribers adds two subscribers and verifies the count.
 func TestRegistrySubscribers(t *testing.T) {
 	r := NewRegistry()
 	s, _ := r.CreateStream("app/stream3")
@@ -50,6 +65,8 @@ func TestRegistrySubscribers(t *testing.T) {
 	}
 }
 
+// TestRegistryDelete verifies stream deletion: first delete succeeds,
+// second returns false, and GetStream returns nil afterwards.
 func TestRegistryDelete(t *testing.T) {
 	r := NewRegistry()
 	r.CreateStream("app/stream4")

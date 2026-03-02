@@ -1,3 +1,24 @@
+// server_test.go – integration-style tests for the server-side RTMP handshake.
+//
+// ServerHandshake() runs the full handshake on a net.Conn:
+//
+//	Read C0+C1 → Send S0+S1+S2 → Read C2 → Complete
+//
+// These tests use net.Pipe() for in-process TCP simulation and exercise:
+//   - Happy path (valid C0+C1 + correct C2 echo).
+//   - Invalid version (0x06 instead of 0x03).
+//   - Truncated C1 (induces timeout).
+//   - Mismatched C2 (should warn but still succeed – real clients diverge).
+//   - Write failures (failingConn returning io.ErrClosedPipe).
+//   - Read deadline / write deadline errors.
+//   - Nil conn.
+//
+// Key Go concepts:
+//   - net.Pipe: creates a synchronous in-memory conn pair for testing.
+//   - io.ReadFull: reads exactly N bytes (used for 1536-byte packets).
+//   - Goroutines + error channels for concurrent client/server testing.
+//   - Custom conn wrappers (failingConn, deadlineFailConn, readBufConn)
+//     to inject specific failures.
 package handshake
 
 import (
@@ -11,7 +32,9 @@ import (
 	rerrors "github.com/alxayo/go-rtmp/internal/errors"
 )
 
-// loadGolden loads a golden binary file (helper for readability)
+// loadGolden loads a golden binary file from tests/golden/.
+// If the file doesn't exist and it's the handshake C0+C1 vector, it
+// auto-generates a minimal deterministic one to avoid flakiness.
 func loadGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	path := "../../../tests/golden/" + name
@@ -35,6 +58,9 @@ func loadGolden(t *testing.T, name string) []byte {
 	return nil
 }
 
+// TestServerHandshake_Valid runs a complete valid handshake over net.Pipe:
+// client sends C0+C1 from the golden file, reads back S0+S1+S2, verifies
+// S2 echoes C1, then sends C2 = S1. Server goroutine must complete without error.
 func TestServerHandshake_Valid(t *testing.T) {
 	// Golden file contains C0+C1 (1+1536 bytes)
 	c0c1 := loadGolden(t, "handshake_valid_c0c1.bin")
@@ -85,6 +111,8 @@ func TestServerHandshake_Valid(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_InvalidVersion sends version byte 0x06 (not the
+// required 0x03) and expects a protocol error from the server.
 func TestServerHandshake_InvalidVersion(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -113,6 +141,9 @@ func TestServerHandshake_InvalidVersion(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_TruncatedC1 sends only C0 + 500 bytes of C1 (instead
+// of the full 1536) and then stalls. The server's 5-second read deadline
+// should fire and return a timeout or protocol error.
 func TestServerHandshake_TruncatedC1(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -142,6 +173,9 @@ func TestServerHandshake_TruncatedC1(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_MismatchedC2Warn sends an all-zero C2 instead of
+// echoing S1. The server should log a warning but still complete –
+// real-world clients sometimes don't echo S1 exactly.
 func TestServerHandshake_MismatchedC2Warn(t *testing.T) {
 	// Valid path but send random (non-echo) C2 to exercise warning + success.
 	c0c1 := make([]byte, 1+PacketSize)
@@ -177,11 +211,14 @@ func TestServerHandshake_MismatchedC2Warn(t *testing.T) {
 	}
 }
 
-// failingConn wraps a net.Conn and forces Write to fail to exercise error path.
+// failingConn wraps a net.Conn and forces Write to fail immediately with
+// io.ErrClosedPipe – used to test the error path when sending S0+S1+S2.
 type failingConn struct{ net.Conn }
 
 func (f *failingConn) Write(p []byte) (int, error) { return 0, io.ErrClosedPipe }
 
+// TestServerHandshake_WriteFailure provides a valid C0+C1 but uses
+// failingConn so the server's Write(S0+S1+S2) fails.
 func TestServerHandshake_WriteFailure(t *testing.T) {
 	c0c1 := make([]byte, 1+PacketSize)
 	c0c1[0] = Version
@@ -210,6 +247,9 @@ func TestServerHandshake_WriteFailure(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_C2ReadError completes the handshake up through
+// S0+S1+S2 but closes the client conn before sending C2. The server's
+// read of C2 should fail with a protocol error.
 func TestServerHandshake_C2ReadError(t *testing.T) {
 	c0c1 := make([]byte, 1+PacketSize)
 	c0c1[0] = Version
@@ -244,13 +284,16 @@ func TestServerHandshake_C2ReadError(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_NilConn ensures that passing nil triggers a clean
+// error rather than a nil-pointer panic.
 func TestServerHandshake_NilConn(t *testing.T) {
 	if err := ServerHandshake(nil); err == nil {
 		t.Fatalf("expected error for nil conn")
 	}
 }
 
-// deadlineFailConn simulates failures for SetRead/SetWriteDeadline to cover error branches.
+// deadlineFailConn wraps net.Conn and can selectively fail SetReadDeadline
+// or SetWriteDeadline – used to test timeout-setup error branches.
 type deadlineFailConn struct {
 	net.Conn
 	failRead  bool
@@ -270,7 +313,9 @@ func (d *deadlineFailConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-// readBufConn provides predetermined bytes for Read.
+// readBufConn provides predetermined bytes for Read, bypassing the real
+// network. Useful for feeding valid C0+C1 data to trigger later failures
+// (e.g. write deadline error).
 type readBufConn struct {
 	*deadlineFailConn
 	buf []byte
@@ -285,6 +330,8 @@ func (r *readBufConn) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// TestServerHandshake_SetReadDeadlineError verifies that a failed
+// SetReadDeadline at the very start of the handshake returns an error.
 func TestServerHandshake_SetReadDeadlineError(t *testing.T) {
 	// Only triggers first setReadDeadline failure; no further ops.
 	serverConn, clientConn := net.Pipe()
@@ -296,6 +343,8 @@ func TestServerHandshake_SetReadDeadlineError(t *testing.T) {
 	}
 }
 
+// TestServerHandshake_SetWriteDeadlineError feeds valid C0+C1 via
+// readBufConn but makes SetWriteDeadline fail to cover that error branch.
 func TestServerHandshake_SetWriteDeadlineError(t *testing.T) {
 	// Provide valid C0+C1 bytes via custom reader, then fail on write deadline.
 	c0c1 := make([]byte, 1+PacketSize)

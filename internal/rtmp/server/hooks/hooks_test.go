@@ -1,4 +1,18 @@
-// Hook system tests
+// Package hooks – tests for the event hook system.
+//
+// The hook system lets the RTMP server execute external actions when
+// lifecycle events occur (connection accepted, stream published, etc.).
+// Three hook types exist:
+//   - ShellHook:   runs a shell command with event data as env vars.
+//   - StdioHook:   writes structured event data to a stdio stream.
+//   - WebhookHook: POSTs JSON-encoded event data to an HTTP endpoint.
+//
+// A HookManager coordinates registration, un-registration, and triggering
+// of hooks, fanning out events to all registered hooks of a given type.
+//
+// These tests verify the builder pattern for Event objects, the identity
+// and type metadata of each hook implementation, and the basic lifecycle
+// of the HookManager (register → trigger → unregister → close).
 package hooks
 
 import (
@@ -7,7 +21,16 @@ import (
 	"time"
 )
 
-// TestEvent tests basic event creation and functionality
+// TestEvent verifies the Event builder pattern used throughout the hook system.
+//
+// Events carry:
+//   - Type      – an enum-like string (e.g. EventConnectionAccept)
+//   - ConnID    – the connection that triggered the event
+//   - StreamKey – the stream key involved (e.g. "test/stream")
+//   - Data      – arbitrary key/value metadata (WithData adds entries)
+//   - String()  – human-readable form "<type>:<stream_key>"
+//
+// The test exercises every builder method and confirms the resulting fields.
 func TestEvent(t *testing.T) {
 	event := NewEvent(EventConnectionAccept).
 		WithConnID("test-conn").
@@ -42,7 +65,12 @@ func TestEvent(t *testing.T) {
 	}
 }
 
-// TestShellHook tests shell hook creation and basic functionality
+// TestShellHook verifies ShellHook identity and metadata.
+//
+// A ShellHook wraps a command path (e.g. "/bin/echo") that the manager
+// will execute when the subscribed event fires.  This test creates two
+// variants – the simple constructor (NewShellHook) and the explicit one
+// (NewShellHookWithCommand) – and checks their Type() and ID() accessors.
 func TestShellHook(t *testing.T) {
 	hook := NewShellHook("test-hook", "/bin/echo", 10*time.Second)
 
@@ -61,7 +89,17 @@ func TestShellHook(t *testing.T) {
 	}
 }
 
-// TestHookManager tests hook manager registration and basic functionality
+// TestHookManager exercises the full lifecycle of the manager:
+//
+//  1. Create a manager with DefaultHookConfig and a nil logger.
+//  2. Register a ShellHook for EventConnectionAccept.
+//  3. Verify GetStats() reports 1 total hook.
+//  4. UnregisterHook by event+ID → confirm success.
+//  5. TriggerEvent with no remaining hooks → must not panic.
+//  6. Close the manager to release resources.
+//
+// This is a smoke test; shell execution itself requires a real binary
+// and is therefore not exercised here.
 func TestHookManager(t *testing.T) {
 	config := DefaultHookConfig()
 	manager := NewHookManager(config, nil)
@@ -93,7 +131,11 @@ func TestHookManager(t *testing.T) {
 	manager.Close()
 }
 
-// TestStdioHook tests stdio hook creation and basic functionality
+// TestStdioHook verifies StdioHook constructor stores type, ID, and format.
+//
+// A StdioHook writes event data to a stdio stream (stdout/stderr) in
+// the given format ("json", "text", etc.).  This test only checks the
+// metadata; actual write behavior would be tested with a captured writer.
 func TestStdioHook(t *testing.T) {
 	hook := NewStdioHook("stdio-test", "json")
 
@@ -110,7 +152,16 @@ func TestStdioHook(t *testing.T) {
 	}
 }
 
-// TestWebhookHook tests webhook hook creation and basic functionality
+// TestWebhookHook verifies WebhookHook constructor and header management.
+//
+// A WebhookHook POSTs event data as JSON to the configured URL.
+// This test checks:
+//   - Type() returns "webhook".
+//   - ID()   returns the given identifier.
+//   - The URL is stored correctly.
+//   - AddHeader stores custom HTTP headers (e.g. Authorization).
+//
+// No real HTTP calls are made; this is a pure in-memory unit check.
 func TestWebhookHook(t *testing.T) {
 	hook := NewWebhookHook("webhook-test", "https://example.com/webhook", 30*time.Second)
 

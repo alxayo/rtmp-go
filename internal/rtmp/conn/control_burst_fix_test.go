@@ -1,3 +1,9 @@
+// control_burst_fix_test.go – regression test for a Wireshark "Malformed
+// Packet" bug where the server advertised a 4096-byte chunk size in the
+// control burst but was actually writing with the old 128-byte size.
+//
+// The fix: when the control burst sends SetChunkSize, it must also update
+// the connection's internal writeChunkSize field.
 package conn
 
 import (
@@ -8,7 +14,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// dialAndHandshakeLocal is a minimal helper for this test
+// dialAndHandshakeLocal is a minimal helper for this test (same pattern
+// as dialAndHandshake but avoids naming collision in the same package).
 func dialAndHandshakeLocal(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", addr)

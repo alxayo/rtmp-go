@@ -1,3 +1,12 @@
+// connect_response_test.go – tests for building the RTMP "_result" response
+// to a "connect" command.
+//
+// BuildConnectResponse encodes an AMF0 response with 4 values:
+//
+//	[0] "_result"       (string)  – response name
+//	[1] transactionID   (number)  – matches the request
+//	[2] properties      (object)  – server capabilities (fmsVer, capabilities, mode)
+//	[3] information     (object)  – status info (level, code, description)
 package rpc
 
 import (
@@ -6,6 +15,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 )
 
+// TestBuildConnectResponse_EncodesStructure builds a connect response and
+// decodes it back, verifying all 4 AMF values and key fields.
 func TestBuildConnectResponse_EncodesStructure(t *testing.T) {
 	msg, err := BuildConnectResponse(1.0, "Connection succeeded.")
 	if err != nil {
@@ -50,7 +61,8 @@ func TestBuildConnectResponse_EncodesStructure(t *testing.T) {
 	}
 }
 
-// ttFatal small helper kept local (not exported) for concise test errors.
+// ttFatal is a local test helper for concise failure messages with
+// accurate line numbers via t.Helper().
 func ttFatal(t *testing.T, format string, args ...interface{}) {
 	// Mirror style used in other tests: mark helper for accurate line numbers.
 	// (Using t.Helper inside this wrapper is fine.)

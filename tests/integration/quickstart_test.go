@@ -1,3 +1,27 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// quickstart_test.go is the top-level “quickstart” scenario from the
+// project documentation.  It specifies the full lifecycle:
+//
+//	Server startup → publisher connect → handshake → connect command →
+//	createStream → publish → send AVC/AAC sequence headers →
+//	server detects codecs → server logs expected milestones.
+//
+// The test is structured in five sequential phases:
+//  1. Server bootstrap (listener + goroutines)
+//  2. Mock publisher connection + handshake
+//  3. Command sequence (connect/createStream/publish)
+//  4. Media initiation (video + audio messages)
+//  5. Log assertions (expected milestone substrings)
+//
+// Currently all phases are TODO stubs and the test deliberately fails
+// via t.Fatalf to serve as a TDD driver.  As protocol layers are
+// implemented (handshake, chunking, control, AMF0, RPC, media), each
+// phase will be replaced with real code.
+//
+// Run with:
+//
+//	go test -run TestQuickstartScenario ./tests/integration -v
 package integration
 
 // Integration test scaffold for T012 (Quickstart end-to-end scenario).
@@ -43,8 +67,9 @@ import (
 	// "github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
-// expectedServerLogKeys enumerates the log message *kinds* (substrings) we must
-// eventually observe in order. Exact timestamps / IDs are variable.
+// expectedServerLogKeys lists the log substrings the fully-implemented
+// test will eventually assert appear (in order) in captured server logs.
+// Each entry maps to a protocol milestone from the quickstart scenario.
 var expectedServerLogKeys = []string{
 	"RTMP server starting", // startup
 	"Server listening",     // listening on :1935
@@ -57,8 +82,11 @@ var expectedServerLogKeys = []string{
 	// Future (playback client) entries could include: play command, Subscriber added
 }
 
-// TestQuickstartScenario encodes the single end-to-end scenario from quickstart.md.
-// It will evolve from a failing spec to a passing test as implementation arrives.
+// TestQuickstartScenario is the master end-to-end acceptance test.
+//
+// It fails immediately until the full protocol stack is wired up.
+// The t.Fatalf message lists all blocking task groups so developers
+// know exactly which components to implement first.
 func TestQuickstartScenario(t *testing.T) {
 	t.Helper()
 

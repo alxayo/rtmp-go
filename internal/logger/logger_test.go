@@ -1,3 +1,13 @@
+// Package logger – tests for the structured JSON logger.
+//
+// The logger wraps Go's log/slog package to produce machine-readable JSON
+// lines. Each test redirects output to a bytes.Buffer, writes log messages,
+// and then parses the JSON to verify fields and filtering.
+//
+// Key Go concepts demonstrated:
+//   - bytes.Buffer as an in-memory io.Writer for capturing log output.
+//   - encoding/json.Unmarshal for parsing JSON log lines into maps.
+//   - Helper functions with t.Helper() so failures report the caller’s line.
 package logger
 
 import (
@@ -8,7 +18,11 @@ import (
 	"testing"
 )
 
-// helper to read all JSON objects from buffer
+// decodeLines is a test helper that parses newline-delimited JSON from a
+// buffer into a slice of maps. Each log message is one JSON object per line.
+//
+// t.Helper() tells Go's test framework to report failures at the caller's
+// line number rather than inside this helper, making failures easier to find.
 func decodeLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	s := bufio.NewScanner(buf)
@@ -31,15 +45,21 @@ func decodeLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return out
 }
 
+// TestLogLevelFiltering verifies that log messages below the configured level
+// are suppressed. At INFO level, Debug() calls should produce zero output.
+// After switching to DEBUG level, Debug() calls should appear.
+//
+// This is important for production RTMP servers where debug logging would be
+// too noisy – operators set the level to "info" or "warn".
 func TestLogLevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
-	UseWriter(&buf)
+	UseWriter(&buf) // redirect log output to our buffer
 	if err := SetLevel("info"); err != nil {
 		t.Fatalf("SetLevel: %v", err)
 	}
 
-	Debug("debug message should be filtered")
-	Info("info message", "k", 1)
+	Debug("debug message should be filtered") // below INFO → dropped
+	Info("info message", "k", 1)              // at INFO → kept
 
 	records := decodeLines(t, &buf)
 	if len(records) != 1 {
@@ -49,7 +69,7 @@ func TestLogLevelFiltering(t *testing.T) {
 		t.Fatalf("unexpected message: %+v", records[0])
 	}
 
-	// Enable debug and ensure it appears
+	// Switch to DEBUG level and verify debug messages now appear.
 	buf.Reset()
 	if err := SetLevel("debug"); err != nil {
 		t.Fatalf("SetLevel: %v", err)
@@ -64,6 +84,13 @@ func TestLogLevelFiltering(t *testing.T) {
 	}
 }
 
+// TestFieldExtraction validates the structured logging enrichment helpers:
+// WithConn, WithStream, and WithMessageMeta. These add RTMP-specific context
+// fields (conn_id, peer_addr, stream_key, msg_type, csid, msid, timestamp)
+// to every log line, which is critical for debugging multi-connection servers.
+//
+// The test builds a fully-enriched logger and checks that all required fields
+// are present in the JSON output and have the correct values.
 func TestFieldExtraction(t *testing.T) {
 	var buf bytes.Buffer
 	UseWriter(&buf)
@@ -71,6 +98,7 @@ func TestFieldExtraction(t *testing.T) {
 		t.Fatalf("SetLevel: %v", err)
 	}
 
+	// Chain all enrichment helpers to build a logger with full RTMP context.
 	l := WithMessageMeta(WithStream(WithConn(Logger(), "c1", "127.0.0.1:1234"), "live/test"), "command", 4, 0, 12345)
 	l.Info("hello world", "extra", 42)
 
@@ -79,7 +107,7 @@ func TestFieldExtraction(t *testing.T) {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
 	rec := records[0]
-	// Validate required structured fields
+	// Verify every structured field is present in the JSON output.
 	required := []string{"conn_id", "peer_addr", "stream_key", "msg_type", "csid", "msid", "timestamp"}
 	for _, k := range required {
 		if _, ok := rec[k]; !ok {
@@ -97,6 +125,12 @@ func TestFieldExtraction(t *testing.T) {
 	}
 }
 
+// TestParseLevel is a table-driven test that verifies all supported log
+// level strings ("debug", "info", "warn", "error") are accepted by
+// SetLevel, and that an invalid string returns an error.
+//
+// The map iteration order in Go is random, which is fine here – each entry
+// is independent.
 func TestParseLevel(t *testing.T) {
 	cases := map[string]string{
 		"debug": "DEBUG",
@@ -112,6 +146,7 @@ func TestParseLevel(t *testing.T) {
 			t.Fatalf("expected %s got %s", expect, got)
 		}
 	}
+	// Invalid level must return an error, not silently succeed.
 	if err := SetLevel("bogus"); err == nil {
 		t.Fatalf("expected error for invalid level")
 	}

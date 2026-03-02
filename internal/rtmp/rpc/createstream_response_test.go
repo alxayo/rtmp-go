@@ -1,3 +1,8 @@
+// createstream_response_test.go – tests for building the "_result" response
+// to "createStream".
+//
+// The response contains: ["_result", transactionID, null, allocatedStreamID]
+// StreamIDAllocator assigns sequential IDs starting at 1.
 package rpc
 
 import (
@@ -6,6 +11,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 )
 
+// TestBuildCreateStreamResponse_EncodesStructure builds a response, decodes
+// it, and verifies the 4 AMF values including the allocated stream ID.
 func TestBuildCreateStreamResponse_EncodesStructure(t *testing.T) {
 	alloc := NewStreamIDAllocator()
 	msg, sid, err := BuildCreateStreamResponse(5.0, alloc)
@@ -40,6 +47,8 @@ func TestBuildCreateStreamResponse_EncodesStructure(t *testing.T) {
 	}
 }
 
+// TestBuildCreateStreamResponse_SequentialIDs calls the allocator twice
+// and verifies IDs are assigned sequentially (1, 2).
 func TestBuildCreateStreamResponse_SequentialIDs(t *testing.T) {
 	alloc := NewStreamIDAllocator()
 	// First allocation

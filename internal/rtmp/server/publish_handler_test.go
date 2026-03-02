@@ -1,3 +1,14 @@
+// publish_handler_test.go – tests for server-side publish handling.
+//
+// When a client sends a "publish" command, HandlePublish:
+//  1. Parses the command to extract the stream key.
+//  2. Creates the stream in the registry (or errors on duplicate).
+//  3. Sets the publisher on the stream.
+//  4. Sends an "onStatus" NetStream.Publish.Start response.
+//
+// Key Go concepts:
+//   - stubConn: captures the last message sent, simulating a real connection.
+//   - AMF decode of the onStatus payload to verify the response code.
 package server
 
 import (
@@ -8,18 +19,21 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
-// stubConn captures the last message sent; it mimics the subset of the
-// connection we need (SendMessage). SendMessage always succeeds.
+// stubConn captures the last message sent via SendMessage for assertions.
 type stubConn struct{ last *chunk.Message }
 
 func (s *stubConn) SendMessage(m *chunk.Message) error { s.last = m; return nil }
 
-// buildPublishMessage builds a minimal AMF0 publish command message for tests.
+// buildPublishMessage builds a minimal AMF0 "publish" command message
+// for the given stream name.
 func buildPublishMessage(streamName string) *chunk.Message {
 	payload, _ := amf.EncodeAll("publish", float64(0), nil, streamName, "live")
 	return &chunk.Message{TypeID: rpc.CommandMessageAMF0TypeIDForTest(), Payload: payload, MessageLength: uint32(len(payload)), MessageStreamID: 1}
 }
 
+// TestHandlePublishSuccess publishes a stream and verifies:
+// the stream is registered, the publisher is set, and the onStatus
+// response contains NetStream.Publish.Start.
 func TestHandlePublishSuccess(t *testing.T) {
 	reg := NewRegistry()
 	sc := &stubConn{}
@@ -53,6 +67,8 @@ func TestHandlePublishSuccess(t *testing.T) {
 	}
 }
 
+// TestHandlePublishDuplicate attempts to publish to the same stream key
+// twice and expects an error on the second attempt.
 func TestHandlePublishDuplicate(t *testing.T) {
 	reg := NewRegistry()
 	first := &stubConn{}
@@ -66,6 +82,9 @@ func TestHandlePublishDuplicate(t *testing.T) {
 	}
 }
 
+// TestPublisherDisconnected verifies that when a publisher disconnects,
+// the stream's publisher is cleared (set to nil) but the stream itself
+// remains in the registry.
 func TestPublisherDisconnected(t *testing.T) {
 	reg := NewRegistry()
 	sc := &stubConn{}

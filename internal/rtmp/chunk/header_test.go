@@ -1,3 +1,25 @@
+// header_test.go – tests for RTMP chunk header parsing and encoding.
+//
+// RTMP messages travel over TCP as "chunks". Each chunk starts with a header
+// that describes the message. The header format (FMT 0-3) determines how much
+// metadata is included:
+//
+//	FMT 0 – Full 12 bytes: timestamp, length, type ID, stream ID (first msg)
+//	FMT 1 – 8 bytes: delta timestamp, length, type ID (same stream)
+//	FMT 2 – 4 bytes: delta timestamp only (same length/type/stream)
+//	FMT 3 – 1 byte:  continuation chunk, inherits everything from previous
+//
+// When the timestamp ≥ 0xFFFFFF, an additional 4-byte "extended timestamp"
+// field appears after the header.
+//
+// CSID (Chunk Stream ID) encoding uses 1, 2, or 3 bytes in the basic header:
+//
+//	1-byte: CSIDs 2–63 (6 bits in the first byte)
+//	2-byte: CSIDs 64–319 (first byte CSID field = 0, second byte = CSID-64)
+//	3-byte: CSIDs 64–65599 (first byte CSID field = 1, bytes 2-3 = CSID-64)
+//
+// These tests use golden binary vectors from tests/golden/ to ensure exact
+// wire-format fidelity.
 package chunk
 
 import (
@@ -9,7 +31,9 @@ import (
 	"testing"
 )
 
-// helper to load golden bytes
+// loadGolden reads a golden binary file that contains a known-good RTMP
+// chunk byte sequence. Golden files are generated once (by
+// tests/golden/gen_*.go) and treated as reference truth.
 func loadGolden(t *testing.T, name string) []byte {
 	t.Helper()
 	// internal/rtmp/chunk -> ../../../tests/golden
@@ -21,6 +45,9 @@ func loadGolden(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestParseChunkHeader_GoldenFMT0 parses a FMT 0 header (full 12 bytes) for
+// an audio message. Checks every field: FMT, CSID, absolute timestamp,
+// message length, type ID (8=audio), stream ID, no extended timestamp.
 func TestParseChunkHeader_GoldenFMT0(t *testing.T) {
 	data := loadGolden(t, "chunk_fmt0_audio.bin")
 	r := bytes.NewReader(data)
@@ -36,6 +63,9 @@ func TestParseChunkHeader_GoldenFMT0(t *testing.T) {
 	}
 }
 
+// TestParseChunkHeader_GoldenFMT1 parses a FMT 1 header (8 bytes) for a
+// video delta message. FMT 1 carries a delta timestamp (IsDelta=true) plus
+// new message length and type ID, but no stream ID (inherited).
 func TestParseChunkHeader_GoldenFMT1(t *testing.T) {
 	data := loadGolden(t, "chunk_fmt1_video.bin")
 	r := bytes.NewReader(data)
@@ -51,6 +81,9 @@ func TestParseChunkHeader_GoldenFMT1(t *testing.T) {
 	}
 }
 
+// TestParseChunkHeader_GoldenFMT2 parses a FMT 2 header (4 bytes). FMT 2
+// carries only a delta timestamp; length, type, and stream ID are inherited
+// from a prior header on the same CSID (passed as the `base` argument).
 func TestParseChunkHeader_GoldenFMT2(t *testing.T) {
 	// Need prior state to inherit length/type/streamID from earlier FMT0 on CSID 4
 	base := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 64, MessageTypeID: 8, MessageStreamID: 1}
@@ -68,6 +101,9 @@ func TestParseChunkHeader_GoldenFMT2(t *testing.T) {
 	}
 }
 
+// TestParseChunkHeader_GoldenFMT3 parses a FMT 3 header (1 byte only). This
+// is a "continuation" chunk used when a message is larger than the chunk size
+// and must be split. Everything is inherited from the previous header.
 func TestParseChunkHeader_GoldenFMT3(t *testing.T) {
 	// Prior header for CSID 6 (fragmented video) - typical continuation
 	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 2000, MessageLength: 384, MessageTypeID: 9, MessageStreamID: 1}
@@ -85,6 +121,9 @@ func TestParseChunkHeader_GoldenFMT3(t *testing.T) {
 	}
 }
 
+// TestParseChunkHeader_ExtendedTimestamp verifies the extended timestamp
+// path. When the 3-byte timestamp field is 0xFFFFFF, an extra 4-byte field
+// follows the header containing the real timestamp.
 func TestParseChunkHeader_ExtendedTimestamp(t *testing.T) {
 	data := loadGolden(t, "chunk_extended_timestamp.bin")
 	r := bytes.NewReader(data)
@@ -100,6 +139,16 @@ func TestParseChunkHeader_ExtendedTimestamp(t *testing.T) {
 	}
 }
 
+// TestParseChunkHeader_InterleavedSequence simulates interleaved audio/video
+// chunks as they appear in a real RTMP stream:
+//
+//	Chunk1: Audio FMT0 (first 128 bytes of 256-byte audio message)
+//	Chunk2: Video FMT0 (first 128 bytes of 256-byte video message)
+//	Chunk3: Audio FMT3 continuation (remaining 128 bytes of audio)
+//	Chunk4: Video FMT3 continuation (remaining 128 bytes of video)
+//
+// This is the most realistic test – real RTMP streams interleave audio and
+// video chunks to minimize latency.
 func TestParseChunkHeader_InterleavedSequence(t *testing.T) {
 	data := loadGolden(t, "chunk_interleaved.bin")
 	r := bytes.NewReader(data)
@@ -147,7 +196,8 @@ func TestParseChunkHeader_InterleavedSequence(t *testing.T) {
 	}
 }
 
-// Error cases: truncated basic / message / extended timestamp
+// TestParseChunkHeader_Errors exercises error paths: truncated data, missing
+// bytes, and FMT 3 without prior state.
 func TestParseChunkHeader_Errors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -169,7 +219,8 @@ func TestParseChunkHeader_Errors(t *testing.T) {
 	}
 }
 
-// Coverage sanity: ensure >95% by invoking parseBasicHeader through public path with different CSID encodings.
+// TestParseChunkHeader_CSIDEncodings exercises the 3 CSID encoding sizes
+// to ensure the basic header parser handles each form.
 func TestParseChunkHeader_CSIDEncodings(t *testing.T) {
 	// 1-byte csid=63 (fmt=0)
 	one := []byte{(0 << 6) | 63}

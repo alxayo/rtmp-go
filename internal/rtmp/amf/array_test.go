@@ -1,3 +1,13 @@
+// array_test.go – tests for the AMF0 Strict Array type.
+//
+// AMF0 Strict Arrays are encoded as: marker 0x0A + 4-byte big-endian count +
+// that many AMF0 values back-to-back. Unlike ECMA Arrays, strict arrays
+// have no string keys.
+//
+// Key concepts demonstrated:
+//   - reflect.DeepEqual for deep comparison of interface{} slices
+//     containing nested maps.
+//   - roundTripStrictArray helper (defined in array.go) for concise tests.
 package amf
 
 import (
@@ -8,7 +18,8 @@ import (
 	"testing"
 )
 
-// Reuse goldenDir constant from number_test.go.
+// readGoldenArray loads a golden binary vector for array tests.
+// Reuses the goldenDir constant from number_test.go.
 func readGoldenArray(t *testing.T, name string) []byte {
 	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
@@ -18,6 +29,8 @@ func readGoldenArray(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeStrictArray_Golden encodes [1.0, 2.0, 3.0] and checks against
+// the golden file.
 func TestEncodeStrictArray_Golden(t *testing.T) {
 	arr := []interface{}{1.0, 2.0, 3.0}
 	var buf bytes.Buffer
@@ -30,6 +43,8 @@ func TestEncodeStrictArray_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeStrictArray_Golden reads the golden binary for [1.0, 2.0, 3.0]
+// and checks decoded values.
 func TestDecodeStrictArray_Golden(t *testing.T) {
 	golden := readGoldenArray(t, "amf0_array_strict.bin")
 	v, err := DecodeStrictArray(bytes.NewReader(golden))
@@ -47,6 +62,8 @@ func TestDecodeStrictArray_Golden(t *testing.T) {
 	}
 }
 
+// TestStrictArray_Nested_RoundTrip verifies arrays containing other arrays
+// (e.g. [[1, 2], ["a", null]]) survive encode→decode.
 func TestStrictArray_Nested_RoundTrip(t *testing.T) {
 	in := []interface{}{[]interface{}{1.0, 2.0}, []interface{}{"a", nil}}
 	var buf bytes.Buffer
@@ -71,6 +88,8 @@ func TestStrictArray_Nested_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestDecodeStrictArray_InvalidMarker sends a string marker where an array
+// marker (0x0A) is expected.
 func TestDecodeStrictArray_InvalidMarker(t *testing.T) {
 	// 0x02 is string marker – should fail when expecting array marker.
 	bad := []byte{0x02, 0x00, 0x00}
@@ -79,6 +98,8 @@ func TestDecodeStrictArray_InvalidMarker(t *testing.T) {
 	}
 }
 
+// TestDecodeStrictArray_TruncatedElement declares count=1 but provides
+// insufficient bytes for a number element.
 func TestDecodeStrictArray_TruncatedElement(t *testing.T) {
 	// Declares 1 element but only provides marker 0x00 (number) without 8 bytes.
 	bad := []byte{0x0A, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00}
@@ -87,6 +108,8 @@ func TestDecodeStrictArray_TruncatedElement(t *testing.T) {
 	}
 }
 
+// TestStrictArray_RoundTrip_VariedTypes encodes an array with every supported
+// AMF0 type (number, bool, string, null, object) and checks all survive.
 func TestStrictArray_RoundTrip_VariedTypes(t *testing.T) {
 	in := []interface{}{1.0, true, "x", nil, map[string]interface{}{"k": 2.0}}
 	out, err := roundTripStrictArray(in)

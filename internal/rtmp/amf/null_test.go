@@ -1,3 +1,7 @@
+// null_test.go – tests for the AMF0 Null type.
+//
+// AMF0 Null is the simplest type: just a single marker byte 0x05.
+// Null is used in RTMP commands where optional parameters are omitted.
 package amf
 
 import (
@@ -9,6 +13,7 @@ import (
 
 const goldenDirNull = "../../../tests/golden"
 
+// readGoldenNull loads the golden file for null tests.
 func readGoldenNull(t *testing.T, name string) []byte {
 	t.Helper()
 	p := filepath.Join(goldenDirNull, name)
@@ -19,6 +24,7 @@ func readGoldenNull(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeNull_Golden verifies that EncodeNull writes exactly one byte: 0x05.
 func TestEncodeNull_Golden(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeNull(&buf); err != nil {
@@ -30,6 +36,8 @@ func TestEncodeNull_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeNull_Golden decodes the golden null binary and asserts that the
+// returned Go value is nil (the Go equivalent of AMF0 Null).
 func TestDecodeNull_Golden(t *testing.T) {
 	golden := readGoldenNull(t, "amf0_null.bin")
 	v, err := DecodeNull(bytes.NewReader(golden))
@@ -41,6 +49,7 @@ func TestDecodeNull_Golden(t *testing.T) {
 	}
 }
 
+// TestDecodeNull_InvalidMarker sends a string marker where null is expected.
 func TestDecodeNull_InvalidMarker(t *testing.T) {
 	// Use string marker 0x02 to trigger mismatch.
 	data := []byte{0x02}
@@ -49,6 +58,7 @@ func TestDecodeNull_InvalidMarker(t *testing.T) {
 	}
 }
 
+// TestDecodeNull_ShortRead provides an empty reader – zero bytes available.
 func TestDecodeNull_ShortRead(t *testing.T) {
 	data := []byte{} // empty -> short read
 	if v, err := DecodeNull(bytes.NewReader(data)); err == nil || v != nil {

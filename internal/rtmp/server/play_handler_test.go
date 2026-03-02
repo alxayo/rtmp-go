@@ -1,3 +1,14 @@
+// play_handler_test.go – tests for server-side play (subscribe) handling.
+//
+// When a client sends a "play" command, HandlePlay:
+//  1. Parses the command to extract the stream key.
+//  2. Looks up the stream in the registry.
+//  3. If found: sends StreamBegin control + onStatus Play.Start, adds subscriber.
+//  4. If not found: sends onStatus Play.StreamNotFound.
+//
+// Key Go concepts:
+//   - capturingConn: records all sent messages in a slice for ordering assertions.
+//   - stubPublisher: minimal type to mark a stream as having a publisher.
 package server
 
 import (
@@ -8,20 +19,22 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
-// capturingConn collects all sent messages for ordering assertions.
+// capturingConn records every message sent via SendMessage.
 type capturingConn struct{ sent []*chunk.Message }
 
 func (c *capturingConn) SendMessage(m *chunk.Message) error { c.sent = append(c.sent, m); return nil }
 
-// buildPlayMessage constructs a minimal AMF0 play command message.
+// buildPlayMessage constructs a minimal AMF0 "play" command message.
 func buildPlayMessage(streamName string) *chunk.Message {
 	payload, _ := amf.EncodeAll("play", float64(0), nil, streamName)
 	return &chunk.Message{TypeID: rpc.CommandMessageAMF0TypeIDForTest(), Payload: payload, MessageLength: uint32(len(payload)), MessageStreamID: 1}
 }
 
-// stubPublisher is a placeholder used to mark a stream as published.
+// stubPublisher is a minimal placeholder to mark a stream as published.
 type stubPublisher struct{}
 
+// TestHandlePlaySuccess creates a stream with a publisher, then plays it.
+// Expects 2 messages sent (StreamBegin + onStatus Play.Start) and 1 subscriber.
 func TestHandlePlaySuccess(t *testing.T) {
 	reg := NewRegistry()
 	// Prepare an existing stream with a publisher.
@@ -54,6 +67,8 @@ func TestHandlePlaySuccess(t *testing.T) {
 	}
 }
 
+// TestHandlePlayStreamNotFound plays a stream that doesn't exist.
+// Expects 1 message: onStatus NetStream.Play.StreamNotFound.
 func TestHandlePlayStreamNotFound(t *testing.T) {
 	reg := NewRegistry() // no streams created
 	conn := &capturingConn{}
@@ -72,6 +87,8 @@ func TestHandlePlayStreamNotFound(t *testing.T) {
 	}
 }
 
+// TestSubscriberDisconnected verifies that when a subscriber disconnects,
+// it is removed from the stream's subscriber list.
 func TestSubscriberDisconnected(t *testing.T) {
 	reg := NewRegistry()
 	s, _ := reg.CreateStream("app/streamX")

@@ -97,6 +97,12 @@ func (c *Connection) SendMessage(msg *chunk.Message) error {
 	if msg == nil {
 		return errors.New("nil message")
 	}
+	// Fast-path: return immediately if context is already cancelled (connection closed).
+	select {
+	case <-c.ctx.Done():
+		return context.Canceled
+	default:
+	}
 	// Derive short timeout context.
 	deadline := time.NewTimer(sendTimeout)
 	defer deadline.Stop()

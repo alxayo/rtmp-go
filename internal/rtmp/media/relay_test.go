@@ -1,3 +1,13 @@
+// relay_test.go – tests for the media relay (pub/sub broadcast).
+//
+// A Stream receives messages from a publisher and fans them out to all
+// subscribed connections. The relay also runs codec detection on every
+// message so new subscribers can receive codec info.
+//
+// Key Go concepts:
+//   - Interface-based fakes: fakeSubscriber implements a minimal Send
+//     interface with an optional failure mode for backpressure testing.
+//   - Slice-based message capture instead of channels (simpler for sync).
 package media
 
 import (
@@ -6,6 +16,9 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
+// fakeSubscriber records messages it receives. When failSend is true,
+// TrySendMessage returns false, simulating a slow consumer that causes
+// message drops.
 type fakeSubscriber struct {
 	received []*chunk.Message
 	failSend bool
@@ -28,11 +41,13 @@ func (f *fakeSubscriber) TrySendMessage(m *chunk.Message) bool {
 	return true
 }
 
-// helper to create a media message (audio=8, video=9)
+// mkMsg creates a minimal chunk.Message for relay tests.
 func mkMsg(typeID uint8, payload []byte) *chunk.Message {
 	return &chunk.Message{TypeID: typeID, Payload: payload, MessageLength: uint32(len(payload))}
 }
 
+// TestRelaySingleSubscriber verifies that a single subscriber receives
+// every broadcasted message and that codec detection stores the audio codec.
 func TestRelaySingleSubscriber(t *testing.T) {
 	stream := NewStream("app/solo")
 	sub := &fakeSubscriber{}
@@ -49,6 +64,8 @@ func TestRelaySingleSubscriber(t *testing.T) {
 	}
 }
 
+// TestRelayMultipleSubscribers broadcasts one video keyframe to 3
+// subscribers and verifies all 3 receive it and the video codec is set.
 func TestRelayMultipleSubscribers(t *testing.T) {
 	stream := NewStream("app/multi")
 	s1 := &fakeSubscriber{}
@@ -71,6 +88,9 @@ func TestRelayMultipleSubscribers(t *testing.T) {
 	}
 }
 
+// TestRelaySlowSubscriberDropped verifies backpressure: when a subscriber's
+// TrySendMessage returns false, the message is dropped for that subscriber
+// but delivered to fast subscribers.
 func TestRelaySlowSubscriberDropped(t *testing.T) {
 	stream := NewStream("app/backpressure")
 	slow := &fakeSubscriber{failSend: true}

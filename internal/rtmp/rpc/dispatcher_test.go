@@ -1,3 +1,13 @@
+// dispatcher_test.go – tests for the RTMP command dispatcher.
+//
+// The Dispatcher routes incoming AMF0 command messages to registered
+// handler callbacks based on the command name (connect, createStream,
+// publish, play). Unknown commands are logged and ignored.
+//
+// Key Go concepts:
+//   - Closures as callbacks: each On* handler captures test state.
+//   - Struct literal with bool fields to track which handlers were invoked.
+//   - Logger output capture via bytes.Buffer for verifying log messages.
 package rpc
 
 import (
@@ -10,7 +20,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// helper to build a command message with AMF0 payload
+// buildCmd is a helper that AMF0-encodes a list of values into a
+// *chunk.Message with TypeID 20 (AMF0 command).
 func buildCmd(t *testing.T, values ...interface{}) *chunk.Message {
 	t.Helper()
 	p, err := amf.EncodeAll(values...)
@@ -20,6 +31,9 @@ func buildCmd(t *testing.T, values ...interface{}) *chunk.Message {
 	return &chunk.Message{TypeID: commandMessageAMF0TypeID, Payload: p, MessageLength: uint32(len(p)), MessageStreamID: 0}
 }
 
+// TestDispatcher_DispatchKnownCommands registers handlers for all four
+// command types, dispatches them in sequence, and verifies every handler
+// was called with correct values.
 func TestDispatcher_DispatchKnownCommands(t *testing.T) {
 	var got struct {
 		connect bool
@@ -81,6 +95,9 @@ func TestDispatcher_DispatchKnownCommands(t *testing.T) {
 	}
 }
 
+// TestDispatcher_UnknownCommand dispatches a command name the dispatcher
+// doesn't recognize ("someWeirdCommand") and verifies it doesn't error
+// but does log a warning containing "unknown command".
 func TestDispatcher_UnknownCommand(t *testing.T) {
 	buf := &bytes.Buffer{}
 	logger.UseWriter(buf)
@@ -94,6 +111,8 @@ func TestDispatcher_UnknownCommand(t *testing.T) {
 	}
 }
 
+// TestDispatcher_NoHandlerRegistered tests that dispatching a known
+// command (publish) without registering its handler returns an error.
 func TestDispatcher_NoHandlerRegistered(t *testing.T) {
 	d := NewDispatcher(nil)
 	// Only register connect handler to show missing publish handler errors.

@@ -1,3 +1,32 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// chunking_test.go validates the RTMP chunk reader against realistic
+// wire-format byte sequences produced by a local helper (encodeSingleMessage).
+//
+// Five scenarios are covered:
+//  1. single_chunk_message     – 4-byte Set-Chunk-Size control message
+//     that fits in one chunk (< 128 bytes).
+//  2. multi_chunk_message      – 384-byte video payload split across
+//     3 chunks (128 + 128 + 128). The reader
+//     must reassemble into one Message.
+//  3. interleaved_streams      – audio (CSID 4) and video (CSID 6)
+//     chunks interleaved in the byte stream;
+//     reader must track per-CSID partial state.
+//  4. extended_timestamp       – timestamp >= 0xFFFFFF triggers the
+//     4-byte extended timestamp field after
+//     the basic+message header.
+//  5. set_chunk_size_then_large_message – demonstrates dynamic chunk
+//     size change: first read a Set-Chunk-
+//     Size control message, call
+//     r.SetChunkSize(4096), then read an
+//     8192-byte video message chunked at
+//     the new size.
+//
+// Key Go patterns demonstrated:
+//   - bytes.NewReader feeds encoded bytes to chunk.NewReader.
+//   - Subtests (t.Run) isolate scenarios so failures are independent.
+//   - encodeSingleMessage is a test-only helper that manually
+//     constructs FMT 0 / FMT 3 chunk bytes.
 package integration
 
 import (
@@ -11,8 +40,16 @@ import (
 
 // Helpers (local to integration test) ---------------------------------------------------------
 
-// encodeSingleMessage produces raw chunk bytes for a message using only FMT=0 and FMT=3 rules.
-// It intentionally duplicates logic that future writer implementation (T018/T021) will replace.
+// encodeSingleMessage produces raw RTMP chunk bytes for a single message.
+//
+// It implements the bare minimum of the chunk protocol:
+//   - First chunk uses FMT 0 (full 12-byte message header).
+//   - Continuation chunks use FMT 3 (1-byte header, CSID only).
+//   - Extended timestamp (4 extra bytes) when timestamp >= 0xFFFFFF.
+//   - MSID is little-endian per the RTMP spec.
+//
+// This duplicates writer logic intentionally so the reader can be tested
+// independently.  The real chunk.Writer will replace this in production.
 func encodeSingleMessage(msg *chunk.Message, chunkSize uint32) []byte {
 	var out bytes.Buffer
 
@@ -70,7 +107,10 @@ func encodeSingleMessage(msg *chunk.Message, chunkSize uint32) []byte {
 	return out.Bytes()
 }
 
-// readAllMessages attempts to read n messages via the chunk.Reader, returning those that succeed.
+// readAllMessages attempts to read n complete messages from a chunk.Reader.
+// It returns whatever messages were successfully decoded plus any error
+// that stopped the read loop.  This helper is used by tests that need
+// to drain a specific number of messages from the reader.
 func readAllMessages(t *testing.T, r *chunk.Reader, n int) ([]*chunk.Message, []error) {
 	msgs := make([]*chunk.Message, 0, n)
 	errs := make([]error, 0)
@@ -85,7 +125,12 @@ func readAllMessages(t *testing.T, r *chunk.Reader, n int) ([]*chunk.Message, []
 	return msgs, errs
 }
 
-// TestChunkingFlow implements integration test scenarios for T010.
+// TestChunkingFlow drives the RTMP chunk reader through five realistic
+// scenarios (see package doc).  Each sub-test creates a bytes.Reader
+// from encodeSingleMessage output and feeds it to chunk.NewReader.
+//
+// The test doubles as a TDD specification: scenarios are expected to
+// fail until the chunk reader implementation is complete.
 func TestChunkingFlow(t *testing.T) {
 	// Scenario 1: Single chunk message (Set Chunk Size control message)
 	single := &chunk.Message{

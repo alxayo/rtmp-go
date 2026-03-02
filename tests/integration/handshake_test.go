@@ -1,3 +1,25 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// handshake_test.go covers the full RTMP v3 handshake over an in-memory
+// net.Pipe (no real TCP sockets needed).  Three scenarios are tested:
+//
+//  1. "valid handshake" – happy path: server and client run their
+//     handshake FSMs concurrently; both must complete without error.
+//
+//  2. "invalid version" – client sends version byte 0x06 instead of
+//     the required 0x03.  The server must detect the protocol violation
+//     and return an rtmperr.IsProtocolError-matching error.
+//
+//  3. "truncated C1 timeout" – client sends only 500 of the 1536-byte
+//     C1 payload, then stalls.  The server’s 5-second deadline must
+//     fire, returning a timeout or protocol error before the 7-second
+//     test cap.
+//
+// Key Go testing patterns demonstrated:
+//   - net.Pipe()                – synchronous in-memory connection pair.
+//   - Buffered error channels   – goroutine-safe error propagation.
+//   - select + time.After()     – deadlines that prevent hanging tests.
+//   - rtmperr.IsProtocolError / IsTimeout – error classification helpers.
 package integration
 
 import (
@@ -10,9 +32,12 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// Integration test for RTMP simple handshake (T009).
-// This is a high-level test exercising both server and client handshake logic over an in-memory pipe.
-// Current status: handshake package only has stubs; test will fail (TDD) until implementation.
+// TestHandshakeIntegration exercises the RTMP handshake layer end-to-end.
+//
+// It uses net.Pipe() to create a pair of connected streams. The server
+// goroutine calls handshake.ServerHandshake while the test goroutine
+// (main) drives the client side. Three sub-tests cover the happy path,
+// an illegal version byte, and a truncated (timed-out) C1.
 func TestHandshakeIntegration(t *testing.T) {
 	t.Run("valid handshake", func(t *testing.T) {
 		serverConn, clientConn := net.Pipe()

@@ -1,14 +1,30 @@
+// state_test.go – tests for ChunkStreamState, which tracks reassembly state
+// for a single Chunk Stream ID (CSID).
+//
+// ChunkStreamState accumulates payload bytes across multiple chunks until
+// the full message is complete. It applies FMT-specific header semantics:
+//
+//	FMT 0: Sets all fields (absolute timestamp).
+//	FMT 1: Adds delta timestamp, updates length/type, inherits stream ID.
+//	FMT 2: Adds delta timestamp only, inherits all other fields.
+//	FMT 3: Inherits everything (continuation chunk).
+//
+// Key concepts demonstrated:
+//   - t.Run subtests for organized test output and selective execution.
+//   - Error-path testing (FMT 3 without prior state, payload overflow).
 package chunk
 
 import (
 	"testing"
 )
 
-// helper to build headers quickly
+// h is a compact helper to build ChunkHeader literals for readable tests.
 func h(fmt uint8, csid uint32, ts uint32, ml uint32, mt uint8, msid uint32) *ChunkHeader {
 	return &ChunkHeader{FMT: fmt, CSID: csid, Timestamp: ts, MessageLength: ml, MessageTypeID: mt, MessageStreamID: msid}
 }
 
+// TestChunkStreamState_Flow exercises the complete state machine through
+// subtests covering every FMT type and error condition.
 func TestChunkStreamState_Flow(t *testing.T) {
 	t.Run("fmt0_single_chunk_complete", func(t *testing.T) {
 		var s ChunkStreamState

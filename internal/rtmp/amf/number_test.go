@@ -1,3 +1,15 @@
+// number_test.go – tests for the AMF0 Number type (IEEE 754 float64).
+//
+// AMF0 encodes numbers as: 1 marker byte (0x00) + 8 bytes big-endian double.
+// These tests use golden binary vectors stored in tests/golden/ to ensure
+// exact wire-format fidelity.
+//
+// Key concepts demonstrated:
+//   - Golden file testing – canonical binary files generated once and
+//     compared byte-for-byte against encoder output.
+//   - Edge-case coverage – NaN, ±Inf, negative numbers, short buffers.
+//   - Benchmarks – BenchmarkXxx functions for tracking encode/decode
+//     throughput (run via `go test -bench .`).
 package amf
 
 import (
@@ -10,6 +22,9 @@ import (
 
 const goldenDir = "../../../tests/golden" // relative to this test file directory
 
+// readGolden loads a golden binary vector from tests/golden/.
+// It panics on failure because missing golden files indicate a broken
+// test environment, not a test failure.
 func readGolden(t *testing.T, name string) []byte {
 	// Using filepath.Join for Windows compatibility.
 	p := filepath.Join(goldenDir, name)
@@ -21,6 +36,8 @@ func readGolden(t *testing.T, name string) []byte {
 	return b
 }
 
+// TestEncodeNumber_Golden_0 encodes 0.0 and checks the result byte-for-byte
+// against the golden file amf0_number_0.bin (should be: 0x00 + 8 zero bytes).
 func TestEncodeNumber_Golden_0(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeNumber(&buf, 0.0); err != nil {
@@ -32,6 +49,8 @@ func TestEncodeNumber_Golden_0(t *testing.T) {
 	}
 }
 
+// TestEncodeNumber_Golden_1_5 encodes 1.5 and verifies against the golden file.
+// 1.5 in IEEE 754 double is 0x3FF8000000000000.
 func TestEncodeNumber_Golden_1_5(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeNumber(&buf, 1.5); err != nil {
@@ -43,6 +62,8 @@ func TestEncodeNumber_Golden_1_5(t *testing.T) {
 	}
 }
 
+// TestDecodeNumber_Golden_0 reads the golden binary for 0.0 and checks the
+// decoded float64 value.
 func TestDecodeNumber_Golden_0(t *testing.T) {
 	golden := readGolden(t, "amf0_number_0.bin")
 	v, err := DecodeNumber(bytes.NewReader(golden))
@@ -54,6 +75,8 @@ func TestDecodeNumber_Golden_0(t *testing.T) {
 	}
 }
 
+// TestDecodeNumber_Golden_1_5 reads the golden binary for 1.5 and checks the
+// decoded value.
 func TestDecodeNumber_Golden_1_5(t *testing.T) {
 	golden := readGolden(t, "amf0_number_1_5.bin")
 	v, err := DecodeNumber(bytes.NewReader(golden))
@@ -65,6 +88,9 @@ func TestDecodeNumber_Golden_1_5(t *testing.T) {
 	}
 }
 
+// TestNumber_EdgeCases_RoundTrip exercises encode→decode for edge values:
+// positive/negative numbers and ±infinity. Each value must survive the
+// round trip unchanged.
 func TestNumber_EdgeCases_RoundTrip(t *testing.T) {
 	cases := []float64{1.0, -1.0, math.Inf(1), math.Inf(-1)}
 	for _, in := range cases {
@@ -82,6 +108,8 @@ func TestNumber_EdgeCases_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestNumber_NaN_RoundTrip verifies NaN handling. NaN != NaN in IEEE 754,
+// so we use math.IsNaN instead of == to check the decoded value.
 func TestNumber_NaN_RoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	if err := EncodeNumber(&buf, math.NaN()); err != nil {
@@ -96,6 +124,8 @@ func TestNumber_NaN_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestDecodeNumber_InvalidMarker sends a string marker (0x02) where a number
+// marker (0x00) is expected. The decoder must reject it with an error.
 func TestDecodeNumber_InvalidMarker(t *testing.T) {
 	bad := []byte{0x02 /* string marker */, 0, 0, 0, 0, 0, 0, 0, 0}
 	if _, err := DecodeNumber(bytes.NewReader(bad)); err == nil {
@@ -103,6 +133,8 @@ func TestDecodeNumber_InvalidMarker(t *testing.T) {
 	}
 }
 
+// TestDecodeNumber_ShortBuffer provides only 3 bytes (marker + partial
+// payload). The decoder must return an error, not read garbage.
 func TestDecodeNumber_ShortBuffer(t *testing.T) {
 	short := []byte{0x00, 0x00, 0x01} // truncated payload
 	if _, err := DecodeNumber(bytes.NewReader(short)); err == nil {

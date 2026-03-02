@@ -1,3 +1,17 @@
+// media_logger_test.go – tests for the media statistics logger.
+//
+// MediaLogger tracks audio/video message counts and byte totals per
+// connection. It processes messages asynchronously and periodically logs
+// summary statistics.
+//
+// Tests verify:
+//   - Audio-only, video-only, and mixed message counting.
+//   - Non-media messages (TypeID 20 = command) are ignored.
+//   - Periodic stats logging fires on the configured interval.
+//
+// Key Go concepts:
+//   - time.Sleep for async processing synchronization.
+//   - slog.New with custom handler for stdout debug output.
 package server
 
 import (
@@ -9,6 +23,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
+// TestMediaLogger_ProcessMessage_Audio sends one audio message (TypeID 8)
+// and verifies audioCount=1, videoCount=0, totalBytes=10.
 func TestMediaLogger_ProcessMessage_Audio(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ml := NewMediaLogger("test-conn-001", log, 100*time.Millisecond)
@@ -41,6 +57,8 @@ func TestMediaLogger_ProcessMessage_Audio(t *testing.T) {
 	}
 }
 
+// TestMediaLogger_ProcessMessage_Video sends one video message (TypeID 9)
+// and verifies videoCount=1, audioCount=0, totalBytes=15.
 func TestMediaLogger_ProcessMessage_Video(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ml := NewMediaLogger("test-conn-002", log, 100*time.Millisecond)
@@ -73,6 +91,8 @@ func TestMediaLogger_ProcessMessage_Video(t *testing.T) {
 	}
 }
 
+// TestMediaLogger_ProcessMessage_Mixed sends 2 audio + 1 video messages
+// and verifies combined counts and totalBytes (10+20+10=40).
 func TestMediaLogger_ProcessMessage_Mixed(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ml := NewMediaLogger("test-conn-003", log, 100*time.Millisecond)
@@ -117,6 +137,8 @@ func TestMediaLogger_ProcessMessage_Mixed(t *testing.T) {
 	}
 }
 
+// TestMediaLogger_ProcessMessage_NonMedia sends a command message
+// (TypeID 20) and verifies it is NOT counted as audio or video.
 func TestMediaLogger_ProcessMessage_NonMedia(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ml := NewMediaLogger("test-conn-004", log, 100*time.Millisecond)
@@ -141,6 +163,8 @@ func TestMediaLogger_ProcessMessage_NonMedia(t *testing.T) {
 	}
 }
 
+// TestMediaLogger_PeriodicStats sends 5 audio messages over 250ms and
+// waits for at least one periodic stats log interval (200ms) to fire.
 func TestMediaLogger_PeriodicStats(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ml := NewMediaLogger("test-conn-005", log, 200*time.Millisecond)

@@ -1,3 +1,14 @@
+// control_burst_test.go – verifies the RTMP "control burst" sent by the
+// server immediately after the handshake completes.
+//
+// Per the RTMP spec, the server must send three control messages before any
+// application-level commands:
+//  1. Window Acknowledgement Size (type 5) – tells the client how often
+//     to send ACKs.
+//  2. Set Peer Bandwidth (type 6) – tells the client to limit its send rate.
+//  3. Set Chunk Size (type 1) – negotiates a larger chunk size (4096).
+//
+// All three must be on CSID 2 with MSID 0 (the protocol control stream).
 package conn
 
 import (
@@ -11,7 +22,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
 
-// Local copy (avoid exporting from conn_test.go) of helper to perform client handshake.
+// dialAndHandshake is a local copy of the handshake helper (same package,
+// separate file – Go allows this within the same test package).
 func dialAndHandshake(t *testing.T, addr string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", addr)
@@ -24,6 +36,11 @@ func dialAndHandshake(t *testing.T, addr string) net.Conn {
 	return c
 }
 
+// TestControlBurstSequence performs a full handshake then reads 3 control
+// messages from the server, verifying type, CSID, MSID, and payload values:
+//   - Window Ack Size = windowAckSizeValue (from conn constants)
+//   - Peer Bandwidth = peerBandwidthValue with peerBandwidthLimitType
+//   - Chunk Size = serverChunkSize (typically 4096)
 func TestControlBurstSequence(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

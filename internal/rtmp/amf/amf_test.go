@@ -1,3 +1,16 @@
+// Package amf – high-level round-trip and integration tests for the AMF0 codec.
+//
+// AMF0 (Action Message Format version 0) is the binary serialization format
+// used by RTMP to encode command parameters: numbers (float64), booleans,
+// strings, null, objects (string→value maps), and arrays.
+//
+// These tests exercise the top-level Marshal/Unmarshal and EncodeAll/DecodeAll
+// APIs, which delegate to type-specific encoders/decoders in sibling files.
+//
+// Key Go concepts demonstrated:
+//   - interface{} (any) to represent dynamically-typed AMF values.
+//   - Custom deepEqual instead of reflect.DeepEqual for explicit, safe
+//     comparison of the supported AMF0 type subset.
 package amf
 
 import (
@@ -5,6 +18,18 @@ import (
 	"testing"
 )
 
+// TestEncodeDecodeRoundTrip_Primitives encodes each AMF0 value, then decodes
+// it and checks that the result matches the original. This is the primary
+// correctness test for the codec.
+//
+// The test covers every AMF0 type supported by this project:
+//   - float64 (AMF0 Number)
+//   - bool (AMF0 Boolean)
+//   - string (AMF0 String)
+//   - nil (AMF0 Null)
+//   - map[string]interface{} (AMF0 Object)
+//   - []interface{} (AMF0 Strict Array)
+//   - Nested combinations of the above
 func TestEncodeDecodeRoundTrip_Primitives(t *testing.T) {
 	cases := []interface{}{
 		float64(0),
@@ -34,6 +59,13 @@ func TestEncodeDecodeRoundTrip_Primitives(t *testing.T) {
 	}
 }
 
+// TestEncodeAllDecodeAll_Sequence simulates a real RTMP command sequence.
+// In RTMP, commands like "connect" are sent as a sequence of AMF0 values:
+//
+//	[command-name, transaction-id, command-object, optional-args...]
+//
+// EncodeAll writes multiple values back-to-back into one byte stream, and
+// DecodeAll reads them all back. This tests the multi-value API.
 func TestEncodeAllDecodeAll_Sequence(t *testing.T) {
 	seq := []interface{}{
 		"connect",
@@ -59,6 +91,12 @@ func TestEncodeAllDecodeAll_Sequence(t *testing.T) {
 	}
 }
 
+// TestDecodeValue_UnsupportedMarkers ensures that AMF0 marker bytes this
+// implementation intentionally does not support (Undefined 0x06, Reference
+// 0x07, Date 0x0B, AMF3-switch 0x11) return a clear error.
+//
+// Production RTMP clients (FFmpeg, OBS) never send these markers, so
+// rejecting them is the safest path.
 func TestDecodeValue_UnsupportedMarkers(t *testing.T) {
 	// Markers explicitly rejected: 0x06 (Undefined), 0x07 (Reference), 0x0B (Date), 0x11 (AMF3 switch)
 	markers := []byte{0x06, 0x07, 0x0B, 0x11}
@@ -70,8 +108,10 @@ func TestDecodeValue_UnsupportedMarkers(t *testing.T) {
 	}
 }
 
-// deepEqual tailored for the supported AMF0 subset – we could use reflect.DeepEqual
-// but implement a minimal version to keep dependencies explicit and allow custom logic later.
+// deepEqual is a custom comparison function tailored to the AMF0 type subset.
+// We avoid reflect.DeepEqual to keep dependencies explicit and to allow
+// custom handling (e.g. NaN comparison) in the future. It recursively
+// compares maps and slices, and uses Go's == operator for primitives.
 func deepEqual(a, b interface{}) bool {
 	switch av := a.(type) {
 	case nil:

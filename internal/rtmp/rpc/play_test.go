@@ -1,3 +1,11 @@
+// play_test.go – tests for parsing the RTMP "play" command.
+//
+// The "play" command requests a stream from the server. AMF0 encoding:
+//
+//	["play", 0.0, null, streamName, start, duration, reset]
+//
+// ParsePlayCommand builds the stream key as "app/streamName" and extracts
+// optional fields (start, duration, reset) with defaults.
 package rpc
 
 import (
@@ -7,10 +15,13 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
+// buildPlayMessage wraps payload as a TypeID 20 command message.
 func buildPlayMessage(payload []byte) *chunk.Message {
 	return &chunk.Message{TypeID: 20, Payload: payload}
 }
 
+// TestParsePlayCommand_Valid encodes a full play command (all optional
+// fields) and verifies streamKey, start, duration, and reset.
 func TestParsePlayCommand_Valid(t *testing.T) {
 	payload, err := amf.EncodeAll(
 		"play",       // command
@@ -38,6 +49,8 @@ func TestParsePlayCommand_Valid(t *testing.T) {
 	}
 }
 
+// TestParsePlayCommand_MissingStreamName omits the stream name and
+// expects an error.
 func TestParsePlayCommand_MissingStreamName(t *testing.T) {
 	// Omit index 3 (stream name)
 	payload, err := amf.EncodeAll(

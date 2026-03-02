@@ -1,3 +1,18 @@
+// recorder_test.go – tests for the FLV file recorder.
+//
+// The Recorder writes incoming RTMP audio/video messages to an FLV file.
+// FLV file format:
+//   - 13-byte header: "FLV" + version(1) + flags(0x05) + offset(9) + tag0size(0)
+//   - Tags: 11-byte header + payload + 4-byte previous-tag-size
+//
+// Tests verify:
+//   - Header correctness (signature, version, flags, offset).
+//   - Audio/video tag writing (tag type, data size, timestamps).
+//   - Disk-full simulation using a limitedWriter that fails after N bytes.
+//
+// Key Go concepts:
+//   - t.TempDir(): creates a temp directory automatically cleaned up.
+//   - Custom io.Writer (limitedWriter) for simulating I/O failures.
 package media
 
 import (
@@ -11,7 +26,8 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// limitedWriter simulates disk full by failing after N bytes.
+// limitedWriter simulates disk full by failing after limit bytes written.
+// Once the limit is reached, all subsequent writes return io.ErrShortWrite.
 type limitedWriter struct {
 	limit  int
 	buf    bytes.Buffer
@@ -34,6 +50,9 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 }
 func (l *limitedWriter) Close() error { l.closed = true; return nil }
 
+// TestRecorder_Header creates a new FLV recorder and verifies the
+// 13-byte FLV header: "FLV" signature, version 1, flags 0x05
+// (audio+video), and data offset = 9.
 func TestRecorder_Header(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.flv")
@@ -66,10 +85,15 @@ func TestRecorder_Header(t *testing.T) {
 	}
 }
 
+// writeMsg is a helper that constructs a *chunk.Message with the given
+// timestamp, typeID, and payload – avoids boilerplate in each test.
 func writeMsg(ts uint32, typeID uint8, payload []byte) *chunk.Message {
 	return &chunk.Message{Timestamp: ts, TypeID: typeID, Payload: payload, MessageLength: uint32(len(payload))}
 }
 
+// TestRecorder_WriteAudioVideo writes one audio and one video tag, then
+// reads the file back and validates: total size, first tag type (0x08),
+// data size, timestamp, second tag type (0x09).
 func TestRecorder_WriteAudioVideo(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "av.flv")
@@ -115,6 +139,9 @@ func TestRecorder_WriteAudioVideo(t *testing.T) {
 	}
 }
 
+// TestRecorder_DiskFullSimulation uses a limitedWriter that allows only
+// 8 bytes (less than the 13-byte FLV header). The recorder must detect
+// the write failure and mark itself Disabled – subsequent writes are no-ops.
 func TestRecorder_DiskFullSimulation(t *testing.T) {
 	lw := &limitedWriter{limit: 8} // smaller than header (13) so header write fails
 	r := newRecorderWithWriter(lw, NullLogger())

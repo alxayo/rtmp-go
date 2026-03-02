@@ -1,3 +1,26 @@
+// Package integration – end-to-end integration tests for the RTMP server.
+//
+// multi_destination_relay_test.go validates the multi-destination relay
+// feature (Feature 003): a single publisher’s media is forwarded to
+// one or more downstream RTMP servers simultaneously.
+//
+// Three scenarios are covered:
+//
+//	TestBasicMultiDestinationRelay   – publisher → relay-server →
+//	    one destination-server.  Verifies the relay client connects
+//	    and forwards audio+video messages.
+//
+//	TestMultipleDestinations         – relay to 3 destination servers.
+//	    Publisher sends 10 audio + 10 video frames; test confirms
+//	    the relay fans out to all destinations.
+//
+//	TestDestinationFailureIsolation  – 2 working destinations +
+//	    1 unreachable address (localhost:9999).  Verifies the relay
+//	    continues forwarding to healthy destinations despite one
+//	    failing.
+//
+// All tests use the public client.New() API to connect and publish,
+// exercising the real RTMP handshake, AMF0 commands, and chunk I/O.
 package integration
 
 import (
@@ -9,8 +32,19 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/server"
 )
 
-// TestBasicMultiDestinationRelay tests the basic flow:
-// publisher → relay-server → destination-server → subscriber
+// TestBasicMultiDestinationRelay sets up a two-server topology:
+//
+//	destination-server  (receives relayed stream)
+//	relay-server        (accepts publisher, forwards to destination)
+//
+// Steps:
+//  1. Start destination server on random port.
+//  2. Start relay server configured with one RelayDestination pointing
+//     at the destination.
+//  3. Publisher client connects to the relay server and publishes.
+//  4. Subscriber client connects to the destination and plays.
+//  5. Publisher sends one audio + one video message.
+//  6. After a 1-second propagation delay the test succeeds.
 func TestBasicMultiDestinationRelay(t *testing.T) {
 	// Start destination server (rtmp-server-2)
 	destServerCfg := server.Config{
@@ -96,7 +130,9 @@ func TestBasicMultiDestinationRelay(t *testing.T) {
 	t.Logf("Multi-destination relay test completed successfully")
 }
 
-// TestMultipleDestinations tests relay to multiple destinations simultaneously
+// TestMultipleDestinations fans out a publisher’s media to 3 separate
+// destination servers simultaneously.  Ten audio+video frame pairs are
+// sent with small delays between them to simulate a realistic stream.
 func TestMultipleDestinations(t *testing.T) {
 	// Start 3 destination servers
 	var destServers []*server.Server
@@ -174,7 +210,15 @@ func TestMultipleDestinations(t *testing.T) {
 	t.Logf("Multiple destinations test completed - sent media to %d destinations", len(destURLs))
 }
 
-// TestDestinationFailureIsolation tests that one failed destination doesn't affect others
+// TestDestinationFailureIsolation ensures one unreachable destination
+// does not disrupt media delivery to the remaining healthy destinations.
+//
+// Three destinations are configured:
+//   - dest1 and dest2 are real servers on random ports.
+//   - localhost:9999 is intentionally unreachable.
+//
+// The relay server is expected to log the failure for the third
+// destination but continue forwarding media to the first two.
 func TestDestinationFailureIsolation(t *testing.T) {
 	// Start 2 destination servers
 	dest1Server := server.New(server.Config{ListenAddr: ":0", LogLevel: "info"})

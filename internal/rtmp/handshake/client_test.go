@@ -1,3 +1,19 @@
+// client_test.go – tests for the client-side RTMP handshake.
+//
+// ClientHandshake() runs:
+//
+//	Send C0+C1 → Read S0+S1+S2 → Verify S0 version → Send C2=S1 → Done
+//
+// These tests cover:
+//   - Happy path: paired with a real ServerHandshake on the other end.
+//   - Invalid S0 version: fake server responds with 0x06.
+//   - Truncated S1: fake server sends only S0 then stalls → timeout.
+//   - Write failure: failingWriteConn returns io.ErrClosedPipe.
+//   - Nil conn: should return error, not panic.
+//   - Mismatched S2: fake server sends wrong S2 – client still succeeds.
+//
+// Key Go pattern: each test runs client + server in separate goroutines
+// connected via net.Pipe(), with error channels for synchronization.
 package handshake
 
 import (
@@ -9,7 +25,8 @@ import (
 	rerrors "github.com/alxayo/go-rtmp/internal/errors"
 )
 
-// TestClientHandshake_Valid performs a full round-trip with the real server handshake.
+// TestClientHandshake_Valid pairs a real client and server handshake
+// over net.Pipe and verifies both sides complete without error.
 func TestClientHandshake_Valid(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -32,7 +49,8 @@ func TestClientHandshake_Valid(t *testing.T) {
 	}
 }
 
-// Simulated server that sends invalid version in S0.
+// TestClientHandshake_InvalidVersion starts a fake server that replies
+// with S0 = 0x06 (invalid). ClientHandshake must return a protocol error.
 func TestClientHandshake_InvalidVersion(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -58,7 +76,8 @@ func TestClientHandshake_InvalidVersion(t *testing.T) {
 	}
 }
 
-// Server sends partial S0 then stalls inducing timeout.
+// TestClientHandshake_TruncatedS1 starts a fake server that sends only
+// S0 (1 byte) but never the full S1. ClientHandshake should timeout.
 func TestClientHandshake_TruncatedS1(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -83,11 +102,13 @@ func TestClientHandshake_TruncatedS1(t *testing.T) {
 	}
 }
 
-// Force write failure from client side.
+// failingWriteConn forces every Write call to fail – tests the error path
+// when the client can't even send C0+C1.
 type failingWriteConn struct{ net.Conn }
 
 func (f *failingWriteConn) Write(p []byte) (int, error) { return 0, io.ErrClosedPipe }
 
+// TestClientHandshake_WriteFailure wraps the conn so C0+C1 write fails.
 func TestClientHandshake_WriteFailure(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -98,13 +119,16 @@ func TestClientHandshake_WriteFailure(t *testing.T) {
 	}
 }
 
+// TestClientHandshake_NilConn ensures nil input returns an error cleanly.
 func TestClientHandshake_NilConn(t *testing.T) {
 	if err := ClientHandshake(nil); err == nil {
 		t.Fatalf("expected error for nil conn")
 	}
 }
 
-// Provide mismatched S2 to exercise warning path but still succeed.
+// TestClientHandshake_MismatchedS2 runs a custom fake server that sends
+// an all-zero S2 (doesn't echo C1). The client should warn but still
+// complete – matching the lenient behavior of real RTMP implementations.
 func TestClientHandshake_MismatchedS2(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
