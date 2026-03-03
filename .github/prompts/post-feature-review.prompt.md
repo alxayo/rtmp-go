@@ -1,5 +1,5 @@
 ---
-mode: "agent"
+agent: "agent"
 description: "Post-feature review: optimize, simplify, and validate code quality after implementing a feature"
 ---
 
