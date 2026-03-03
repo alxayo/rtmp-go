@@ -43,7 +43,7 @@ type commandState struct {
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
 // provided connection. Safe to call immediately after Accept returns.
-func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger, destMgr *relay.DestinationManager, srv ...*Server) {
+func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log *slog.Logger, destMgr *relay.DestinationManager, srv *Server) {
 	if c == nil || reg == nil || cfg == nil {
 		return
 	}
@@ -76,48 +76,40 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				// Unregister publisher (allows stream key reuse by new publisher)
 				PublisherDisconnected(reg, st.streamKey, c)
 			}
-			if len(srv) > 0 && srv[0] != nil {
-				audioPkts, videoPkts, totalBytes, audioCodec, videoCodec := st.mediaLogger.GetStats()
-				srv[0].triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, map[string]interface{}{
-					"audio_packets": audioPkts,
-					"video_packets": videoPkts,
-					"total_bytes":   totalBytes,
-					"audio_codec":   audioCodec,
-					"video_codec":   videoCodec,
-					"duration_sec":  durationSec,
-				})
-			}
+			audioPkts, videoPkts, totalBytes, audioCodec, videoCodec := st.mediaLogger.GetStats()
+			srv.triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, map[string]interface{}{
+				"audio_packets": audioPkts,
+				"video_packets": videoPkts,
+				"total_bytes":   totalBytes,
+				"audio_codec":   audioCodec,
+				"video_codec":   videoCodec,
+				"duration_sec":  durationSec,
+			})
 		}
 
 		// 3. Subscriber cleanup: unregister subscriber, fire hook
 		if st.streamKey != "" && st.role == "subscriber" {
 			SubscriberDisconnected(reg, st.streamKey, c)
-			if len(srv) > 0 && srv[0] != nil {
-				srv[0].triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, map[string]interface{}{
-					"duration_sec": durationSec,
+			srv.triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, map[string]interface{}{
+				"duration_sec": durationSec,
+			})
+			// Fire subscriber count change after removal
+			stream := reg.GetStream(st.streamKey)
+			if stream != nil {
+				srv.triggerHookEvent(hooks.EventSubscriberCount, c.ID(), st.streamKey, map[string]interface{}{
+					"count": stream.SubscriberCount(),
 				})
-				// Fire subscriber count change after removal
-				stream := reg.GetStream(st.streamKey)
-				if stream != nil {
-					srv[0].triggerHookEvent(hooks.EventSubscriberCount, c.ID(), st.streamKey, map[string]interface{}{
-						"count": stream.SubscriberCount(),
-					})
-				}
 			}
 		}
 
 		// 4. Remove from server connection tracking (fixes memory leak)
-		if len(srv) > 0 && srv[0] != nil {
-			srv[0].RemoveConnection(c.ID())
-		}
+		srv.RemoveConnection(c.ID())
 
 		// 5. Fire connection close hook
-		if len(srv) > 0 && srv[0] != nil {
-			srv[0].triggerHookEvent(hooks.EventConnectionClose, c.ID(), st.streamKey, map[string]interface{}{
-				"role":         st.role,
-				"duration_sec": durationSec,
-			})
-		}
+		srv.triggerHookEvent(hooks.EventConnectionClose, c.ID(), st.streamKey, map[string]interface{}{
+			"role":         st.role,
+			"duration_sec": durationSec,
+		})
 
 		log.Info("connection disconnected", "conn_id", c.ID(), "stream_key", st.streamKey, "role", st.role)
 	})
@@ -162,7 +154,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 	d.OnPublish = func(pc *rpc.PublishCommand, msg *chunk.Message) error {
 		// Validate auth token before allowing publish.
-		if rejected := authenticateRequest(cfg, c, st, msg, "publish", pc.PublishingName, pc.StreamKey, pc.QueryParams, log, srv...); rejected {
+		if rejected := authenticateRequest(cfg, c, st, msg, "publish", pc.PublishingName, pc.StreamKey, pc.QueryParams, log, srv); rejected {
 			return nil
 		}
 
@@ -177,12 +169,10 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		st.role = "publisher"
 
 		// Trigger publish start hook event
-		if len(srv) > 0 && srv[0] != nil {
-			srv[0].triggerHookEvent(hooks.EventPublishStart, c.ID(), pc.StreamKey, map[string]interface{}{
-				"app":             st.app,
-				"publishing_name": pc.PublishingName,
-			})
-		}
+		srv.triggerHookEvent(hooks.EventPublishStart, c.ID(), pc.StreamKey, map[string]interface{}{
+			"app":             st.app,
+			"publishing_name": pc.PublishingName,
+		})
 
 		// Initialize recorder if recording is enabled
 		if cfg.RecordAll {
@@ -201,7 +191,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 	d.OnPlay = func(pl *rpc.PlayCommand, msg *chunk.Message) error {
 		// Validate auth token before allowing play.
-		if rejected := authenticateRequest(cfg, c, st, msg, "play", pl.StreamName, pl.StreamKey, pl.QueryParams, log, srv...); rejected {
+		if rejected := authenticateRequest(cfg, c, st, msg, "play", pl.StreamName, pl.StreamKey, pl.QueryParams, log, srv); rejected {
 			return nil
 		}
 
@@ -216,17 +206,15 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		st.role = "subscriber"
 
 		// Trigger play start hook event
-		if len(srv) > 0 && srv[0] != nil {
-			srv[0].triggerHookEvent(hooks.EventPlayStart, c.ID(), pl.StreamKey, map[string]interface{}{
-				"app": st.app,
+		srv.triggerHookEvent(hooks.EventPlayStart, c.ID(), pl.StreamKey, map[string]interface{}{
+			"app": st.app,
+		})
+		// Fire subscriber count change after addition
+		stream := reg.GetStream(pl.StreamKey)
+		if stream != nil {
+			srv.triggerHookEvent(hooks.EventSubscriberCount, c.ID(), pl.StreamKey, map[string]interface{}{
+				"count": stream.SubscriberCount(),
 			})
-			// Fire subscriber count change after addition
-			stream := reg.GetStream(pl.StreamKey)
-			if stream != nil {
-				srv[0].triggerHookEvent(hooks.EventSubscriberCount, c.ID(), pl.StreamKey, map[string]interface{}{
-					"count": stream.SubscriberCount(),
-				})
-			}
 		}
 
 		return nil
@@ -265,7 +253,7 @@ func authenticateRequest(
 	streamKey string,
 	queryParams map[string]string,
 	log *slog.Logger,
-	srv ...*Server,
+	srv *Server,
 ) bool {
 	if cfg.AuthValidator == nil {
 		return false // no auth configured — allow
@@ -302,12 +290,10 @@ func authenticateRequest(
 	errStatus, _ := buildOnStatus(msg.MessageStreamID, streamKey, statusCode, "Authentication failed.")
 	_ = c.SendMessage(errStatus)
 
-	if len(srv) > 0 && srv[0] != nil {
-		srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), streamKey, map[string]interface{}{
-			"action": action,
-			"error":  err.Error(),
-		})
-	}
+	srv.triggerHookEvent(hooks.EventAuthFailed, c.ID(), streamKey, map[string]interface{}{
+		"action": action,
+		"error":  err.Error(),
+	})
 
 	_ = c.Close()
 	return true // rejected

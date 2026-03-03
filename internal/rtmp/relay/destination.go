@@ -53,7 +53,6 @@ func (s DestinationStatus) String() string {
 	}
 }
 
-// Destination represents a single RTMP relay destination
 // Destination represents a single relay target — a remote RTMP server that
 // receives a copy of the publisher's audio/video stream.
 type Destination struct {
