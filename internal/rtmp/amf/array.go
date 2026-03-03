@@ -69,13 +69,7 @@ func DecodeStrictArray(r io.Reader) ([]interface{}, error) {
 	return out, nil
 }
 
-// decodeArrayValue is a helper used by decodeValueWithMarker when it already consumed the
-// marker byte. It reconstructs a reader with the marker for DecodeStrictArray.
-func decodeArrayValue(r io.Reader) ([]interface{}, error) {
-	return DecodeStrictArray(r)
-}
-
-// Helper for tests & internal usage: round-trip an array (used in future generic encoder).
+// roundTripStrictArray is a helper for tests: encode then decode an array for round-trip verification.
 func roundTripStrictArray(arr []interface{}) ([]interface{}, error) {
 	var buf bytes.Buffer
 	if err := EncodeStrictArray(&buf, arr); err != nil {
