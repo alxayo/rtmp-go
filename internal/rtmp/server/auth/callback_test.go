@@ -47,12 +47,21 @@ func TestCallbackValidator(t *testing.T) {
 				RemoteAddr:  "1.2.3.4:5678",
 			}
 
+			// Test both ValidatePublish and ValidatePlay
 			err := v.ValidatePublish(context.Background(), req)
 			if tt.wantErr == nil && err != nil {
-				t.Errorf("expected nil, got %v", err)
+				t.Errorf("ValidatePublish: expected nil, got %v", err)
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("expected %v, got %v", tt.wantErr, err)
+				t.Errorf("ValidatePublish: expected %v, got %v", tt.wantErr, err)
+			}
+
+			err = v.ValidatePlay(context.Background(), req)
+			if tt.wantErr == nil && err != nil {
+				t.Errorf("ValidatePlay: expected nil, got %v", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("ValidatePlay: expected %v, got %v", tt.wantErr, err)
 			}
 		})
 	}

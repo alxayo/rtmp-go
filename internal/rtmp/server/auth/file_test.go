@@ -29,47 +29,60 @@ func TestFileValidator_ValidToken(t *testing.T) {
 		t.Fatalf("NewFileValidator: %v", err)
 	}
 
-	err = v.ValidatePublish(context.Background(), &Request{
-		StreamKey:   "live/stream1",
-		QueryParams: map[string]string{"token": "secret123"},
-	})
-	if err != nil {
-		t.Fatalf("expected valid token accepted, got %v", err)
+	// Test both publish and play with a valid token
+	for _, method := range []string{"publish", "play"} {
+		t.Run(method, func(t *testing.T) {
+			req := &Request{
+				StreamKey:   "live/stream1",
+				QueryParams: map[string]string{"token": "secret123"},
+			}
+			var callErr error
+			if method == "publish" {
+				callErr = v.ValidatePublish(context.Background(), req)
+			} else {
+				callErr = v.ValidatePlay(context.Background(), req)
+			}
+			if callErr != nil {
+				t.Fatalf("expected valid token accepted, got %v", callErr)
+			}
+		})
 	}
 }
 
-// TestFileValidator_WrongToken loads a token file and rejects a wrong token.
-func TestFileValidator_WrongToken(t *testing.T) {
+// TestFileValidator_Errors verifies rejection scenarios: wrong token,
+// missing token, and unknown stream key.
+func TestFileValidator_Errors(t *testing.T) {
 	path := writeTokenFile(t, `{"live/stream1": "secret123"}`)
 	v, err := NewFileValidator(path)
 	if err != nil {
 		t.Fatalf("NewFileValidator: %v", err)
 	}
 
-	err = v.ValidatePublish(context.Background(), &Request{
-		StreamKey:   "live/stream1",
-		QueryParams: map[string]string{"token": "wrong"},
-	})
-	if !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("expected ErrUnauthorized, got %v", err)
-	}
-}
-
-// TestFileValidator_MissingToken expects ErrTokenMissing when no token
-// is provided.
-func TestFileValidator_MissingToken(t *testing.T) {
-	path := writeTokenFile(t, `{"live/stream1": "secret123"}`)
-	v, err := NewFileValidator(path)
-	if err != nil {
-		t.Fatalf("NewFileValidator: %v", err)
+	tests := []struct {
+		name    string
+		key     string
+		token   string
+		wantErr error
+	}{
+		{"wrong_token", "live/stream1", "wrong", ErrUnauthorized},
+		{"missing_token", "live/stream1", "", ErrTokenMissing},
+		{"unknown_stream", "live/unknown", "any", ErrUnauthorized},
 	}
 
-	err = v.ValidatePublish(context.Background(), &Request{
-		StreamKey:   "live/stream1",
-		QueryParams: map[string]string{},
-	})
-	if !errors.Is(err, ErrTokenMissing) {
-		t.Fatalf("expected ErrTokenMissing, got %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &Request{
+				StreamKey:   tt.key,
+				QueryParams: map[string]string{},
+			}
+			if tt.token != "" {
+				req.QueryParams["token"] = tt.token
+			}
+			err := v.ValidatePublish(context.Background(), req)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected %v, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 

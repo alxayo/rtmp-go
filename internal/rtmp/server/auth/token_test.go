@@ -40,21 +40,24 @@ func TestTokenValidator(t *testing.T) {
 			}
 
 			// Test both publish and play — same behavior for TokenValidator
-			for _, method := range []string{"publish", "play"} {
-				var err error
-				if method == "publish" {
-					err = v.ValidatePublish(ctx, req)
-				} else {
-					err = v.ValidatePlay(ctx, req)
-				}
-
+			t.Run("publish", func(t *testing.T) {
+				err := v.ValidatePublish(ctx, req)
 				if tt.wantErr == nil && err != nil {
-					t.Errorf("%s: expected nil, got %v", method, err)
+					t.Errorf("expected nil, got %v", err)
 				}
 				if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-					t.Errorf("%s: expected %v, got %v", method, tt.wantErr, err)
+					t.Errorf("expected %v, got %v", tt.wantErr, err)
 				}
-			}
+			})
+			t.Run("play", func(t *testing.T) {
+				err := v.ValidatePlay(ctx, req)
+				if tt.wantErr == nil && err != nil {
+					t.Errorf("expected nil, got %v", err)
+				}
+				if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+					t.Errorf("expected %v, got %v", tt.wantErr, err)
+				}
+			})
 		})
 	}
 }

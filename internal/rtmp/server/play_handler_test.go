@@ -106,3 +106,32 @@ func TestSubscriberDisconnected(t *testing.T) {
 		t.Fatalf("expected subscriber removed on disconnect")
 	}
 }
+
+// TestHandlePlayWithQueryParams verifies that when a stream name contains
+// query parameters (e.g. "live1?token=abc"), the query params are stripped
+// and the stream is looked up under the clean key.
+func TestHandlePlayWithQueryParams(t *testing.T) {
+	reg := NewRegistry()
+	// Create stream under clean key (no query params)
+	s, _ := reg.CreateStream("app/live1")
+	if err := s.SetPublisher(&stubPublisher{}); err != nil {
+		t.Fatalf("set publisher: %v", err)
+	}
+
+	conn := &capturingConn{}
+	msg := buildPlayMessage("live1?token=secret123")
+	onStatus, err := HandlePlay(reg, conn, "app", msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should find the stream via clean key and send Play.Start
+	vals, _ := amf.DecodeAll(onStatus.Payload)
+	info, _ := vals[3].(map[string]interface{})
+	if info["code"] != "NetStream.Play.Start" {
+		t.Fatalf("expected Play.Start, got %v (query params not stripped?)", info["code"])
+	}
+	if s.SubscriberCount() != 1 {
+		t.Fatalf("expected 1 subscriber, got %d", s.SubscriberCount())
+	}
+}

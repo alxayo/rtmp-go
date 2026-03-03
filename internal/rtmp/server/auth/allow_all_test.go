@@ -27,11 +27,13 @@ func TestAllowAllValidator_AlwaysAllows(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if err := v.ValidatePublish(ctx, tt.req); err != nil {
-			t.Errorf("%s: ValidatePublish returned error: %v", tt.name, err)
-		}
-		if err := v.ValidatePlay(ctx, tt.req); err != nil {
-			t.Errorf("%s: ValidatePlay returned error: %v", tt.name, err)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if err := v.ValidatePublish(ctx, tt.req); err != nil {
+				t.Errorf("ValidatePublish returned error: %v", err)
+			}
+			if err := v.ValidatePlay(ctx, tt.req); err != nil {
+				t.Errorf("ValidatePlay returned error: %v", err)
+			}
+		})
 	}
 }
