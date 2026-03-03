@@ -38,6 +38,7 @@ type commandState struct {
 	allocator     *rpc.StreamIDAllocator // assigns unique message stream IDs for createStream
 	mediaLogger   *MediaLogger           // tracks audio/video packet statistics
 	codecDetector *media.CodecDetector   // identifies audio/video codecs on first packets
+	role          string                 // "publisher" or "subscriber" — set by OnPublish/OnPlay handlers
 }
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
@@ -51,7 +52,52 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		mediaLogger:   NewMediaLogger(c.ID(), log, 30*time.Second),
 		codecDetector: &media.CodecDetector{},
 	}
+	// Install disconnect handler — fires when readLoop exits for any reason.
+	c.SetDisconnectHandler(func() {
+		// 1. Stop media logger (prevents goroutine + ticker leak)
+		st.mediaLogger.Stop()
 
+		// 2. Publisher cleanup: close recorder, unregister publisher, fire hook
+		if st.streamKey != "" && st.role == "publisher" {
+			stream := reg.GetStream(st.streamKey)
+			if stream != nil {
+				// Close recorder under lock (concurrent with cleanupAllRecorders)
+				stream.mu.Lock()
+				if stream.Recorder != nil {
+					if err := stream.Recorder.Close(); err != nil {
+						log.Error("recorder close error on disconnect", "error", err, "stream_key", st.streamKey)
+					}
+					stream.Recorder = nil
+				}
+				stream.mu.Unlock()
+				// Unregister publisher (allows stream key reuse by new publisher)
+				PublisherDisconnected(reg, st.streamKey, c)
+			}
+			if len(srv) > 0 && srv[0] != nil {
+				srv[0].triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, nil)
+			}
+		}
+
+		// 3. Subscriber cleanup: unregister subscriber, fire hook
+		if st.streamKey != "" && st.role == "subscriber" {
+			SubscriberDisconnected(reg, st.streamKey, c)
+			if len(srv) > 0 && srv[0] != nil {
+				srv[0].triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, nil)
+			}
+		}
+
+		// 4. Remove from server connection tracking (fixes memory leak)
+		if len(srv) > 0 && srv[0] != nil {
+			srv[0].RemoveConnection(c.ID())
+		}
+
+		// 5. Fire connection close hook
+		if len(srv) > 0 && srv[0] != nil {
+			srv[0].triggerHookEvent(hooks.EventConnectionClose, c.ID(), "", nil)
+		}
+
+		log.Info("connection disconnected", "conn_id", c.ID(), "stream_key", st.streamKey, "role", st.role)
+	})
 	d := rpc.NewDispatcher(func() string { return st.app })
 
 	d.OnConnect = func(cc *rpc.ConnectCommand, msg *chunk.Message) error {
@@ -105,6 +151,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// Track stream key for this connection
 		st.streamKey = pc.StreamKey
+		st.role = "publisher"
 
 		// Trigger publish start hook event
 		if len(srv) > 0 && srv[0] != nil {
@@ -143,6 +190,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// Track stream key for this connection
 		st.streamKey = pl.StreamKey
+		st.role = "subscriber"
 
 		// Trigger play start hook event
 		if len(srv) > 0 && srv[0] != nil {
