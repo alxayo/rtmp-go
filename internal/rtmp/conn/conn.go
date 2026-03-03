@@ -75,6 +75,9 @@ func (c *Connection) NetConn() net.Conn { return c.netConn }
 // HandshakeDuration returns how long the RTMP handshake took.
 func (c *Connection) HandshakeDuration() time.Duration { return c.handshakeDuration }
 
+// AcceptedAt returns the time the connection was accepted.
+func (c *Connection) AcceptedAt() time.Time { return c.acceptedAt }
+
 // Close closes the underlying connection.
 func (c *Connection) Close() error {
 	if c.cancel != nil {

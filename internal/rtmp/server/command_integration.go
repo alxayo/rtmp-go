@@ -57,6 +57,9 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		// 1. Stop media logger (prevents goroutine + ticker leak)
 		st.mediaLogger.Stop()
 
+		// Compute session duration for hook data.
+		durationSec := time.Since(c.AcceptedAt()).Seconds()
+
 		// 2. Publisher cleanup: close recorder, unregister publisher, fire hook
 		if st.streamKey != "" && st.role == "publisher" {
 			stream := reg.GetStream(st.streamKey)
@@ -74,7 +77,15 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				PublisherDisconnected(reg, st.streamKey, c)
 			}
 			if len(srv) > 0 && srv[0] != nil {
-				srv[0].triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, nil)
+				audioPkts, videoPkts, totalBytes, audioCodec, videoCodec := st.mediaLogger.GetStats()
+				srv[0].triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, map[string]interface{}{
+					"audio_packets": audioPkts,
+					"video_packets": videoPkts,
+					"total_bytes":   totalBytes,
+					"audio_codec":   audioCodec,
+					"video_codec":   videoCodec,
+					"duration_sec":  durationSec,
+				})
 			}
 		}
 
@@ -82,7 +93,16 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		if st.streamKey != "" && st.role == "subscriber" {
 			SubscriberDisconnected(reg, st.streamKey, c)
 			if len(srv) > 0 && srv[0] != nil {
-				srv[0].triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, nil)
+				srv[0].triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, map[string]interface{}{
+					"duration_sec": durationSec,
+				})
+				// Fire subscriber count change after removal
+				stream := reg.GetStream(st.streamKey)
+				if stream != nil {
+					srv[0].triggerHookEvent(hooks.EventSubscriberCount, c.ID(), st.streamKey, map[string]interface{}{
+						"count": stream.SubscriberCount(),
+					})
+				}
 			}
 		}
 
@@ -93,7 +113,10 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// 5. Fire connection close hook
 		if len(srv) > 0 && srv[0] != nil {
-			srv[0].triggerHookEvent(hooks.EventConnectionClose, c.ID(), "", nil)
+			srv[0].triggerHookEvent(hooks.EventConnectionClose, c.ID(), st.streamKey, map[string]interface{}{
+				"role":         st.role,
+				"duration_sec": durationSec,
+			})
 		}
 
 		log.Info("connection disconnected", "conn_id", c.ID(), "stream_key", st.streamKey, "role", st.role)
@@ -197,6 +220,13 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 			srv[0].triggerHookEvent(hooks.EventPlayStart, c.ID(), pl.StreamKey, map[string]interface{}{
 				"app": st.app,
 			})
+			// Fire subscriber count change after addition
+			stream := reg.GetStream(pl.StreamKey)
+			if stream != nil {
+				srv[0].triggerHookEvent(hooks.EventSubscriberCount, c.ID(), pl.StreamKey, map[string]interface{}{
+					"count": stream.SubscriberCount(),
+				})
+			}
 		}
 
 		return nil

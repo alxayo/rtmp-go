@@ -35,6 +35,9 @@ const (
 	// Media events
 	EventCodecDetected EventType = "codec_detected"
 
+	// Analytics events
+	EventSubscriberCount EventType = "subscriber_count"
+
 	// Authentication events
 	EventAuthFailed EventType = "auth_failed"
 )
