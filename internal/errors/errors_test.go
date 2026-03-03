@@ -203,5 +203,3 @@ func TestNegativePredicates(t *testing.T) {
 		t.Fatalf("plain error shouldn't be timeout")
 	}
 }
-
-
