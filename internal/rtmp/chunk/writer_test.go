@@ -18,6 +18,7 @@ package chunk
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -118,15 +119,17 @@ func TestEncodeChunkHeader_CSIDEncodings(t *testing.T) {
 		{320, 1, "41 00 01"}, // three byte form (fmt1 marker 1)
 	}
 	for _, c := range cases {
-		b, err := EncodeChunkHeader(&ChunkHeader{FMT: c.fmt, CSID: c.csid, Timestamp: 0, MessageLength: 0, MessageTypeID: 0, MessageStreamID: 0}, nil)
-		if err != nil {
-			t.Fatalf("csid %d: %v", c.csid, err)
-		}
-		// Only compare basic header prefix (length 1/2/3) because we added message header zeros.
-		wantBytes, _ := hex.DecodeString(c.want)
-		if !bytes.HasPrefix(b, wantBytes) {
-			t.Fatalf("csid %d expected prefix %x got %x", c.csid, wantBytes, b)
-		}
+		t.Run(fmt.Sprintf("csid_%d_fmt%d", c.csid, c.fmt), func(t *testing.T) {
+			b, err := EncodeChunkHeader(&ChunkHeader{FMT: c.fmt, CSID: c.csid, Timestamp: 0, MessageLength: 0, MessageTypeID: 0, MessageStreamID: 0}, nil)
+			if err != nil {
+				t.Fatalf("csid %d: %v", c.csid, err)
+			}
+			// Only compare basic header prefix (length 1/2/3) because we added message header zeros.
+			wantBytes, _ := hex.DecodeString(c.want)
+			if !bytes.HasPrefix(b, wantBytes) {
+				t.Fatalf("csid %d expected prefix %x got %x", c.csid, wantBytes, b)
+			}
+		})
 	}
 }
 
