@@ -157,3 +157,39 @@ func deepEqual(a, b interface{}) bool {
 		return false
 	}
 }
+
+// --- Benchmarks ---
+
+// BenchmarkEncodeAll_ConnectCommand benchmarks multi-value encoding of a full connect command.
+func BenchmarkEncodeAll_ConnectCommand(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = EncodeAll("connect", 1.0, obj)
+	}
+}
+
+// BenchmarkDecodeAll_ConnectCommand benchmarks multi-value decoding of a full connect command.
+func BenchmarkDecodeAll_ConnectCommand(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	data, err := EncodeAll("connect", 1.0, obj)
+	if err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DecodeAll(data)
+	}
+}

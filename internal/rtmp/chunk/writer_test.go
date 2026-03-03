@@ -375,3 +375,54 @@ func TestWriter_ChunkReaderRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// --- Benchmarks ---
+
+// BenchmarkEncodeChunkHeader_FMT0 benchmarks header serialization for a full FMT0 header.
+func BenchmarkEncodeChunkHeader_FMT0(b *testing.B) {
+	b.ReportAllocs()
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = EncodeChunkHeader(h, nil)
+	}
+}
+
+// BenchmarkWriterWriteMessage_SingleChunk benchmarks writing a single-chunk message.
+func BenchmarkWriterWriteMessage_SingleChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 100)
+	msg := &Message{CSID: 4, Timestamp: 1000, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w := NewWriter(io.Discard, 128)
+		_ = w.WriteMessage(msg)
+	}
+}
+
+// BenchmarkWriterWriteMessage_MultiChunk benchmarks writing a multi-chunk message.
+func BenchmarkWriterWriteMessage_MultiChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w := NewWriter(io.Discard, 128)
+		_ = w.WriteMessage(msg)
+	}
+}
+
+// BenchmarkWriterReaderRoundTrip benchmarks the end-to-end Write→Read cycle.
+func BenchmarkWriterReaderRoundTrip(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		w := NewWriter(&buf, 128)
+		_ = w.WriteMessage(msg)
+		r := NewReader(&buf, 128)
+		_, _ = r.ReadMessage()
+	}
+}

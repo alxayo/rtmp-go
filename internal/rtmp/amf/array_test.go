@@ -134,3 +134,32 @@ func TestStrictArray_RoundTrip_VariedTypes(t *testing.T) {
 		}
 	}
 }
+
+// --- Benchmarks ---
+
+// BenchmarkEncodeStrictArray benchmarks encoding a mixed-type array.
+func BenchmarkEncodeStrictArray(b *testing.B) {
+	b.ReportAllocs()
+	arr := []interface{}{1.0, "test", true, nil, 42.0}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		_ = EncodeStrictArray(&buf, arr)
+	}
+}
+
+// BenchmarkDecodeStrictArray benchmarks decoding a mixed-type array.
+func BenchmarkDecodeStrictArray(b *testing.B) {
+	b.ReportAllocs()
+	arr := []interface{}{1.0, "test", true, nil, 42.0}
+	var buf bytes.Buffer
+	if err := EncodeStrictArray(&buf, arr); err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	data := buf.Bytes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(data)
+		_, _ = DecodeStrictArray(r)
+	}
+}

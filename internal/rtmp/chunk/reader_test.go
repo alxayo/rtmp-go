@@ -344,3 +344,87 @@ func TestReader_GoldenFileExists(t *testing.T) {
 		_ = io.Discard
 	}
 }
+
+// --- Benchmarks ---
+
+// BenchmarkParseChunkHeader_FMT0 benchmarks parsing of a full 12-byte FMT0 header.
+func BenchmarkParseChunkHeader_FMT0(b *testing.B) {
+	b.ReportAllocs()
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	raw, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, nil)
+	}
+}
+
+// BenchmarkParseChunkHeader_FMT1 benchmarks parsing of an 8-byte FMT1 delta header.
+func BenchmarkParseChunkHeader_FMT1(b *testing.B) {
+	b.ReportAllocs()
+	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 1000, MessageLength: 80, MessageTypeID: 9, MessageStreamID: 1}
+	h := &ChunkHeader{FMT: 1, CSID: 6, Timestamp: 40, MessageLength: 80, MessageTypeID: 9}
+	raw, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, prev)
+	}
+}
+
+// BenchmarkParseChunkHeader_FMT3 benchmarks parsing of a minimal 1-byte FMT3 header.
+func BenchmarkParseChunkHeader_FMT3(b *testing.B) {
+	b.ReportAllocs()
+	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 2000, MessageLength: 384, MessageTypeID: 9, MessageStreamID: 1}
+	h := &ChunkHeader{FMT: 3, CSID: 6}
+	raw, err := EncodeChunkHeader(h, prev)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, prev)
+	}
+}
+
+// BenchmarkReaderReadMessage_SingleChunk benchmarks reading a single-chunk message.
+func BenchmarkReaderReadMessage_SingleChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 100)
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	hdr, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	data := append(hdr, payload...)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := NewReader(bytes.NewReader(data), 128)
+		_, _ = r.ReadMessage()
+	}
+}
+
+// BenchmarkReaderReadMessage_MultiChunk benchmarks reading a message spanning multiple chunks.
+func BenchmarkReaderReadMessage_MultiChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	var buf bytes.Buffer
+	w := NewWriter(&buf, 128)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	if err := w.WriteMessage(msg); err != nil {
+		b.Fatalf("write: %v", err)
+	}
+	data := buf.Bytes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := NewReader(bytes.NewReader(data), 128)
+		_, _ = r.ReadMessage()
+	}
+}
