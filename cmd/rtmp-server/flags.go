@@ -30,6 +30,13 @@ type cliConfig struct {
 	hookStdioFormat string   // stdio output: "json", "env", or ""
 	hookTimeout     string   // hook execution timeout (e.g. "30s")
 	hookConcurrency int      // max concurrent hook executions
+
+	// Authentication
+	authMode            string   // "none", "token", "file", "callback"
+	authTokens          []string // "streamKey=token" pairs (for mode=token)
+	authFile            string   // path to JSON token file (for mode=file)
+	authCallbackURL     string   // webhook URL (for mode=callback)
+	authCallbackTimeout string   // callback HTTP timeout (default "5s")
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -40,6 +47,7 @@ func parseFlags(args []string) (*cliConfig, error) {
 	var relayDests stringSliceFlag
 	var hookScripts stringSliceFlag
 	var hookWebhooks stringSliceFlag
+	var authTokens stringSliceFlag
 
 	fs.StringVar(&cfg.listenAddr, "listen", ":1935", "TCP listen address (e.g. :1935 or 0.0.0.0:1935)")
 	fs.StringVar(&cfg.logLevel, "log-level", "info", "Log level: debug|info|warn|error")
@@ -54,6 +62,13 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.hookTimeout, "hook-timeout", "30s", "Hook execution timeout")
 	fs.IntVar(&cfg.hookConcurrency, "hook-concurrency", 10, "Max concurrent hook executions")
 
+	// Authentication flags
+	fs.StringVar(&cfg.authMode, "auth-mode", "none", "Authentication mode: none|token|file|callback")
+	fs.Var(&authTokens, "auth-token", `Stream token: "streamKey=token" (repeatable, for -auth-mode=token)`)
+	fs.StringVar(&cfg.authFile, "auth-file", "", "Path to JSON token file (for -auth-mode=file)")
+	fs.StringVar(&cfg.authCallbackURL, "auth-callback", "", "Webhook URL for auth validation (for -auth-mode=callback)")
+	fs.StringVar(&cfg.authCallbackTimeout, "auth-callback-timeout", "5s", "Auth callback HTTP timeout")
+
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -61,6 +76,7 @@ func parseFlags(args []string) (*cliConfig, error) {
 	cfg.relayDestinations = relayDests
 	cfg.hookScripts = hookScripts
 	cfg.hookWebhooks = hookWebhooks
+	cfg.authTokens = authTokens
 
 	if cfg.chunkSize == 0 || cfg.chunkSize > 65536 {
 		return nil, errors.New("chunk-size must be between 1 and 65536")
@@ -77,6 +93,31 @@ func parseFlags(args []string) (*cliConfig, error) {
 		if err := validateRelayDestination(dest); err != nil {
 			return nil, fmt.Errorf("invalid relay destination %q: %w", dest, err)
 		}
+	}
+
+	// Validate authentication configuration
+	switch cfg.authMode {
+	case "none":
+		// No validation needed
+	case "token":
+		if len(cfg.authTokens) == 0 {
+			return nil, errors.New("-auth-mode=token requires at least one -auth-token flag")
+		}
+		for _, t := range cfg.authTokens {
+			if !strings.Contains(t, "=") {
+				return nil, fmt.Errorf("invalid -auth-token format %q (expected streamKey=token)", t)
+			}
+		}
+	case "file":
+		if cfg.authFile == "" {
+			return nil, errors.New("-auth-mode=file requires -auth-file flag")
+		}
+	case "callback":
+		if cfg.authCallbackURL == "" {
+			return nil, errors.New("-auth-mode=callback requires -auth-callback flag")
+		}
+	default:
+		return nil, fmt.Errorf("invalid -auth-mode %q (expected none|token|file|callback)", cfg.authMode)
 	}
 
 	return cfg, nil

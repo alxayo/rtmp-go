@@ -13,6 +13,8 @@ internal/rtmp/
 ├── rpc/         # Command parsing (connect, createStream, publish, play)
 ├── conn/        # Connection lifecycle (readLoop per connection)
 ├── server/      # Listener + stream registry + pub/sub coordination
+│   ├── auth/    # Token-based authentication (Validator interface + backends)
+│   └── hooks/   # Event hooks (webhooks, shell scripts, stdio)
 ├── relay/       # Multi-destination relay with late-join support
 └── media/       # Audio/video message handling + FLV recording
 ```

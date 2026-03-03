@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
 	srv "github.com/alxayo/go-rtmp/internal/rtmp/server"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 )
 
 func main() {
@@ -30,6 +32,13 @@ func main() {
 	}
 	log := logger.Logger().With("component", "cli")
 
+	// Build authentication validator from CLI flags
+	authValidator, err := buildAuthValidator(cfg, log)
+	if err != nil {
+		log.Error("failed to initialize authentication", "error", err)
+		os.Exit(2)
+	}
+
 	server := srv.New(srv.Config{
 		ListenAddr:        cfg.listenAddr,
 		ChunkSize:         uint32(cfg.chunkSize),
@@ -43,6 +52,7 @@ func main() {
 		HookStdioFormat:   cfg.hookStdioFormat,
 		HookTimeout:       cfg.hookTimeout,
 		HookConcurrency:   cfg.hookConcurrency,
+		AuthValidator:     authValidator,
 	})
 
 	if err := server.Start(); err != nil {
@@ -50,7 +60,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("server started", "addr", server.Addr().String(), "version", version)
+	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode)
+
+	// If using file-based auth, listen for SIGHUP to reload the token file
+	if cfg.authMode == "file" {
+		if fv, ok := authValidator.(*auth.FileValidator); ok {
+			sighup := make(chan os.Signal, 1)
+			signal.Notify(sighup, syscall.SIGHUP)
+			go func() {
+				for range sighup {
+					if err := fv.Reload(); err != nil {
+						log.Error("auth file reload failed", "error", err)
+					} else {
+						log.Info("auth file reloaded")
+					}
+				}
+			}()
+		}
+	}
 
 	// Set up signal handling for graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,5 +103,31 @@ func main() {
 		log.Info("server stopped cleanly")
 	case <-shutdownCtx.Done():
 		log.Error("forced exit after timeout")
+	}
+}
+
+// buildAuthValidator creates the appropriate auth.Validator based on CLI flags.
+func buildAuthValidator(cfg *cliConfig, log interface{ Info(string, ...any) }) (auth.Validator, error) {
+	switch cfg.authMode {
+	case "token":
+		tokens := make(map[string]string, len(cfg.authTokens))
+		for _, t := range cfg.authTokens {
+			parts := strings.SplitN(t, "=", 2)
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid -auth-token format %q (expected streamKey=token)", t)
+			}
+			tokens[parts[0]] = parts[1]
+		}
+		return &auth.TokenValidator{Tokens: tokens}, nil
+	case "file":
+		return auth.NewFileValidator(cfg.authFile)
+	case "callback":
+		timeout, _ := time.ParseDuration(cfg.authCallbackTimeout)
+		if timeout == 0 {
+			timeout = 5 * time.Second
+		}
+		return auth.NewCallbackValidator(cfg.authCallbackURL, timeout), nil
+	default: // "none"
+		return &auth.AllowAllValidator{}, nil
 	}
 }

@@ -18,13 +18,13 @@ const commandMessageAMF0TypeID = 20
 func CommandMessageAMF0TypeIDForTest() uint8 { return commandMessageAMF0TypeID }
 
 // ConnectCommand represents the parsed contents of a "connect" command.
-// Only the fields required by our current implementation scope are captured.
 type ConnectCommand struct {
 	TransactionID  float64
 	App            string
 	FlashVer       string
 	TcURL          string
-	ObjectEncoding float64 // must be 0 (AMF0)
+	ObjectEncoding float64                // must be 0 (AMF0)
+	Extra          map[string]interface{} // all other connect object fields (auth tokens, etc.)
 }
 
 // ParseConnectCommand parses an RTMP command message payload (type 20) assumed
@@ -88,6 +88,19 @@ func ParseConnectCommand(msg *chunk.Message) (*ConnectCommand, error) {
 			cc.ObjectEncoding = n
 		}
 	}
+
+	// Capture any extra fields from the connect object (useful for auth tokens,
+	// custom parameters, etc.) that we don't explicitly parse above.
+	extra := make(map[string]interface{})
+	for k, v := range obj {
+		switch k {
+		case "app", "flashVer", "tcUrl", "objectEncoding":
+			continue // already extracted
+		default:
+			extra[k] = v
+		}
+	}
+	cc.Extra = extra
 
 	// Validation
 	if cc.App == "" {

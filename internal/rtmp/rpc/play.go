@@ -6,18 +6,19 @@ import (
 	"github.com/alxayo/go-rtmp/internal/errors"
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 )
 
 // PlayCommand represents a parsed "play" command.
 // Spec form (subset we care about): ["play", 0, null, streamName, start, duration, reset]
-// Only streamName is strictly required for our current feature scope.
 type PlayCommand struct {
-	App        string
-	StreamName string // raw stream name component
-	StreamKey  string // full key: app/streamName
-	Start      int64  // -2=live, -1=recorded, >=0 offset (seconds)
-	Duration   int64  // duration if provided (seconds), -1 if not provided
-	Reset      bool   // reset flag if provided
+	App         string
+	StreamName  string            // clean stream name without query params
+	StreamKey   string            // full key: app/streamName
+	QueryParams map[string]string // parsed from raw name (e.g. {"token": "abc123"})
+	Start       int64             // -2=live, -1=recorded, >=0 offset (seconds)
+	Duration    int64             // duration if provided (seconds), -1 if not provided
+	Reset       bool              // reset flag if provided
 }
 
 // ParsePlayCommand parses an RTMP AMF0 command message assumed to contain a
@@ -54,13 +55,25 @@ func ParsePlayCommand(msg *chunk.Message, app string) (*PlayCommand, error) {
 		return nil, errors.NewProtocolError("play.parse", fmt.Errorf("first value must be string 'play'"))
 	}
 
-	// 3: streamName
-	streamName, ok := vals[3].(string)
-	if !ok || streamName == "" {
+	// 3: streamName (may contain query params like "mystream?token=abc")
+	rawName, ok := vals[3].(string)
+	if !ok || rawName == "" {
 		return nil, errors.NewProtocolError("play.parse", fmt.Errorf("missing stream name"))
 	}
 
-	pc := &PlayCommand{App: app, StreamName: streamName, StreamKey: fmt.Sprintf("%s/%s", app, streamName)}
+	// Parse query parameters from the stream name
+	parsed := auth.ParseStreamURL(rawName)
+	streamName := parsed.StreamName
+	if streamName == "" {
+		return nil, errors.NewProtocolError("play.parse", fmt.Errorf("empty stream name after query parse"))
+	}
+
+	pc := &PlayCommand{
+		App:         app,
+		StreamName:  streamName,
+		StreamKey:   fmt.Sprintf("%s/%s", app, streamName),
+		QueryParams: parsed.QueryParams,
+	}
 
 	// Optional arguments
 	if len(vals) >= 5 {

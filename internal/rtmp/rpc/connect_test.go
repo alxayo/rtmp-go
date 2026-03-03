@@ -96,3 +96,42 @@ func TestParseConnectCommand_AMF3Rejected(t *testing.T) {
 		t.Fatalf("expected error for AMF3 objectEncoding")
 	}
 }
+
+// TestParseConnectCommand_ExtraFields verifies that additional fields
+// in the connect object (beyond the known ones) are captured in the
+// Extra map. This is used to pass custom auth tokens or parameters.
+func TestParseConnectCommand_ExtraFields(t *testing.T) {
+	payload, err := amf.EncodeAll(
+		"connect",
+		1.0,
+		map[string]interface{}{
+			"app":            "live",
+			"flashVer":       "LNX 9,0,124,2",
+			"tcUrl":          "rtmp://localhost:1935/live",
+			"objectEncoding": 0.0,
+			"authToken":      "my_secret",
+			"customField":    "hello",
+		},
+	)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	cmd, err := ParseConnectCommand(buildMessage(payload))
+	if err != nil {
+		t.Fatalf("ParseConnectCommand error: %v", err)
+	}
+	if cmd.Extra == nil {
+		t.Fatal("expected Extra map to be populated")
+	}
+	if cmd.Extra["authToken"] != "my_secret" {
+		t.Fatalf("expected authToken='my_secret', got %v", cmd.Extra["authToken"])
+	}
+	if cmd.Extra["customField"] != "hello" {
+		t.Fatalf("expected customField='hello', got %v", cmd.Extra["customField"])
+	}
+	// Known fields should NOT appear in Extra
+	if _, exists := cmd.Extra["app"]; exists {
+		t.Fatal("known field 'app' should not be in Extra")
+	}
+}

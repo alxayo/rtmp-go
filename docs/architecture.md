@@ -118,12 +118,13 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/rpc` | Command parsing & response building | `Dispatcher`, `ConnectCommand`, `PublishCommand` |
 | `internal/rtmp/conn` | Connection lifecycle (handshake + read/write loops) | `Connection`, `Session` |
 | `internal/rtmp/server` | Listener, stream registry, pub/sub | `Server`, `Registry`, `Stream`, `Config` |
+| `internal/rtmp/server/auth` | Token-based authentication validators | `Validator`, `TokenValidator`, `FileValidator`, `CallbackValidator` |
 | `internal/rtmp/server/hooks` | Event notification (webhooks, shell, stdio) | `HookManager`, `Event`, `Hook` |
 | `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector`, `Stream` |
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
 | `internal/bufpool` | Memory pool for chunk buffers | `Pool` |
-| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError` |
+| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError`, `AuthError` |
 | `internal/logger` | Structured logging with dynamic level | `Init()`, `Logger()`, `WithConn()` |
 
 ## Key Concepts

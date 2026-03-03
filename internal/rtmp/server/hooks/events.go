@@ -34,6 +34,9 @@ const (
 
 	// Media events
 	EventCodecDetected EventType = "codec_detected"
+
+	// Authentication events
+	EventAuthFailed EventType = "auth_failed"
 )
 
 // Event represents a single RTMP event that can trigger hooks.

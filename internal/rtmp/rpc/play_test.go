@@ -47,6 +47,37 @@ func TestParsePlayCommand_Valid(t *testing.T) {
 	if cmd.Start != -2 || cmd.Duration != -1 || !cmd.Reset {
 		t.Fatalf("unexpected optional fields: %+v", cmd)
 	}
+	if len(cmd.QueryParams) != 0 {
+		t.Fatalf("expected empty QueryParams, got %v", cmd.QueryParams)
+	}
+}
+
+// TestParsePlayCommand_WithToken verifies that query parameters are
+// parsed from the stream name and stripped from StreamName and StreamKey.
+func TestParsePlayCommand_WithToken(t *testing.T) {
+	payload, err := amf.EncodeAll(
+		"play",
+		0.0,
+		nil,
+		"testStream?token=secret123", // stream name with query params
+	)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	cmd, err := ParsePlayCommand(buildPlayMessage(payload), "live")
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if cmd.StreamName != "testStream" {
+		t.Fatalf("expected clean StreamName 'testStream', got %q", cmd.StreamName)
+	}
+	if cmd.StreamKey != "live/testStream" {
+		t.Fatalf("expected clean StreamKey 'live/testStream', got %q", cmd.StreamKey)
+	}
+	if cmd.QueryParams["token"] != "secret123" {
+		t.Fatalf("expected token=secret123, got %q", cmd.QueryParams["token"])
+	}
 }
 
 // TestParsePlayCommand_MissingStreamName omits the stream name and

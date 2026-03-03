@@ -42,6 +42,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full guide with C
 | **Multi-Destination** | Relay to external RTMP servers (`-relay-to` flag) |
 | **Media Logging** | Per-connection codec detection and bitrate stats |
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
+| **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
 
 ## Architecture
 
@@ -58,6 +59,7 @@ internal/rtmp/
 ├── rpc/          Command parsing (connect, publish, play)
 ├── conn/         Connection lifecycle (read/write loops)
 ├── server/       Listener, stream registry, pub/sub
+│   ├── auth/     Token-based authentication (validators)
 │   └── hooks/    Event hook system (webhooks, shell, stdio)
 ├── media/        Audio/video parsing, codec detection, FLV recording
 ├── relay/        Multi-destination forwarding
@@ -103,6 +105,11 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -record-dir          Recording directory (default recordings)
 -chunk-size          Outbound chunk size, 1-65536 (default 4096)
 -relay-to            RTMP relay destination URL (repeatable)
+-auth-mode           Authentication mode: none|token|file|callback (default none)
+-auth-token          Stream token: "streamKey=token" (repeatable, for token mode)
+-auth-file           Path to JSON token file (for file mode)
+-auth-callback       Webhook URL for auth validation (for callback mode)
+-auth-callback-timeout  Auth callback timeout (default 5s)
 -hook-script         Shell hook: event_type=/path/to/script (repeatable)
 -hook-webhook        Webhook: event_type=https://url (repeatable)
 -hook-stdio-format   Stdio hook output: json | env (default disabled)
@@ -126,7 +133,6 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ### Planned
 - **RTMPS** — TLS/SSL encrypted connections
-- **Authentication** — token-based stream key validation
 - **Expvar metrics** — live counters for connections, publishers, subscribers
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers
 - **DVR / time-shift** — seek into live stream history

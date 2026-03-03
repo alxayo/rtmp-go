@@ -40,6 +40,42 @@ func TestParsePublishCommand_Valid(t *testing.T) {
 	if cmd.StreamKey != "app/stream1" || cmd.PublishingType != "live" {
 		fatalf(t, "unexpected parsed command: %+v", cmd)
 	}
+	if len(cmd.QueryParams) != 0 {
+		fatalf(t, "expected empty QueryParams, got %v", cmd.QueryParams)
+	}
+}
+
+// TestParsePublishCommand_WithToken verifies that query parameters
+// (like ?token=abc) are parsed from the stream name and stripped from
+// PublishingName and StreamKey.
+func TestParsePublishCommand_WithToken(t *testing.T) {
+	payload, err := amf.EncodeAll(
+		"publish",
+		0.0,
+		nil,
+		"stream1?token=abc123&expires=999", // name with query params
+		"live",
+	)
+	if err != nil {
+		fatalf(t, "encode: %v", err)
+	}
+
+	cmd, err := ParsePublishCommand("app", buildPublishMessage(payload))
+	if err != nil {
+		fatalf(t, "error: %v", err)
+	}
+	if cmd.PublishingName != "stream1" {
+		fatalf(t, "expected clean PublishingName 'stream1', got %q", cmd.PublishingName)
+	}
+	if cmd.StreamKey != "app/stream1" {
+		fatalf(t, "expected clean StreamKey 'app/stream1', got %q", cmd.StreamKey)
+	}
+	if cmd.QueryParams["token"] != "abc123" {
+		fatalf(t, "expected token=abc123, got %q", cmd.QueryParams["token"])
+	}
+	if cmd.QueryParams["expires"] != "999" {
+		fatalf(t, "expected expires=999, got %q", cmd.QueryParams["expires"])
+	}
 }
 
 // TestParsePublishCommand_MissingPublishingName omits the stream name

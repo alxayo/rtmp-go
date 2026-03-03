@@ -7,7 +7,7 @@ A code-level walkthrough of the go-rtmp server. Read [Architecture](architecture
 ```
 internal/
 ├── bufpool/          Buffer pool to reduce garbage collection pressure
-├── errors/           Typed error wrappers (HandshakeError, ChunkError, etc.)
+├── errors/           Typed error wrappers (HandshakeError, ChunkError, AuthError, etc.)
 ├── logger/           Structured JSON logging with runtime level changes
 └── rtmp/
     ├── handshake/    RTMP v3 handshake (C0/C1/C2 ↔ S0/S1/S2)
@@ -17,6 +17,7 @@ internal/
     ├── rpc/          Command parsing (connect, createStream, publish, play)
     ├── conn/         Connection lifecycle (handshake + read/write loops)
     ├── server/       Listener, stream registry, pub/sub coordination
+    │   ├── auth/     Token-based authentication (Validator interface + backends)
     │   └── hooks/    Event hooks (webhooks, shell scripts, stdio output)
     ├── media/        Audio/video parsing, codec detection, FLV recording
     ├── relay/        Multi-destination forwarding to external RTMP servers
@@ -50,7 +51,7 @@ Client                          Server
 ──────                          ──────
 connect("live")          ──►    OnConnect → _result
 createStream()           ──►    OnCreateStream → _result(streamID=1) + StreamBegin
-publish(\"mystream\")      ──►    OnPublish → onStatus(Publish.Start) + hook(publish_start) + recording
+publish(\"mystream\")      ──►    Auth check → OnPublish → onStatus(Publish.Start) + hook(publish_start) + recording
 ```
 
 Each command is:

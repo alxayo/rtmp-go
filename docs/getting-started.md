@@ -63,7 +63,34 @@ The server will forward all incoming media to the specified destinations.
   -hook-script "connection_accept=/opt/scripts/on-connect.sh"
 ```
 
-Available event types: `connection_accept`, `connection_close`, `publish_start`, `play_start`, `codec_detected`.
+Available event types: `connection_accept`, `connection_close`, `publish_start`, `play_start`, `codec_detected`, `auth_failed`.
+
+### With Authentication
+
+```bash
+# Static tokens via CLI flags
+./rtmp-server -listen :1935 \
+  -auth-mode token \
+  -auth-token \"live/stream1=secret123\" \
+  -auth-token \"live/camera1=cam_token\"
+
+# Token file (JSON: {\"live/stream1\": \"secret123\"})
+./rtmp-server -listen :1935 -auth-mode file -auth-file tokens.json
+
+# Webhook callback (POST JSON to your auth service)
+./rtmp-server -listen :1935 -auth-mode callback -auth-callback https://auth.example.com/validate
+```
+
+When authentication is enabled, clients must include a token in the stream name:
+```bash
+# Publish with token
+ffmpeg -re -i test.mp4 -c copy -f flv \"rtmp://localhost:1935/live/stream1?token=secret123\"
+
+# Play with token
+ffplay \"rtmp://localhost:1935/live/stream1?token=secret123\"
+```
+
+OBS Studio: set **Server** to `rtmp://localhost:1935/live` and **Stream Key** to `stream1?token=secret123`.
 
 ### All CLI Flags
 
@@ -75,6 +102,11 @@ Available event types: `connection_accept`, `connection_close`, `publish_start`,
 | `-record-dir` | `recordings` | Directory for FLV recordings |
 | `-chunk-size` | `4096` | Outbound chunk payload size (1-65536 bytes) |
 | `-relay-to` | (none) | RTMP URL to relay streams to (repeatable) |
+| `-auth-mode` | `none` | Authentication mode: `none`, `token`, `file`, `callback` |
+| `-auth-token` | (none) | Stream token: `streamKey=token` (repeatable, for token mode) |
+| `-auth-file` | (none) | Path to JSON token file (for file mode) |
+| `-auth-callback` | (none) | Webhook URL for auth validation (for callback mode) |
+| `-auth-callback-timeout` | `5s` | Auth callback HTTP timeout |
 | `-hook-script` | (none) | Shell hook: `event_type=/path/to/script` (repeatable) |
 | `-hook-webhook` | (none) | Webhook: `event_type=https://url` (repeatable) |
 | `-hook-stdio-format` | (disabled) | Stdio output format: `json` or `env` |

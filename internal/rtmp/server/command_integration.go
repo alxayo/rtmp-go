@@ -6,8 +6,12 @@ package server
 // real RTMP clients (OBS / ffmpeg) can complete connect → createStream →
 // publish / play sequences. Media dispatch (recording, relay, broadcast)
 // is delegated to media_dispatch.go.
+//
+// Authentication is enforced here at the publish/play command level via
+// the auth.Validator interface configured in server.Config.
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +25,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 )
 
@@ -29,6 +34,7 @@ import (
 type commandState struct {
 	app           string                 // application name from the connect command (e.g. "live")
 	streamKey     string                 // current stream key (e.g. "live/mystream")
+	connectParams map[string]interface{} // extra fields from connect command object (for auth context)
 	allocator     *rpc.StreamIDAllocator // assigns unique message stream IDs for createStream
 	mediaLogger   *MediaLogger           // tracks audio/video packet statistics
 	codecDetector *media.CodecDetector   // identifies audio/video codecs on first packets
@@ -51,6 +57,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 	d.OnConnect = func(cc *rpc.ConnectCommand, msg *chunk.Message) error {
 		log.Debug("OnConnect handler invoked", "app", cc.App, "tcUrl", cc.TcURL, "txn_id", cc.TransactionID)
 		st.app = cc.App
+		st.connectParams = cc.Extra // preserve extra connect fields for auth context
 		resp, err := rpc.BuildConnectResponse(cc.TransactionID, "Connection succeeded.")
 		if err != nil {
 			log.Error("connect response build failed", "error", err)
@@ -85,6 +92,43 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 	}
 
 	d.OnPublish = func(pc *rpc.PublishCommand, msg *chunk.Message) error {
+		// ── AUTH CHECKPOINT ──
+		// If authentication is configured, validate the token before allowing publish.
+		if cfg.AuthValidator != nil {
+			authReq := &auth.Request{
+				App:           st.app,
+				StreamName:    pc.PublishingName,
+				StreamKey:     pc.StreamKey,
+				QueryParams:   pc.QueryParams,
+				ConnectParams: st.connectParams,
+				RemoteAddr:    c.NetConn().RemoteAddr().String(),
+			}
+			if err := cfg.AuthValidator.ValidatePublish(context.Background(), authReq); err != nil {
+				log.Warn("publish authentication failed",
+					"stream_key", pc.StreamKey,
+					"remote_addr", authReq.RemoteAddr,
+					"error", err)
+
+				// Send onStatus error so the client knows why it was rejected
+				errStatus, _ := buildOnStatus(msg.MessageStreamID, pc.StreamKey,
+					"NetStream.Publish.Unauthorized", "Authentication failed.")
+				_ = c.SendMessage(errStatus)
+
+				// Emit auth_failed hook event
+				if len(srv) > 0 && srv[0] != nil {
+					srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), pc.StreamKey, map[string]interface{}{
+						"action": "publish",
+						"error":  err.Error(),
+					})
+				}
+
+				_ = c.Close()
+				return nil
+			}
+			log.Info("publish authenticated", "stream_key", pc.StreamKey)
+		}
+
+		// ── PUBLISH LOGIC ──
 		// Delegate to existing publish handler (sends onStatus internally).
 		if _, err := HandlePublish(reg, c, st.app, msg); err != nil {
 			log.Error("publish handle", "error", err)
@@ -118,6 +162,41 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 	}
 
 	d.OnPlay = func(pl *rpc.PlayCommand, msg *chunk.Message) error {
+		// ── AUTH CHECKPOINT ──
+		// If authentication is configured, validate the token before allowing play.
+		if cfg.AuthValidator != nil {
+			authReq := &auth.Request{
+				App:           st.app,
+				StreamName:    pl.StreamName,
+				StreamKey:     pl.StreamKey,
+				QueryParams:   pl.QueryParams,
+				ConnectParams: st.connectParams,
+				RemoteAddr:    c.NetConn().RemoteAddr().String(),
+			}
+			if err := cfg.AuthValidator.ValidatePlay(context.Background(), authReq); err != nil {
+				log.Warn("play authentication failed",
+					"stream_key", pl.StreamKey,
+					"remote_addr", authReq.RemoteAddr,
+					"error", err)
+
+				errStatus, _ := buildOnStatus(msg.MessageStreamID, pl.StreamKey,
+					"NetStream.Play.Unauthorized", "Authentication failed.")
+				_ = c.SendMessage(errStatus)
+
+				if len(srv) > 0 && srv[0] != nil {
+					srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), pl.StreamKey, map[string]interface{}{
+						"action": "play",
+						"error":  err.Error(),
+					})
+				}
+
+				_ = c.Close()
+				return nil
+			}
+			log.Info("play authenticated", "stream_key", pl.StreamKey)
+		}
+
+		// ── PLAY LOGIC ──
 		// Delegate to existing play handler (sends onStatus internally).
 		if _, err := HandlePlay(reg, c, st.app, msg); err != nil {
 			log.Error("play handle", "error", err)
