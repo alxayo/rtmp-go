@@ -28,6 +28,14 @@ const (
 	// sending. When this limit is reached, new sends will block (up to sendTimeout).
 	// 100 messages provides ~3 seconds of buffer at 30fps video.
 	outboundQueueSize = 100
+
+	// readTimeout is the TCP read deadline for zombie connection detection.
+	// Generous to accommodate idle subscribers that receive no data when
+	// no publisher is active. Publishers send data continuously (~30fps)
+	// so any timeout > a few seconds catches dead peers.
+	readTimeout = 90 * time.Second
+	// writeTimeout catches dead TCP peers that never acknowledge writes.
+	writeTimeout = 30 * time.Second
 )
 
 // Connection represents an accepted RTMP connection that has completed the
@@ -52,10 +60,10 @@ type Connection struct {
 	writeChunkSize uint32 // accessed atomically by multiple goroutines
 	windowAckSize  uint32
 	outboundQueue  chan *chunk.Message
-	session        *Session
 
 	// Internal helpers
-	onMessage func(*chunk.Message) // test hook / dispatcher injection
+	onMessage    func(*chunk.Message) // test hook / dispatcher injection
+	onDisconnect func()               // called once when readLoop exits (cleanup cascade)
 }
 
 // ID returns the logical connection id.
@@ -82,6 +90,10 @@ func (c *Connection) Close() error {
 // SetMessageHandler installs a callback invoked by the readLoop for every
 // fully reassembled RTMP message. MUST be called before Start().
 func (c *Connection) SetMessageHandler(fn func(*chunk.Message)) { c.onMessage = fn }
+
+// SetDisconnectHandler installs a callback invoked once when the readLoop
+// exits (for any reason: EOF, error, context cancel). MUST be called before Start().
+func (c *Connection) SetDisconnectHandler(fn func()) { c.onDisconnect = fn }
 
 // Start begins the readLoop. MUST be called after SetMessageHandler() to avoid race condition.
 func (c *Connection) Start() {
@@ -121,6 +133,15 @@ func (c *Connection) startReadLoop() {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		defer func() {
+			// Cleanup cascade: cancel context first (stops writeLoop via ctx.Done()),
+			// then invoke the disconnect handler for higher-level cleanup.
+			// cancel() is idempotent — safe if Close() already called it.
+			c.cancel()
+			if c.onDisconnect != nil {
+				c.onDisconnect()
+			}
+		}()
 		r := chunk.NewReader(c.netConn, c.readChunkSize)
 		for {
 			select {
@@ -128,9 +149,17 @@ func (c *Connection) startReadLoop() {
 				return
 			default:
 			}
+			_ = c.netConn.SetReadDeadline(time.Now().Add(readTimeout))
 			msg, err := r.ReadMessage()
 			if err != nil {
+				// Normal disconnect paths — exit silently
 				if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+					return
+				}
+				// Timeout from read deadline — connection is dead
+				var netErr net.Error
+				if errors.As(err, &netErr) && netErr.Timeout() {
+					c.log.Warn("readLoop timeout (zombie connection reaped)")
 					return
 				}
 				c.log.Error("readLoop error", "error", err)
@@ -160,6 +189,7 @@ func (c *Connection) startWriteLoop() {
 				}
 				currentChunkSize := atomic.LoadUint32(&c.writeChunkSize)
 				w.SetChunkSize(currentChunkSize)
+				_ = c.netConn.SetWriteDeadline(time.Now().Add(writeTimeout))
 				if err := w.WriteMessage(msg); err != nil {
 					c.log.Error("writeLoop write failed", "error", err)
 					return
