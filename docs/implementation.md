@@ -51,7 +51,7 @@ Client                          Server
 ──────                          ──────
 connect("live")          ──►    OnConnect → _result
 createStream()           ──►    OnCreateStream → _result(streamID=1) + StreamBegin
-publish(\"mystream\")      ──►    Auth check → OnPublish → onStatus(Publish.Start) + hook(publish_start) + recording
+publish("mystream")      ──►    Auth check → OnPublish → onStatus(Publish.Start) + hook(publish_start) + recording
 ```
 
 Each command is:

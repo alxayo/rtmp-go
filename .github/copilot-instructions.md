@@ -86,4 +86,4 @@ tests := []struct{ name, file string; want interface{} }{
 - [specs/001-rtmp-server-implementation/spec.md](specs/001-rtmp-server-implementation/spec.md) - Full specification
 - [specs/001-rtmp-server-implementation/contracts/*.md](specs/001-rtmp-server-implementation/contracts/) - Wire format contracts
 - [quick-start.md](quick-start.md) - End-to-end usage guide
-- [docs/000-constitution.md](docs/000-constitution.md) - Design principles
+- [docs/archived/000-constitution.md](docs/archived/000-constitution.md) - Design principles

@@ -45,6 +45,7 @@
 |----------|-------------|
 | [../specs/001-rtmp-server-implementation/spec.md](../specs/001-rtmp-server-implementation/spec.md) | Core server specification |
 | [../specs/001-rtmp-server-implementation/contracts/](../specs/001-rtmp-server-implementation/contracts/) | Wire format contracts (AMF0, chunking, commands, control, handshake, media) |
+| [../specs/004-token-auth/spec.md](../specs/004-token-auth/spec.md) | Token-based authentication specification |
 
 ## Archived
 
