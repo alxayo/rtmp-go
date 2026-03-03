@@ -2,7 +2,7 @@
 // publish and play requests.
 //
 // The package defines a [Validator] interface that all authentication
-// backends implement. Three built-in validators are provided:
+// backends implement. Four built-in validators are provided:
 //
 //   - [AllowAllValidator]: accepts every request (default, backward-compatible)
 //   - [TokenValidator]: validates against an in-memory map of stream-key → token pairs
@@ -21,8 +21,9 @@
 //
 // # Integration Points
 //
-// Authentication is enforced at the publish/play command level in
-// command_integration.go, NOT during connect or handshake.
+// Authentication is enforced at the publish/play command level in the
+// server package (see authenticateRequest in command_integration.go),
+// NOT during connect or handshake.
 package auth
 
 import (

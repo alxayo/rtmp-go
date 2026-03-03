@@ -71,10 +71,10 @@ Available event types: `connection_accept`, `connection_close`, `publish_start`,
 # Static tokens via CLI flags
 ./rtmp-server -listen :1935 \
   -auth-mode token \
-  -auth-token \"live/stream1=secret123\" \
-  -auth-token \"live/camera1=cam_token\"
+  -auth-token "live/stream1=secret123" \
+  -auth-token "live/camera1=cam_token"
 
-# Token file (JSON: {\"live/stream1\": \"secret123\"})
+# Token file (JSON: {"live/stream1": "secret123"})
 ./rtmp-server -listen :1935 -auth-mode file -auth-file tokens.json
 
 # Webhook callback (POST JSON to your auth service)
@@ -84,10 +84,10 @@ Available event types: `connection_accept`, `connection_close`, `publish_start`,
 When authentication is enabled, clients must include a token in the stream name:
 ```bash
 # Publish with token
-ffmpeg -re -i test.mp4 -c copy -f flv \"rtmp://localhost:1935/live/stream1?token=secret123\"
+ffmpeg -re -i test.mp4 -c copy -f flv "rtmp://localhost:1935/live/stream1?token=secret123"
 
 # Play with token
-ffplay \"rtmp://localhost:1935/live/stream1?token=secret123\"
+ffplay "rtmp://localhost:1935/live/stream1?token=secret123"
 ```
 
 OBS Studio: set **Server** to `rtmp://localhost:1935/live` and **Stream Key** to `stream1?token=secret123`.

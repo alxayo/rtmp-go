@@ -64,7 +64,7 @@ Hooks execute asynchronously via a bounded concurrency pool (default: 10 workers
 
 ### Token-Based Authentication
 
-Authentication is enforced at the **publish/play command** level through a pluggable `auth.Validator` interface. Three built-in backends are provided:
+Authentication is enforced at the **publish/play command** level through a pluggable `auth.Validator` interface. Four built-in validators are provided:
 
 - **TokenValidator**: In-memory map of streamKey → token pairs (from CLI flags)
 - **FileValidator**: Loads tokens from a JSON file; supports live reload via SIGHUP
