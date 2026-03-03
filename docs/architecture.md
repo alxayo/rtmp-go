@@ -124,7 +124,7 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
 | `internal/bufpool` | Memory pool for chunk buffers | `Pool` |
-| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError`, `AuthError` |
+| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError` |
 | `internal/logger` | Structured logging with dynamic level | `Init()`, `Logger()`, `WithConn()` |
 
 ## Key Concepts

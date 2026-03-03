@@ -204,33 +204,4 @@ func TestNegativePredicates(t *testing.T) {
 	}
 }
 
-// TestAuthErrorClassification verifies that AuthError is correctly
-// classified as a protocol-layer error and supports wrapping/unwrapping.
-func TestAuthErrorClassification(t *testing.T) {
-	cause := stdErrors.New("invalid token")
-	ae := NewAuthError("publish.auth", cause)
 
-	// Should be classified as protocol error
-	if !IsProtocolError(ae) {
-		t.Fatal("AuthError should be classified as protocol error")
-	}
-
-	// Should support unwrapping
-	if !stdErrors.Is(ae, cause) {
-		t.Fatal("errors.Is should find root cause")
-	}
-
-	// Should have meaningful message
-	if s := ae.Error(); s == "" {
-		t.Fatal("empty error string")
-	}
-
-	// Nil cause should work
-	ae2 := NewAuthError("play.auth", nil)
-	if ae2 == nil {
-		t.Fatal("constructor returned nil")
-	}
-	if s := ae2.Error(); s == "" {
-		t.Fatal("empty error string for nil cause")
-	}
-}

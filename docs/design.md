@@ -92,7 +92,6 @@ Errors are classified by protocol layer using typed error wrappers:
 - `ChunkError` — framing/parsing issues
 - `AMFError` — serialization failures
 - `ProtocolError` — command/state violations
-- `AuthError` — authentication/authorization failures
 - `TimeoutError` — deadline exceeded
 
 Each error includes the operation name (e.g., "read C0+C1") for debuggability. Errors support Go's `errors.Is` / `errors.As` unwrapping.

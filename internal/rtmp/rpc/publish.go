@@ -60,17 +60,13 @@ func ParsePublishCommand(app string, msg *chunk.Message) (*PublishCommand, error
 	if !ok {
 		return nil, errors.NewProtocolError("publish.parse", fmt.Errorf("publishingName must be string"))
 	}
-	// Allow empty publishingName - some clients send empty string
+	// Parse query parameters from the stream name (e.g. "mystream?token=abc").
+	// Empty names default to "default" (some clients send empty string).
 	if rawName == "" {
 		rawName = "default"
 	}
-
-	// Parse query parameters from the stream name (e.g. "mystream?token=abc")
 	parsed := auth.ParseStreamURL(rawName)
 	publishingName := parsed.StreamName
-	if publishingName == "" {
-		publishingName = "default"
-	}
 
 	// 4: publishingType
 	publishingType, ok := vals[4].(string)

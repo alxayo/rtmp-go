@@ -10,7 +10,7 @@ import (
 // TestSentinelErrors verifies that each sentinel error has a non-empty
 // message and can be matched with errors.Is.
 func TestSentinelErrors(t *testing.T) {
-	sentinels := []error{ErrUnauthorized, ErrTokenMissing, ErrTokenExpired, ErrForbidden}
+	sentinels := []error{ErrUnauthorized, ErrTokenMissing, ErrForbidden}
 	for _, e := range sentinels {
 		if e.Error() == "" {
 			t.Fatalf("sentinel error has empty message: %v", e)

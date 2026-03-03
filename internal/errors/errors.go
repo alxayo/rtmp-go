@@ -142,24 +142,6 @@ func NewTimeoutError(op string, d time.Duration, cause error) error {
 	return &TimeoutError{Op: op, Duration: d, Err: cause}
 }
 
-// AuthError indicates an authentication or authorization failure.
-type AuthError struct {
-	Op  string // operation (e.g. "publish.auth", "play.auth")
-	Err error  // underlying cause
-}
-
-func (e *AuthError) Error() string {
-	if e.Err == nil {
-		return fmt.Sprintf("auth error: %s", e.Op)
-	}
-	return fmt.Sprintf("auth error: %s: %v", e.Op, e.Err)
-}
-func (e *AuthError) Unwrap() error { return e.Err }
-func (e *AuthError) isProtocol()   {} // classified as protocol-layer
-
-// NewAuthError creates an AuthError wrapping the given cause.
-func NewAuthError(op string, cause error) error { return &AuthError{Op: op, Err: cause} }
-
 // Usage pattern example:
 //  if _, err := io.ReadFull(r, buf); err != nil {
 //      return NewHandshakeError("read C0+C1", fmt.Errorf("io: %w", err))

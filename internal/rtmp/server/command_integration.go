@@ -92,43 +92,11 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 	}
 
 	d.OnPublish = func(pc *rpc.PublishCommand, msg *chunk.Message) error {
-		// ── AUTH CHECKPOINT ──
-		// If authentication is configured, validate the token before allowing publish.
-		if cfg.AuthValidator != nil {
-			authReq := &auth.Request{
-				App:           st.app,
-				StreamName:    pc.PublishingName,
-				StreamKey:     pc.StreamKey,
-				QueryParams:   pc.QueryParams,
-				ConnectParams: st.connectParams,
-				RemoteAddr:    c.NetConn().RemoteAddr().String(),
-			}
-			if err := cfg.AuthValidator.ValidatePublish(context.Background(), authReq); err != nil {
-				log.Warn("publish authentication failed",
-					"stream_key", pc.StreamKey,
-					"remote_addr", authReq.RemoteAddr,
-					"error", err)
-
-				// Send onStatus error so the client knows why it was rejected
-				errStatus, _ := buildOnStatus(msg.MessageStreamID, pc.StreamKey,
-					"NetStream.Publish.Unauthorized", "Authentication failed.")
-				_ = c.SendMessage(errStatus)
-
-				// Emit auth_failed hook event
-				if len(srv) > 0 && srv[0] != nil {
-					srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), pc.StreamKey, map[string]interface{}{
-						"action": "publish",
-						"error":  err.Error(),
-					})
-				}
-
-				_ = c.Close()
-				return nil
-			}
-			log.Info("publish authenticated", "stream_key", pc.StreamKey)
+		// Validate auth token before allowing publish.
+		if rejected := authenticateRequest(cfg, c, st, msg, "publish", pc.PublishingName, pc.StreamKey, pc.QueryParams, log, srv...); rejected {
+			return nil
 		}
 
-		// ── PUBLISH LOGIC ──
 		// Delegate to existing publish handler (sends onStatus internally).
 		if _, err := HandlePublish(reg, c, st.app, msg); err != nil {
 			log.Error("publish handle", "error", err)
@@ -162,41 +130,11 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 	}
 
 	d.OnPlay = func(pl *rpc.PlayCommand, msg *chunk.Message) error {
-		// ── AUTH CHECKPOINT ──
-		// If authentication is configured, validate the token before allowing play.
-		if cfg.AuthValidator != nil {
-			authReq := &auth.Request{
-				App:           st.app,
-				StreamName:    pl.StreamName,
-				StreamKey:     pl.StreamKey,
-				QueryParams:   pl.QueryParams,
-				ConnectParams: st.connectParams,
-				RemoteAddr:    c.NetConn().RemoteAddr().String(),
-			}
-			if err := cfg.AuthValidator.ValidatePlay(context.Background(), authReq); err != nil {
-				log.Warn("play authentication failed",
-					"stream_key", pl.StreamKey,
-					"remote_addr", authReq.RemoteAddr,
-					"error", err)
-
-				errStatus, _ := buildOnStatus(msg.MessageStreamID, pl.StreamKey,
-					"NetStream.Play.Unauthorized", "Authentication failed.")
-				_ = c.SendMessage(errStatus)
-
-				if len(srv) > 0 && srv[0] != nil {
-					srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), pl.StreamKey, map[string]interface{}{
-						"action": "play",
-						"error":  err.Error(),
-					})
-				}
-
-				_ = c.Close()
-				return nil
-			}
-			log.Info("play authenticated", "stream_key", pl.StreamKey)
+		// Validate auth token before allowing play.
+		if rejected := authenticateRequest(cfg, c, st, msg, "play", pl.StreamName, pl.StreamKey, pl.QueryParams, log, srv...); rejected {
+			return nil
 		}
 
-		// ── PLAY LOGIC ──
 		// Delegate to existing play handler (sends onStatus internally).
 		if _, err := HandlePlay(reg, c, st.app, msg); err != nil {
 			log.Error("play handle", "error", err)
@@ -234,6 +172,67 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 			log.Error("dispatch error", "error", err)
 		}
 	})
+}
+
+// authenticateRequest validates an auth token for a publish or play request.
+// Returns true if the request was rejected (caller should return nil).
+// Returns false if auth passed or no auth is configured (caller should proceed).
+func authenticateRequest(
+	cfg *Config,
+	c *iconn.Connection,
+	st *commandState,
+	msg *chunk.Message,
+	action string, // "publish" or "play"
+	streamName string,
+	streamKey string,
+	queryParams map[string]string,
+	log *slog.Logger,
+	srv ...*Server,
+) bool {
+	if cfg.AuthValidator == nil {
+		return false // no auth configured — allow
+	}
+
+	authReq := &auth.Request{
+		App:           st.app,
+		StreamName:    streamName,
+		StreamKey:     streamKey,
+		QueryParams:   queryParams,
+		ConnectParams: st.connectParams,
+		RemoteAddr:    c.NetConn().RemoteAddr().String(),
+	}
+
+	var err error
+	if action == "publish" {
+		err = cfg.AuthValidator.ValidatePublish(context.Background(), authReq)
+	} else {
+		err = cfg.AuthValidator.ValidatePlay(context.Background(), authReq)
+	}
+
+	if err == nil {
+		log.Info(action+" authenticated", "stream_key", streamKey)
+		return false // auth passed
+	}
+
+	// Auth failed — send error, emit hook, close connection.
+	log.Warn(action+" authentication failed",
+		"stream_key", streamKey,
+		"remote_addr", authReq.RemoteAddr,
+		"error", err)
+
+	statusCode := "NetStream." + strings.ToUpper(action[:1]) + action[1:] + ".Unauthorized"
+	errStatus, _ := buildOnStatus(msg.MessageStreamID, streamKey, statusCode, "Authentication failed.")
+	_ = c.SendMessage(errStatus)
+
+	if len(srv) > 0 && srv[0] != nil {
+		srv[0].triggerHookEvent(hooks.EventAuthFailed, c.ID(), streamKey, map[string]interface{}{
+			"action": action,
+			"error":  err.Error(),
+		})
+	}
+
+	_ = c.Close()
+	return true // rejected
 }
 
 // initRecorder creates and initializes a recorder for the given stream.
