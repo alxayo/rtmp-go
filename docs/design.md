@@ -54,7 +54,16 @@ The first audio and video messages from a publisher typically contain "sequence 
 
 ### Event Hooks
 
-The server includes an event hook system that notifies external systems when important events occur (connection accept/close, publish start, play start, codec detected). Three hook types are supported:
+The server includes an event hook system that notifies external systems when lifecycle events occur. Available events:
+
+- **connection_accept** / **connection_close**: Client connects or disconnects
+- **publish_start** / **publish_stop**: Publisher begins or stops streaming
+- **play_start** / **play_stop**: Subscriber starts or stops playback
+- **codec_detected**: Audio/video codec identified from first media packet
+- **subscriber_count**: Updated subscriber count when subscribers join or leave
+- **auth_failed**: Authentication rejected for publish or play
+
+Three hook types are supported:
 
 - **Webhook**: HTTP POST with JSON event payload to a URL
 - **Shell**: Execute a script with event data as environment variables
@@ -84,6 +93,22 @@ The default mode is `none` (accept all requests), preserving backward compatibil
 | Write chunk size | `sync/atomic` | Updated by control burst, read by write loop |
 | Media logger counters | `sync.RWMutex` | Updated by read loop, read by stats ticker |
 | Hook execution pool | Buffered channel (semaphore) | Limits concurrent hook goroutines |
+
+### TCP Deadline Enforcement
+
+Each connection enforces TCP read/write deadlines to detect zombie connections:
+- **Read deadline**: 90 seconds — closes connections from frozen or stalled publishers
+- **Write deadline**: 30 seconds — drops connections to unresponsive subscribers
+
+Deadlines are reset on each successful I/O operation, so normal streaming is unaffected. This prevents resource leaks (file descriptors, goroutines) from clients that hang without properly closing sockets.
+
+### Graceful Shutdown
+
+On shutdown signal (SIGINT/SIGTERM):
+1. Server stops accepting new connections
+2. Existing connections receive context cancellation
+3. Relay client connections are closed to prevent dangling forwarding
+4. If connections don't close within the timeout, the process exits forcefully
 
 ## Error Handling
 

@@ -85,6 +85,10 @@ Immediately after handshake, the server sends three control messages:
 - **Window Acknowledgement Size** (2,500,000 bytes): Flow control threshold.
 - **Set Peer Bandwidth** (2,500,000 bytes): Output rate limit.
 
+TCP deadlines are enforced on the underlying connection:
+- **Read deadline**: 90 seconds — detects frozen publishers and stuck subscribers
+- **Write deadline**: 30 seconds — prevents slow-loris attacks and half-open connections
+
 ### 4. Command Exchange (`internal/rtmp/rpc`)
 The client and server exchange AMF0-encoded command messages:
 

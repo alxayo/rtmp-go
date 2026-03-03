@@ -178,10 +178,12 @@ Each tag header contains: TypeID (8=audio, 9=video), data size (24-bit), timesta
 
 ## Event Hooks
 
-The hook system (`internal/rtmp/server/hooks/`) notifies external systems when RTMP events occur. It integrates at two points:
+The hook system (`internal/rtmp/server/hooks/`) notifies external systems when RTMP events occur. It integrates at multiple points:
 
-1. **Server accept loop** (`server.go`): Triggers `connection_accept` and `connection_close` events
-2. **Command handlers** (`command_integration.go`): Triggers `publish_start` and `play_start` events
+1. **Server accept loop** (`server.go`): Triggers `connection_accept` on new connections
+2. **Disconnect handlers** (`command_integration.go`): Triggers `connection_close`, `publish_stop`, `play_stop`, and `subscriber_count` on disconnect
+3. **Command handlers** (`command_integration.go`): Triggers `publish_start`, `play_start`, `subscriber_count`, and `auth_failed`
+4. **Media dispatch** (`media_dispatch.go`): Triggers `codec_detected` on first media packet
 
 Each hook runs asynchronously in a bounded goroutine pool (default 10 workers). The `HookManager` maps event types to registered hooks and dispatches via `TriggerEvent()`.
 

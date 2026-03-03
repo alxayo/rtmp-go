@@ -43,11 +43,11 @@ ffplay rtmp://localhost:1935/live/test                                   # Subsc
 All multi-byte integers are **big-endian** except MSID in chunk headers (little-endian quirk). Use `encoding/binary.BigEndian` consistently and verify against golden vectors in `tests/golden/*.bin`.
 
 ### Concurrency Pattern
-Each connection runs **one readLoop goroutine** with context cancellation. Use bounded channels for backpressure:
+Each connection runs **one readLoop goroutine** with context cancellation and TCP deadline enforcement (read 90s, write 30s for zombie detection). Use bounded channels for backpressure:
 ```go
 outboundQueue := make(chan *chunk.Message, 100)  // Bounded queue
 ```
-Protect shared state (stream registry) with `sync.RWMutex`.
+Protect shared state (stream registry) with `sync.RWMutex`. On disconnect, a handler fires to clean up publisher/subscriber registrations and close relay clients.
 
 ### Error Handling
 Use domain-specific error wrappers from `internal/errors`:
@@ -80,6 +80,7 @@ tests := []struct{ name, file string; want interface{} }{
 | Control | CSID=2, MSID=0, types 1-6 |
 | AMF0 | Object ends with 0x00 0x00 0x09 |
 | Media | TypeID 8=audio, 9=video; cache sequence headers for late-join |
+| Deadlines | Read 90s, Write 30s; reset on each I/O (zombie detection) |
 
 ## Key Files for Onboarding
 
