@@ -103,6 +103,7 @@ func main() {
 		log.Info("server stopped cleanly")
 	case <-shutdownCtx.Done():
 		log.Error("forced exit after timeout")
+		os.Exit(1)
 	}
 }
 
