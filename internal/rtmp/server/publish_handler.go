@@ -63,9 +63,8 @@ func HandlePublish(reg *Registry, conn sender, app string, msg *chunk.Message) (
 }
 
 // PublisherDisconnected clears the publisher from the stream if it matches
-// the provided connection. This allows tests to simulate connection close
-// without the full connection lifecycle implemented yet. Future tasks can
-// extend this to broadcast Stream EOF to subscribers.
+// the provided connection. Called during connection teardown to allow the
+// stream key to be re-used by a new publisher.
 func PublisherDisconnected(reg *Registry, streamKey string, pub sender) {
 	if reg == nil || streamKey == "" || pub == nil {
 		return

@@ -1,14 +1,13 @@
 package server
 
-// Stream Registry (Task T048)
-// ---------------------------
-// Thread‑safe registry that tracks active publish streams keyed by the full
-// stream key ("app/stream"). This will be used by publish/play handlers so
-// they can register one publisher and multiple subscribers. At this stage we
-// only implement the minimal API required by the task; more helper methods
-// (broadcast, removal hooks etc.) can be layered in future tasks.
+// Stream Registry
+// ----------------
+// Thread-safe registry that tracks active publish streams keyed by the full
+// stream key ("app/stream"). Publish/play handlers register one publisher
+// and multiple subscribers per stream. The registry also supports media
+// broadcast, codec detection, and subscriber removal.
 //
-// Concurrency model: sync.RWMutex guards the map. Per‑stream mutable slices
+// Concurrency model: sync.RWMutex guards the map. Per-stream mutable slices
 // are guarded by the stream's own mutex (so that subscriber operations do not
 // serialize across different streams).
 

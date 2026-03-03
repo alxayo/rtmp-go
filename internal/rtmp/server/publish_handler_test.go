@@ -97,3 +97,29 @@ func TestPublisherDisconnected(t *testing.T) {
 		t.Fatalf("expected publisher cleared on disconnect")
 	}
 }
+
+// TestHandlePublishWithQueryParams verifies that when a stream name
+// contains query parameters (e.g. "stream?token=abc"), the query params
+// are stripped and the stream is registered under the clean key.
+func TestHandlePublishWithQueryParams(t *testing.T) {
+	reg := NewRegistry()
+	sc := &stubConn{}
+	msg := buildPublishMessage("mystream?token=secret123")
+
+	onStatus, err := HandlePublish(reg, sc, "live", msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if onStatus == nil {
+		t.Fatalf("expected onStatus message")
+	}
+
+	// Stream should be registered under the clean key (no query params)
+	if s := reg.GetStream("live/mystream"); s == nil {
+		t.Fatalf("expected stream registered as 'live/mystream', not found")
+	}
+	// Verify it's NOT registered with the query string in the key
+	if s := reg.GetStream("live/mystream?token=secret123"); s != nil {
+		t.Fatalf("stream should NOT be registered with query params in key")
+	}
+}

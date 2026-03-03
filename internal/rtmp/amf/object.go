@@ -77,9 +77,8 @@ func EncodeObject(w io.Writer, m map[string]interface{}) error {
 	return nil
 }
 
-// encodeAny is a minimal internal dispatcher for the subset of AMF0 types implemented so far
-// (Number, Boolean, String, Null, Object). Arrays (0x0A) and others are not yet supported here
-// because they are implemented in later tasks.
+// encodeAny is an internal dispatcher for the AMF0 types supported by this package:
+// Number, Boolean, String, Null, Object, and Strict Array.
 func encodeAny(w io.Writer, v interface{}) error {
 	switch vv := v.(type) {
 	case nil:

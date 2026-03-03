@@ -62,6 +62,18 @@ The server includes an event hook system that notifies external systems when imp
 
 Hooks execute asynchronously via a bounded concurrency pool (default: 10 workers) so they never block RTMP message processing. Each hook has a configurable timeout (default: 30 seconds).
 
+### Token-Based Authentication
+
+Authentication is enforced at the **publish/play command** level through a pluggable `auth.Validator` interface. Four built-in validators are provided:
+
+- **TokenValidator**: In-memory map of streamKey → token pairs (from CLI flags)
+- **FileValidator**: Loads tokens from a JSON file; supports live reload via SIGHUP
+- **CallbackValidator**: Delegates to an external HTTP webhook (POST with JSON body)
+
+Tokens are passed by clients via URL query parameters in the stream name field (e.g. `mystream?token=secret123`). This approach is compatible with all standard clients (OBS, FFmpeg, ffplay).
+
+The default mode is `none` (accept all requests), preserving backward compatibility.
+
 ## Concurrency Model
 
 | Resource | Protection | Why |

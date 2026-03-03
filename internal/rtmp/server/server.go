@@ -19,6 +19,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 )
 
@@ -38,6 +39,10 @@ type Config struct {
 	HookStdioFormat string   // Stdio output format: "json", "env", or "" (disabled)
 	HookTimeout     string   // Hook execution timeout (default "30s")
 	HookConcurrency int      // Max concurrent hook executions (default 10)
+
+	// Authentication (optional). When nil, all publish/play requests are allowed.
+	// Set to an auth.Validator implementation to enforce token-based access control.
+	AuthValidator auth.Validator
 }
 
 // applyDefaults fills zero values with sensible defaults.

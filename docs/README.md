@@ -15,6 +15,7 @@
 | [RTMP Protocol Reference](rtmp-protocol.md) | Wire-level protocol details: chunks, headers, AMF0, commands |
 | [Implementation Guide](implementation.md) | Code walkthrough: connection lifecycle, data structures, media flow |
 | [Testing Guide](testing-guide.md) | How to run tests, golden vectors, manual interop testing |
+| [Definition of Done](definition-of-done.md) | Feature completion checklist and verification commands |
 
 ## Feature Documentation
 
@@ -44,6 +45,7 @@
 |----------|-------------|
 | [../specs/001-rtmp-server-implementation/spec.md](../specs/001-rtmp-server-implementation/spec.md) | Core server specification |
 | [../specs/001-rtmp-server-implementation/contracts/](../specs/001-rtmp-server-implementation/contracts/) | Wire format contracts (AMF0, chunking, commands, control, handshake, media) |
+| [../specs/004-token-auth/spec.md](../specs/004-token-auth/spec.md) | Token-based authentication specification |
 
 ## Archived
 

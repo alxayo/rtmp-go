@@ -6,15 +6,17 @@ import (
 	"github.com/alxayo/go-rtmp/internal/errors"
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 )
 
 // PublishCommand represents a parsed "publish" command.
 // Spec form: ["publish", 0, null, publishingName, publishingType]
-// We also augment it with the full stream key constructed as app + "/" + publishingName.
+// The stream key is constructed as app + "/" + cleanName (without query params).
 type PublishCommand struct {
-	PublishingName string
-	PublishingType string // one of: live|record|append
-	StreamKey      string // app/publishingName
+	PublishingName string            // clean name without query params (e.g. "mystream")
+	PublishingType string            // one of: live|record|append
+	StreamKey      string            // app/publishingName (e.g. "live/mystream")
+	QueryParams    map[string]string // parsed from raw name (e.g. {"token": "abc123"})
 }
 
 // ParsePublishCommand parses an AMF0 command message assumed to contain a
@@ -53,16 +55,18 @@ func ParsePublishCommand(app string, msg *chunk.Message) (*PublishCommand, error
 		return nil, errors.NewProtocolError("publish.parse", fmt.Errorf("first value must be string 'publish'"))
 	}
 
-	// 3: publishingName
-	publishingName, ok := vals[3].(string)
+	// 3: publishingName (may contain query params like "mystream?token=abc")
+	rawName, ok := vals[3].(string)
 	if !ok {
 		return nil, errors.NewProtocolError("publish.parse", fmt.Errorf("publishingName must be string"))
 	}
-	// Allow empty publishingName - some clients send empty string
-	// In this case, use "default" as the stream name
-	if publishingName == "" {
-		publishingName = "default"
+	// Parse query parameters from the stream name (e.g. "mystream?token=abc").
+	// Empty names default to "default" (some clients send empty string).
+	if rawName == "" {
+		rawName = "default"
 	}
+	parsed := auth.ParseStreamURL(rawName)
+	publishingName := parsed.StreamName
 
 	// 4: publishingType
 	publishingType, ok := vals[4].(string)
@@ -80,5 +84,6 @@ func ParsePublishCommand(app string, msg *chunk.Message) (*PublishCommand, error
 		PublishingName: publishingName,
 		PublishingType: publishingType,
 		StreamKey:      app + "/" + publishingName,
+		QueryParams:    parsed.QueryParams,
 	}, nil
 }
