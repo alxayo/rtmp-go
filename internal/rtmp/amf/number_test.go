@@ -14,6 +14,7 @@ package amf
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -92,17 +93,19 @@ func TestDecodeNumber_Golden_1_5(t *testing.T) {
 func TestNumber_EdgeCases_RoundTrip(t *testing.T) {
 	cases := []float64{1.0, -1.0, math.Inf(1), math.Inf(-1)}
 	for _, in := range cases {
-		var buf bytes.Buffer
-		if err := EncodeNumber(&buf, in); err != nil {
-			t.Fatalf("encode %v: %v", in, err)
-		}
-		out, err := DecodeNumber(&buf)
-		if err != nil {
-			t.Fatalf("decode %v: %v", in, err)
-		}
-		if in != out {
-			t.Fatalf("mismatch: in=%v out=%v", in, out)
-		}
+		t.Run(fmt.Sprintf("%v", in), func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := EncodeNumber(&buf, in); err != nil {
+				t.Fatalf("encode %v: %v", in, err)
+			}
+			out, err := DecodeNumber(&buf)
+			if err != nil {
+				t.Fatalf("decode %v: %v", in, err)
+			}
+			if in != out {
+				t.Fatalf("mismatch: in=%v out=%v", in, out)
+			}
+		})
 	}
 }
 
