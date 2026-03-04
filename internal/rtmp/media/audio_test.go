@@ -81,9 +81,11 @@ func TestParseAudioMessage_Errors(t *testing.T) {
 		{"unsupported", []byte{15 << 4, 0x01}}, // 15 not supported
 	}
 	for _, tc := range cases {
-		if _, err := ParseAudioMessage(tc.in); err == nil {
-			_tFatalf(t, "expected error for case %s", tc.name)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseAudioMessage(tc.in); err == nil {
+				_tFatalf(t, "expected error for case %s", tc.name)
+			}
+		})
 	}
 }
 
