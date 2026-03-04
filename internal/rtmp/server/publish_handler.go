@@ -19,7 +19,8 @@ import (
 )
 
 // sender is the minimal interface required from a connection for this task.
-// *conn.Connection satisfies it. We keep it tiny so tests can use a stub.
+// The connection type from internal/rtmp/conn satisfies it. We keep it tiny
+// so tests can use a stub.
 type sender interface {
 	SendMessage(*chunk.Message) error
 }
