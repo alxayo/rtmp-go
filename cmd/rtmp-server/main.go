@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	_ "expvar" // Register /debug/vars handler on DefaultServeMux
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
+	_ "github.com/alxayo/go-rtmp/internal/rtmp/metrics" // Register expvar RTMP counters
 	srv "github.com/alxayo/go-rtmp/internal/rtmp/server"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 )
@@ -61,6 +64,16 @@ func main() {
 	}
 
 	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode)
+
+	// Start HTTP metrics server if configured
+	if cfg.metricsAddr != "" {
+		go func() {
+			log.Info("metrics HTTP server listening", "addr", cfg.metricsAddr)
+			if err := http.ListenAndServe(cfg.metricsAddr, nil); err != nil && err != http.ErrServerClosed {
+				log.Error("metrics HTTP server error", "error", err)
+			}
+		}()
+	}
 
 	// If using file-based auth, listen for SIGHUP to reload the token file
 	if cfg.authMode == "file" {
