@@ -97,8 +97,13 @@ func (hm *HookManager) TriggerEvent(ctx context.Context, event Event) {
 
 	// Get hooks for this event type
 	hm.mu.RLock()
-	hooks := make([]Hook, len(hm.hooks[event.Type]))
-	copy(hooks, hm.hooks[event.Type])
+	registered := hm.hooks[event.Type]
+	extra := 0
+	if hm.stdioHook != nil {
+		extra = 1
+	}
+	hooks := make([]Hook, len(registered), len(registered)+extra)
+	copy(hooks, registered)
 	hm.mu.RUnlock()
 
 	// Add stdio hook if enabled
