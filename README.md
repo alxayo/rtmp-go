@@ -142,6 +142,10 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 - **Transcoding** — server-side codec conversion (e.g. H.265 → H.264)
 - **Clustering** — horizontal scaling across multiple server instances
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all releases and changes.
+
 ## License
 
 See [LICENSE](LICENSE) file.
