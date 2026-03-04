@@ -83,6 +83,17 @@ Tokens are passed by clients via URL query parameters in the stream name field (
 
 The default mode is `none` (accept all requests), preserving backward compatibility.
 
+### Expvar Metrics
+
+The server uses Go's `expvar` package for live monitoring. Expvar was chosen because:
+
+- **Zero dependencies**: part of the standard library
+- **Thread-safe**: `expvar.Int` uses atomic int64 internally
+- **HTTP-ready**: registers a handler on `DefaultServeMux` at `/debug/vars`
+- **JSON output**: human- and machine-readable
+
+Metrics are organized as gauges (go up and down: active connections, publishers, subscribers, streams) and counters (monotonically increasing: total connections, media messages, bytes ingested, relay stats). The HTTP endpoint is opt-in via `-metrics-addr` so it has zero overhead when disabled.
+
 ## Concurrency Model
 
 | Resource | Protection | Why |

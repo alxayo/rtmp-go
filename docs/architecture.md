@@ -126,6 +126,7 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/server/hooks` | Event notification (webhooks, shell, stdio) | `HookManager`, `Event`, `Hook` |
 | `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector`, `Stream` |
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
+| `internal/rtmp/metrics` | Expvar counters for live monitoring | `ConnectionsActive`, `ConnectionsTotal`, `BytesIngested` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
 | `internal/bufpool` | Memory pool for chunk buffers | `Pool` |
 | `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError` |

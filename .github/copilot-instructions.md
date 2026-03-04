@@ -16,6 +16,7 @@ internal/rtmp/
 │   ├── auth/    # Token-based authentication (Validator interface + backends)
 │   └── hooks/   # Event hooks (webhooks, shell scripts, stdio)
 ├── relay/       # Multi-destination relay with late-join support
+├── metrics/     # Expvar counters (connections, publishers, subscribers, media)
 └── media/       # Audio/video message handling + FLV recording
 ```
 

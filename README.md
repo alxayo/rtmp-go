@@ -43,6 +43,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full guide with C
 | **Media Logging** | Per-connection codec detection and bitrate stats |
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
 | **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
+| **Metrics** | Expvar counters for connections, publishers, subscribers, media (HTTP `/debug/vars`) |
 | **Connection Cleanup** | TCP deadline enforcement (read 90s, write 30s), disconnect handlers, zombie detection |
 
 ## Architecture
@@ -64,6 +65,7 @@ internal/rtmp/
 │   └── hooks/    Event hook system (webhooks, shell, stdio)
 ├── media/        Audio/video parsing, codec detection, FLV recording
 ├── relay/        Multi-destination forwarding
+├── metrics/      Expvar counters for live monitoring
 └── client/       Minimal test client
 ```
 
@@ -116,6 +118,7 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -hook-stdio-format   Stdio hook output: json | env (default disabled)
 -hook-timeout        Hook execution timeout (default 30s)
 -hook-concurrency    Max concurrent hook executions (default 10)
+-metrics-addr        HTTP address for metrics endpoint (e.g. :8080). Empty = disabled
 -version             Print version and exit
 ```
 
@@ -130,13 +133,13 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 ### Recently Completed
 - Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
 - Performance benchmarks for chunk parsing, AMF0 encoding, and array operations
+- Expvar metrics: live counters for connections, publishers, subscribers, media bytes (HTTP `/debug/vars`)
 
 ### In Progress
 - Fuzz testing for AMF0 and chunk parsing (bounds safety)
 
 ### Planned
 - **RTMPS** — TLS/SSL encrypted connections
-- **Expvar metrics** — live counters for connections, publishers, subscribers
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers
 - **DVR / time-shift** — seek into live stream history
 - **Transcoding** — server-side codec conversion (e.g. H.265 → H.264)

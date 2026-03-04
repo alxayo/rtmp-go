@@ -21,6 +21,7 @@ internal/
     │   └── hooks/    Event hooks (webhooks, shell scripts, stdio output)
     ├── media/        Audio/video parsing, codec detection, FLV recording
     ├── relay/        Multi-destination forwarding to external RTMP servers
+    ├── metrics/      Expvar counters for connections, publishers, subscribers
     └── client/       Minimal RTMP client for testing
 ```
 

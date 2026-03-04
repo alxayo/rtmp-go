@@ -65,6 +65,15 @@ The server will forward all incoming media to the specified destinations.
 
 Available event types: `connection_accept`, `connection_close`, `publish_start`, `play_start`, `codec_detected`, `auth_failed`.
 
+### With Metrics
+
+```bash
+# Enable metrics endpoint on port 8080
+./rtmp-server -listen :1935 -metrics-addr :8080
+```
+
+Query metrics at `http://localhost:8080/debug/vars` — returns JSON with all RTMP counters (connections, publishers, subscribers, media bytes, relay stats, uptime).
+
 ### With Authentication
 
 ```bash
@@ -112,6 +121,7 @@ OBS Studio: set **Server** to `rtmp://localhost:1935/live` and **Stream Key** to
 | `-hook-stdio-format` | (disabled) | Stdio output format: `json` or `env` |
 | `-hook-timeout` | `30s` | Hook execution timeout |
 | `-hook-concurrency` | `10` | Max concurrent hook executions |
+| `-metrics-addr` | (disabled) | HTTP address for metrics endpoint (e.g. `:8080`). Empty = disabled |
 | `-version` | | Print version and exit |
 
 ## Test with FFmpeg
