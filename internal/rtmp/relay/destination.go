@@ -89,8 +89,8 @@ func NewDestination(rawURL string, logger *slog.Logger, clientFactory RTMPClient
 		return nil, fmt.Errorf("invalid destination URL: %w", err)
 	}
 
-	if parsedURL.Scheme != "rtmp" {
-		return nil, fmt.Errorf("destination URL must use rtmp:// scheme, got %s", parsedURL.Scheme)
+	if parsedURL.Scheme != "rtmp" && parsedURL.Scheme != "rtmps" {
+		return nil, fmt.Errorf("destination URL must use rtmp:// or rtmps:// scheme, got %s", parsedURL.Scheme)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

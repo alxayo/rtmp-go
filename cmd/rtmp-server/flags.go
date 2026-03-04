@@ -148,8 +148,8 @@ func validateRelayDestination(rawURL string) error {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
-	if parsedURL.Scheme != "rtmp" {
-		return fmt.Errorf("URL must use rtmp:// scheme, got %s", parsedURL.Scheme)
+	if parsedURL.Scheme != "rtmp" && parsedURL.Scheme != "rtmps" {
+		return fmt.Errorf("URL must use rtmp:// or rtmps:// scheme, got %s", parsedURL.Scheme)
 	}
 
 	if parsedURL.Host == "" {
