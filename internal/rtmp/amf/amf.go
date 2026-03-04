@@ -60,8 +60,8 @@ func DecodeValue(r io.Reader) (interface{}, error) {
 	if _, err := io.ReadFull(r, marker[:]); err != nil {
 		return nil, amferrors.NewAMFError("decode.value.marker.read", err)
 	}
-	// Fast path for supported markers via existing helper (object.go) which
-	// expects the marker already consumed and reconstructs a reader with it.
+	// Dispatch to helper which decodes the payload directly after the
+	// marker has been consumed (no intermediate reader allocation).
 	switch marker[0] {
 	case markerNumber, markerBoolean, markerString, markerNull, markerObject, markerStrictArray:
 		v, err := decodeValueWithMarker(marker[0], r)
@@ -73,7 +73,8 @@ func DecodeValue(r io.Reader) (interface{}, error) {
 	if unsupportedMarker(marker[0]) {
 		return nil, amferrors.NewAMFError("decode.value.unsupported", fmt.Errorf("unsupported marker 0x%02x", marker[0]))
 	}
-	// Any other marker (including 0x04, 0x08, 0x09 as standalone) we treat as unsupported per task scope.
+	// Any other AMF0 marker (0x04 MovieClip, 0x08 ECMA Array, 0x09 Object End)
+	// is unsupported per project scope.
 	return nil, amferrors.NewAMFError("decode.value.unsupported", fmt.Errorf("unsupported marker 0x%02x", marker[0]))
 }
 

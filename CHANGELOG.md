@@ -93,7 +93,6 @@ First feature-complete release of the RTMP server. Supports end-to-end streaming
 - **Connection lifecycle**: Handshake → control burst → command exchange → media streaming
 - **Stream registry**: Thread-safe map of stream keys to publisher/subscriber lists
 - **Structured logging**: `log/slog` with configurable levels (debug/info/warn/error)
-- **Buffer pool**: Memory-efficient buffer reuse (`internal/bufpool`)
 - **Domain errors**: Typed error wrappers (`HandshakeError`, `ChunkError`, `AMFError`, `ProtocolError`, `TimeoutError`)
 
 #### Testing & Tooling

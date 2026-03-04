@@ -6,7 +6,6 @@ A code-level walkthrough of the go-rtmp server. Read [Architecture](architecture
 
 ```
 internal/
-├── bufpool/          Buffer pool to reduce garbage collection pressure
 ├── errors/           Typed error wrappers (HandshakeError, ChunkError, etc.)
 ├── logger/           Structured JSON logging with runtime level changes
 └── rtmp/
