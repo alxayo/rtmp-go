@@ -212,24 +212,3 @@ func (d *Destination) Close() error {
 
 	return nil
 }
-
-// GetMetrics returns a copy of current metrics
-func (d *Destination) GetMetrics() DestinationMetrics {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return *d.Metrics // Return copy
-}
-
-// GetStatus returns the current connection status
-func (d *Destination) GetStatus() DestinationStatus {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.Status
-}
-
-// GetLastError returns the last error encountered
-func (d *Destination) GetLastError() error {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.LastError
-}

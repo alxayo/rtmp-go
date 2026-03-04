@@ -89,30 +89,6 @@ func (dm *DestinationManager) RelayMessage(msg *chunk.Message) {
 	wg.Wait()
 }
 
-// GetStatus returns status of all destinations
-func (dm *DestinationManager) GetStatus() map[string]DestinationStatus {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	status := make(map[string]DestinationStatus)
-	for url, dest := range dm.destinations {
-		status[url] = dest.GetStatus()
-	}
-	return status
-}
-
-// GetMetrics returns metrics for all destinations
-func (dm *DestinationManager) GetMetrics() map[string]DestinationMetrics {
-	dm.mu.RLock()
-	defer dm.mu.RUnlock()
-
-	metrics := make(map[string]DestinationMetrics)
-	for url, dest := range dm.destinations {
-		metrics[url] = dest.GetMetrics()
-	}
-	return metrics
-}
-
 // Close disconnects from all destinations
 func (dm *DestinationManager) Close() error {
 	dm.mu.Lock()
