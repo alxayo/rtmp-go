@@ -109,3 +109,21 @@ func TestHandlePublishWithQueryParams(t *testing.T) {
 		t.Fatalf("stream should NOT be registered with query params in key")
 	}
 }
+
+// TestHandlePublishNilArgs verifies that HandlePublish returns an error
+// when called with nil arguments rather than panicking.
+func TestHandlePublishNilArgs(t *testing.T) {
+	reg := NewRegistry()
+	sc := &stubConn{}
+	msg := buildPublishMessage("test")
+
+	if _, err := HandlePublish(nil, sc, "app", msg); err == nil {
+		t.Fatal("expected error for nil registry")
+	}
+	if _, err := HandlePublish(reg, nil, "app", msg); err == nil {
+		t.Fatal("expected error for nil conn")
+	}
+	if _, err := HandlePublish(reg, sc, "app", nil); err == nil {
+		t.Fatal("expected error for nil message")
+	}
+}
