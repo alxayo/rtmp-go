@@ -93,6 +93,10 @@ func TestServerTLS_InvalidCert(t *testing.T) {
 		s.Stop()
 		t.Fatal("expected error for invalid cert, got nil")
 	}
+	// Verify the plain RTMP listener was cleaned up after TLS failure
+	if s.Addr() != nil {
+		t.Fatal("expected nil RTMP addr after TLS cert failure (plain listener should be closed)")
+	}
 }
 
 func TestServerTLS_Disabled(t *testing.T) {

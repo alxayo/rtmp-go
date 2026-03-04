@@ -124,22 +124,28 @@ func TestNew_URLSchemes(t *testing.T) {
 
 // TestNewWithTLSConfig_Stores verifies that NewWithTLSConfig stores the config.
 func TestNewWithTLSConfig_Stores(t *testing.T) {
-	c, err := NewWithTLSConfig("rtmps://host/app/stream", nil)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if c.tlsConfig != nil {
-		t.Fatal("expected nil tlsConfig when passing nil")
-	}
+	t.Run("rtmps with nil config", func(t *testing.T) {
+		c, err := NewWithTLSConfig("rtmps://host/app/stream", nil)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if c.tlsConfig != nil {
+			t.Fatal("expected nil tlsConfig when passing nil")
+		}
+	})
 
-	c2, err := NewWithTLSConfig("rtmp://host/app/stream", nil)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	_ = c2
+	t.Run("rtmp with nil config", func(t *testing.T) {
+		c, err := NewWithTLSConfig("rtmp://host/app/stream", nil)
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		_ = c
+	})
 
-	_, err = NewWithTLSConfig("http://host/app/stream", nil)
-	if err == nil {
-		t.Fatal("expected error for http:// scheme")
-	}
+	t.Run("http scheme rejected", func(t *testing.T) {
+		_, err := NewWithTLSConfig("http://host/app/stream", nil)
+		if err == nil {
+			t.Fatal("expected error for http:// scheme")
+		}
+	})
 }

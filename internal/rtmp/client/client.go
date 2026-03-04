@@ -1,11 +1,12 @@
 package client
 
-// Minimal RTMP test client
+// Minimal RTMP/RTMPS test client
 // ------------------------
 // Scope: Provide a tiny RTMP client used only by integration / unit tests to
 // drive the server implementation. It purposefully implements only the pieces
 // required by current tests and specification phases:
 //   * TCP dial + simple handshake (handshake.ClientHandshake)
+//   * Optional TLS connections via rtmps:// URLs or NewWithTLSConfig
 //   * Send connect + createStream command messages
 //   * Publish mode: send publish command + raw audio/video RTMP messages
 //   * Play mode: send play command and read incoming audio/video messages

@@ -6,6 +6,7 @@ package errors
 //   - HandshakeError: failures during the initial handshake exchange
 //   - ChunkError: problems parsing or serializing chunk-level framing
 //   - AMFError: failures encoding/decoding AMF0 data format
+//   - TLSError: TLS configuration or handshake failures
 //   - TimeoutError: operations that exceeded their deadline
 //
 // All protocol errors implement the protocolMarker interface, enabling

@@ -3,7 +3,8 @@ package server
 // RTMP Server
 // ===========
 // TCP listener + connection manager with stream registry, pub/sub
-// coordination, media recording, relay, and event hooks.
+// coordination, media recording, relay, event hooks, and optional
+// RTMPS (TLS) support.
 
 import (
 	"context"
