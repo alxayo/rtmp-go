@@ -131,6 +131,21 @@ func IsProtocolError(err error) bool {
 	return stdErrors.As(err, &pm)
 }
 
+// TLSError indicates a TLS configuration or handshake failure.
+type TLSError struct {
+	Op  string // operation (e.g. "load_cert", "tls_listen", "tls_handshake")
+	Err error  // underlying cause
+}
+
+func (e *TLSError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("tls error: %s", e.Op)
+	}
+	return fmt.Sprintf("tls error: %s: %v", e.Op, e.Err)
+}
+func (e *TLSError) Unwrap() error { return e.Err }
+func (e *TLSError) isProtocol()   {}
+
 // Constructors — these create new error instances wrapping an underlying cause.
 // The 'op' parameter describes what operation failed (e.g. "read C0+C1").
 // The 'cause' parameter is the original error that triggered this failure.
@@ -138,6 +153,7 @@ func NewProtocolError(op string, cause error) error  { return &ProtocolError{Op:
 func NewHandshakeError(op string, cause error) error { return &HandshakeError{Op: op, Err: cause} }
 func NewChunkError(op string, cause error) error     { return &ChunkError{Op: op, Err: cause} }
 func NewAMFError(op string, cause error) error       { return &AMFError{Op: op, Err: cause} }
+func NewTLSError(op string, cause error) error       { return &TLSError{Op: op, Err: cause} }
 func NewTimeoutError(op string, d time.Duration, cause error) error {
 	return &TimeoutError{Op: op, Duration: d, Err: cause}
 }

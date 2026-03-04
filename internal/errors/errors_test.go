@@ -203,3 +203,39 @@ func TestNegativePredicates(t *testing.T) {
 		t.Fatalf("plain error shouldn't be timeout")
 	}
 }
+
+// TestTLSError verifies TLSError formatting, unwrapping, and protocol classification.
+func TestTLSError(t *testing.T) {
+	// With wrapped cause
+	root := stdErrors.New("certificate expired")
+	te := NewTLSError("load_cert", root)
+	if !IsProtocolError(te) {
+		t.Fatalf("expected TLSError to be classified as protocol error")
+	}
+	if !stdErrors.Is(te, root) {
+		t.Fatalf("expected errors.Is to find root cause")
+	}
+	var tlsErr *TLSError
+	if !stdErrors.As(te, &tlsErr) {
+		t.Fatalf("expected errors.As to extract *TLSError")
+	}
+	if tlsErr.Op != "load_cert" {
+		t.Fatalf("unexpected op: %s", tlsErr.Op)
+	}
+	expected := "tls error: load_cert: certificate expired"
+	if te.Error() != expected {
+		t.Fatalf("unexpected error string: %q (want %q)", te.Error(), expected)
+	}
+
+	// Without cause (nil)
+	nilErr := NewTLSError("tls_listen", nil)
+	if nilErr.Error() != "tls error: tls_listen" {
+		t.Fatalf("unexpected nil-cause error string: %q", nilErr.Error())
+	}
+	if !IsProtocolError(nilErr) {
+		t.Fatalf("nil-cause TLSError should still be protocol error")
+	}
+	if IsTimeout(nilErr) {
+		t.Fatalf("TLSError should not be timeout")
+	}
+}
