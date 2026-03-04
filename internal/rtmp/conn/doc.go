@@ -21,5 +21,4 @@
 // The outbound queue is bounded (see [outboundQueueSize]) to provide
 // backpressure. [SendMessage] blocks briefly (see [sendTimeout]) and returns
 // an error if the queue is full.
-//
 package conn
