@@ -56,6 +56,9 @@ func main() {
 		HookTimeout:       cfg.hookTimeout,
 		HookConcurrency:   cfg.hookConcurrency,
 		AuthValidator:     authValidator,
+		TLSCertFile:       cfg.tlsCert,
+		TLSKeyFile:        cfg.tlsKey,
+		TLSListenAddr:     cfg.tlsListen,
 	})
 
 	if err := server.Start(); err != nil {

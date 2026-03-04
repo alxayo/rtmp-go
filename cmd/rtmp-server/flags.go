@@ -40,6 +40,11 @@ type cliConfig struct {
 	authFile            string   // path to JSON token file (for mode=file)
 	authCallbackURL     string   // webhook URL (for mode=callback)
 	authCallbackTimeout string   // callback HTTP timeout (default "5s")
+
+	// TLS/RTMPS
+	tlsCert   string // path to TLS certificate PEM file
+	tlsKey    string // path to TLS private key PEM file
+	tlsListen string // RTMPS listen address (e.g. ":443")
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -74,6 +79,11 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.authFile, "auth-file", "", "Path to JSON token file (for -auth-mode=file)")
 	fs.StringVar(&cfg.authCallbackURL, "auth-callback", "", "Webhook URL for auth validation (for -auth-mode=callback)")
 	fs.StringVar(&cfg.authCallbackTimeout, "auth-callback-timeout", "5s", "Auth callback HTTP timeout")
+
+	// TLS/RTMPS flags
+	fs.StringVar(&cfg.tlsCert, "tls-cert", "", "Path to TLS certificate file (PEM). Enables RTMPS when set with -tls-key")
+	fs.StringVar(&cfg.tlsKey, "tls-key", "", "Path to TLS private key file (PEM). Enables RTMPS when set with -tls-cert")
+	fs.StringVar(&cfg.tlsListen, "tls-listen", ":443", "RTMPS listen address (default :443)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -124,6 +134,19 @@ func parseFlags(args []string) (*cliConfig, error) {
 		}
 	default:
 		return nil, fmt.Errorf("invalid -auth-mode %q (expected none|token|file|callback)", cfg.authMode)
+	}
+
+	// Validate TLS flags: both must be set or both must be empty
+	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
+		return nil, errors.New("-tls-cert and -tls-key must both be specified")
+	}
+	if cfg.tlsCert != "" {
+		if _, err := os.Stat(cfg.tlsCert); err != nil {
+			return nil, fmt.Errorf("TLS certificate file not found: %s", cfg.tlsCert)
+		}
+		if _, err := os.Stat(cfg.tlsKey); err != nil {
+			return nil, fmt.Errorf("TLS key file not found: %s", cfg.tlsKey)
+		}
 	}
 
 	return cfg, nil
