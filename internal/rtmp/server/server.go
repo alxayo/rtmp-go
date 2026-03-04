@@ -44,6 +44,12 @@ type Config struct {
 	// Authentication (optional). When nil, all publish/play requests are allowed.
 	// Set to an auth.Validator implementation to enforce token-based access control.
 	AuthValidator auth.Validator
+
+	// TLS configuration (optional). When both TLSCertFile and TLSKeyFile are set,
+	// the server starts an additional RTMPS listener alongside the plain RTMP one.
+	TLSCertFile   string // Path to TLS certificate file (PEM format)
+	TLSKeyFile    string // Path to TLS private key file (PEM format)
+	TLSListenAddr string // RTMPS listen address (default ":443")
 }
 
 // applyDefaults fills zero values with sensible defaults.
@@ -63,6 +69,14 @@ func (c *Config) applyDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if c.TLSListenAddr == "" {
+		c.TLSListenAddr = ":443"
+	}
+}
+
+// TLSEnabled returns true when both cert and key paths are configured.
+func (c *Config) TLSEnabled() bool {
+	return c.TLSCertFile != "" && c.TLSKeyFile != ""
 }
 
 // Server encapsulates listener + active connection tracking.
