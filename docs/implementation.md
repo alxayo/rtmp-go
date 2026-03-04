@@ -21,7 +21,7 @@ internal/
     ├── media/        Audio/video parsing, codec detection, FLV recording
     ├── relay/        Multi-destination forwarding to external RTMP servers
     ├── metrics/      Expvar counters for connections, publishers, subscribers
-    └── client/       Minimal RTMP client for testing
+    └── client/       Minimal RTMP/RTMPS client for testing (supports rtmp:// and rtmps://)
 ```
 
 ## Connection Lifecycle
@@ -30,9 +30,11 @@ When a client connects, the following sequence occurs:
 
 ### 1. TCP Accept → Handshake (`conn/conn.go: Accept()`)
 
+For plain RTMP, `net.Listener.Accept()` returns a raw TCP connection. When TLS is configured, a second `tls.Listener` runs on the RTMPS port — its `Accept()` returns a `tls.Conn` (which implements `net.Conn`), so the remaining flow is identical.
+
 ```
 server.acceptLoop()
-  └─ raw, _ := listener.Accept()          // raw TCP connection
+  └─ raw, _ := listener.Accept()          // raw TCP or tls.Conn
   └─ handshake.ServerHandshake(raw)        // C0/C1/C2 ↔ S0/S1/S2 exchange
   └─ conn := &Connection{...}             // wrap with lifecycle management
   └─ conn.startWriteLoop()                // begin outbound goroutine

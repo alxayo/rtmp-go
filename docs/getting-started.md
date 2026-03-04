@@ -101,6 +101,32 @@ ffplay "rtmp://localhost:1935/live/stream1?token=secret123"
 
 OBS Studio: set **Server** to `rtmp://localhost:1935/live` and **Stream Key** to `stream1?token=secret123`.
 
+### With RTMPS (TLS)
+
+```bash
+# Start with TLS enabled (requires cert + key files)
+./rtmp-server -listen :1935 \
+  -tls-cert server.crt -tls-key server.key -tls-listen :443
+```
+
+Both plain RTMP (port 1935) and encrypted RTMPS (port 443) listeners run simultaneously. Clients connect via `rtmps://`:
+
+```bash
+# Publish over RTMPS
+ffmpeg -re -i test.mp4 -c copy -f flv rtmps://localhost:443/live/test
+
+# Play over RTMPS
+ffplay rtmps://localhost:443/live/test
+```
+
+Relay destinations also support `rtmps://` URLs:
+
+```bash
+./rtmp-server -listen :1935 \
+  -tls-cert server.crt -tls-key server.key \
+  -relay-to rtmps://cdn.example.com/live/key
+```
+
 ### All CLI Flags
 
 | Flag | Default | Description |
@@ -122,6 +148,9 @@ OBS Studio: set **Server** to `rtmp://localhost:1935/live` and **Stream Key** to
 | `-hook-timeout` | `30s` | Hook execution timeout |
 | `-hook-concurrency` | `10` | Max concurrent hook executions |
 | `-metrics-addr` | (disabled) | HTTP address for metrics endpoint (e.g. `:8080`). Empty = disabled |
+| `-tls-cert` | (none) | Path to TLS certificate file (PEM). Enables RTMPS with `-tls-key` |
+| `-tls-key` | (none) | Path to TLS private key file (PEM). Enables RTMPS with `-tls-cert` |
+| `-tls-listen` | `:443` | RTMPS listen address |
 | `-version` | | Print version and exit |
 
 ## Test with FFmpeg

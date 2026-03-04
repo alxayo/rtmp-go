@@ -94,6 +94,16 @@ The server uses Go's `expvar` package for live monitoring. Expvar was chosen bec
 
 Metrics are organized as gauges (go up and down: active connections, publishers, subscribers, streams) and counters (monotonically increasing: total connections, media messages, bytes ingested, relay stats). The HTTP endpoint is opt-in via `-metrics-addr` so it has zero overhead when disabled.
 
+### RTMPS (TLS) Support
+
+RTMPS adds TLS encryption to the RTMP transport using Go's `crypto/tls` package (zero external dependencies). Key design choices:
+
+- **Dual-mode listeners**: The server runs separate `net.Listener` (plain) and `tls.Listener` (encrypted) goroutines. Both feed into the same accept loop and share the same stream registry, so a plain publisher and a TLS subscriber can interact seamlessly.
+- **Transparent wrapping**: `tls.Conn` implements `net.Conn`, so the entire RTMP protocol stack (handshake, chunking, commands, media) is unchanged — TLS only wraps the transport.
+- **Minimum TLS 1.2**: Enforced via `tls.Config.MinVersion` to prevent downgrade attacks.
+- **Client-side scheme detection**: The client automatically dials with TLS when the URL scheme is `rtmps://`, defaulting to port 443. Relay destinations also accept `rtmps://` URLs.
+- **Cleanup on failure**: If TLS certificate loading fails during `Server.Start()`, the already-opened plain listener is closed to prevent resource leaks.
+
 ## Concurrency Model
 
 | Resource | Protection | Why |
@@ -128,6 +138,7 @@ Errors are classified by protocol layer using typed error wrappers:
 - `ChunkError` — framing/parsing issues
 - `AMFError` — serialization failures
 - `ProtocolError` — command/state violations
+- `TLSError` — TLS configuration or handshake failures
 - `TimeoutError` — deadline exceeded
 
 Each error includes the operation name (e.g., "read C0+C1") for debuggability. Errors support Go's `errors.Is` / `errors.As` unwrapping.

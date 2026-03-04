@@ -67,7 +67,7 @@ internal/rtmp/
 ├── media/        Audio/video parsing, codec detection, FLV recording
 ├── relay/        Multi-destination forwarding
 ├── metrics/      Expvar counters for live monitoring
-└── client/       Minimal test client
+└── client/       Minimal RTMP/RTMPS test client
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full system overview with diagrams.
@@ -134,7 +134,13 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ## Roadmap
 
-### v0.1.2 (current)
+### v0.1.3 (current)
+- RTMPS: TLS/SSL encrypted connections via `-tls-cert` and `-tls-key` flags
+- Dual-mode: plain RTMP and RTMPS listeners run simultaneously
+- Client and relay support for `rtmps://` URLs
+- Minimum TLS 1.2 enforcement
+
+### v0.1.2
 - Expvar metrics: live counters for connections, publishers, subscribers, media bytes (HTTP `/debug/vars`)
 - Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
 - Performance optimizations: AMF0 decode allocations, chunk writer buffer reuse, RPC lazy-init

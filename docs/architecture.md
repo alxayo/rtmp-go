@@ -69,7 +69,7 @@ This project implements an RTMP server (and minimal client) in pure Go with zero
 Here's what happens when OBS connects and starts streaming:
 
 ### 1. TCP Connection
-The server listens on port 1935 (default). When OBS connects, `net.Listener.Accept()` returns a raw TCP connection.
+The server listens on port 1935 (default). When OBS connects, `net.Listener.Accept()` returns a raw TCP connection. If RTMPS is configured (`-tls-cert` and `-tls-key`), a second TLS listener runs on port 443 (default). TLS connections are unwrapped by `crypto/tls` before entering the handshake — the rest of the protocol stack is identical for both plain and encrypted connections.
 
 ### 2. Handshake (`internal/rtmp/handshake`)
 Both sides exchange version bytes and random data:
@@ -127,8 +127,8 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector`, `Stream` |
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
 | `internal/rtmp/metrics` | Expvar counters for live monitoring | `ConnectionsActive`, `ConnectionsTotal`, `BytesIngested` |
-| `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
-| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError` |
+| `internal/rtmp/client` | Minimal RTMP/RTMPS client for testing | `Client` |
+| `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError`, `TLSError` |
 | `internal/logger` | Structured logging with dynamic level | `Init()`, `Logger()`, `WithConn()` |
 
 ## Key Concepts
