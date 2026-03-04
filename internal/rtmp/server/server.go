@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	rerrors "github.com/alxayo/go-rtmp/internal/errors"
 	"github.com/alxayo/go-rtmp/internal/logger"
 	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
@@ -83,6 +85,7 @@ func (c *Config) TLSEnabled() bool {
 type Server struct {
 	cfg                Config
 	l                  net.Listener
+	tlsListener        net.Listener // RTMPS listener (nil when TLS disabled)
 	log                *slog.Logger
 	reg                *Registry
 	destinationManager *relay.DestinationManager
@@ -147,22 +150,53 @@ func (s *Server) Start() error {
 
 	s.log.Info("RTMP server listening", "addr", ln.Addr().String())
 	s.acceptingWg.Add(1)
-	go s.acceptLoop()
+	go s.acceptLoop(ln, "rtmp")
+
+	// If TLS is configured, start a second listener for RTMPS
+	if s.cfg.TLSEnabled() {
+		cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+		if err != nil {
+			_ = ln.Close()
+			s.mu.Lock()
+			s.l = nil
+			s.mu.Unlock()
+			return fmt.Errorf("load TLS certificate: %w",
+				rerrors.NewTLSError("load_cert", err))
+		}
+
+		tlsCfg := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+
+		tlsLn, err := tls.Listen("tcp", s.cfg.TLSListenAddr, tlsCfg)
+		if err != nil {
+			_ = ln.Close()
+			s.mu.Lock()
+			s.l = nil
+			s.mu.Unlock()
+			return fmt.Errorf("tls listen %s: %w", s.cfg.TLSListenAddr,
+				rerrors.NewTLSError("tls_listen", err))
+		}
+
+		s.mu.Lock()
+		s.tlsListener = tlsLn
+		s.mu.Unlock()
+
+		s.log.Info("RTMPS server listening", "addr", tlsLn.Addr().String())
+		s.acceptingWg.Add(1)
+		go s.acceptLoop(tlsLn, "rtmps")
+	}
+
 	return nil
 }
 
 // acceptLoop runs until listener close. Each successful accept performs the
 // RTMP handshake via conn.Accept which internally sends the control burst.
-func (s *Server) acceptLoop() {
+func (s *Server) acceptLoop(ln net.Listener, proto string) {
 	defer s.acceptingWg.Done()
 	for {
-		s.mu.RLock()
-		l := s.l
-		s.mu.RUnlock()
-		if l == nil {
-			return
-		}
-		raw, err := l.Accept()
+		raw, err := ln.Accept()
 		if err != nil {
 			// If we are shutting down, Accept will return an error (use closing flag to suppress noise).
 			s.mu.RLock()
@@ -174,7 +208,7 @@ func (s *Server) acceptLoop() {
 			if closing || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			s.log.Warn("accept error", "error", err)
+			s.log.Warn("accept error", "proto", proto, "error", err)
 			return
 		}
 		// Handshake + control burst integration lives in conn.Accept.
@@ -219,8 +253,13 @@ func (s *Server) Stop() error {
 	s.closing = true
 	l := s.l
 	s.l = nil
+	tlsLn := s.tlsListener
+	s.tlsListener = nil
 	s.mu.Unlock()
 	_ = l.Close()
+	if tlsLn != nil {
+		_ = tlsLn.Close()
+	}
 
 	// Close all connections and clean up recorders.
 	s.mu.Lock()
@@ -267,6 +306,16 @@ func (s *Server) Addr() net.Addr {
 		return nil
 	}
 	return s.l.Addr()
+}
+
+// TLSAddr returns the RTMPS listener address, or nil if TLS is not enabled.
+func (s *Server) TLSAddr() net.Addr {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.tlsListener == nil {
+		return nil
+	}
+	return s.tlsListener.Addr()
 }
 
 // ConnectionCount returns current number of tracked active connections.
