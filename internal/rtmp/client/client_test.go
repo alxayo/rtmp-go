@@ -98,3 +98,48 @@ func TestPlayFlow(t *testing.T) {
 	_ = c.Close()
 	*/
 }
+
+// TestNew_URLSchemes verifies URL scheme validation for rtmp:// and rtmps://.
+func TestNew_URLSchemes(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"rtmp valid", "rtmp://host/app/stream", false},
+		{"rtmps valid", "rtmps://host/app/stream", false},
+		{"https invalid", "https://host/app/stream", true},
+		{"http invalid", "http://host/app/stream", true},
+		{"no scheme", "host/app/stream", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("New(%q) err=%v, wantErr=%v", tt.url, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestNewWithTLSConfig_Stores verifies that NewWithTLSConfig stores the config.
+func TestNewWithTLSConfig_Stores(t *testing.T) {
+	c, err := NewWithTLSConfig("rtmps://host/app/stream", nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if c.tlsConfig != nil {
+		t.Fatal("expected nil tlsConfig when passing nil")
+	}
+
+	c2, err := NewWithTLSConfig("rtmp://host/app/stream", nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	_ = c2
+
+	_, err = NewWithTLSConfig("http://host/app/stream", nil)
+	if err == nil {
+		t.Fatal("expected error for http:// scheme")
+	}
+}

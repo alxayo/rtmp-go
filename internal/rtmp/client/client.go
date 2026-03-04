@@ -30,6 +30,7 @@ package client
 // Simplifications are documented inline so future tasks can extend safely.
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,12 +76,14 @@ type Client struct {
 
 	trxMu sync.Mutex // protects trxID from concurrent access
 	trxID float64    // incrementing transaction ID for request-response matching
+
+	tlsConfig *tls.Config // optional custom TLS config (nil = system defaults)
 }
 
 // New creates a new Client (not yet connected).
 func New(rawurl string) (*Client, error) {
-	if !strings.HasPrefix(rawurl, "rtmp://") {
-		return nil, fmt.Errorf("url must start with rtmp://")
+	if !strings.HasPrefix(rawurl, "rtmp://") && !strings.HasPrefix(rawurl, "rtmps://") {
+		return nil, fmt.Errorf("url must start with rtmp:// or rtmps://")
 	}
 	u, err := url.Parse(rawurl)
 	if err != nil {
@@ -89,7 +92,7 @@ func New(rawurl string) (*Client, error) {
 	// Path expected: /app/streamName
 	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("rtmp url must be rtmp://host/app/stream")
+		return nil, fmt.Errorf("rtmp url must be rtmp[s]://host/app/stream")
 	}
 	app := parts[0]
 	stream := strings.Join(parts[1:], "/")
@@ -103,6 +106,18 @@ func New(rawurl string) (*Client, error) {
 	return c, nil
 }
 
+// NewWithTLSConfig creates a client with a custom TLS configuration.
+// This is useful when connecting to servers with self-signed certificates
+// or when specific TLS settings are required.
+func NewWithTLSConfig(rawurl string, tlsCfg *tls.Config) (*Client, error) {
+	c, err := New(rawurl)
+	if err != nil {
+		return nil, err
+	}
+	c.tlsConfig = tlsCfg
+	return c, nil
+}
+
 // nextTrx increments and returns the next transaction ID (AMF0 number semantics).
 func (c *Client) nextTrx() float64 { c.trxMu.Lock(); defer c.trxMu.Unlock(); c.trxID++; return c.trxID }
 
@@ -112,11 +127,32 @@ func (c *Client) Connect() error {
 		return nil
 	}
 	host := c.url.Host
+	useTLS := c.url.Scheme == "rtmps"
+
 	if !strings.Contains(host, ":") {
-		host = host + ":1935"
+		if useTLS {
+			host = host + ":443"
+		} else {
+			host = host + ":1935"
+		}
 	}
-	d := net.Dialer{Timeout: DialTimeout}
-	conn, err := d.Dial("tcp", host)
+
+	var conn net.Conn
+	var err error
+
+	if useTLS {
+		tlsCfg := c.tlsConfig
+		if tlsCfg == nil {
+			tlsCfg = &tls.Config{}
+		}
+		conn, err = tls.DialWithDialer(
+			&net.Dialer{Timeout: DialTimeout},
+			"tcp", host, tlsCfg,
+		)
+	} else {
+		d := net.Dialer{Timeout: DialTimeout}
+		conn, err = d.Dial("tcp", host)
+	}
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
