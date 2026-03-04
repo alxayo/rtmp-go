@@ -11,12 +11,10 @@ import (
 	"testing"
 )
 
-const goldenDirNull = "../../../tests/golden"
-
 // readGoldenNull loads the golden file for null tests.
 func readGoldenNull(t *testing.T, name string) []byte {
 	t.Helper()
-	p := filepath.Join(goldenDirNull, name)
+	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read golden %s: %v", name, err)

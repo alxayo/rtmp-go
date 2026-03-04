@@ -23,15 +23,13 @@ import (
 const goldenDir = "../../../tests/golden" // relative to this test file directory
 
 // readGolden loads a golden binary vector from tests/golden/.
-// It panics on failure because missing golden files indicate a broken
-// test environment, not a test failure.
+// Missing golden files indicate a broken test environment.
 func readGolden(t *testing.T, name string) []byte {
-	// Using filepath.Join for Windows compatibility.
+	t.Helper()
 	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {
-		// Provide context but fail fast; golden vectors are required.
-		panic(err)
+		t.Fatalf("read golden %s: %v", name, err)
 	}
 	return b
 }
