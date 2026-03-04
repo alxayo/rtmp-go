@@ -1,10 +1,10 @@
 package amf
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 
 	amferrors "github.com/alxayo/go-rtmp/internal/errors"
@@ -108,6 +108,61 @@ func DecodeObject(r io.Reader) (map[string]interface{}, error) {
 	if mMarker[0] != markerObject {
 		return nil, amferrors.NewAMFError("decode.object.marker", fmt.Errorf("expected 0x%02x got 0x%02x", markerObject, mMarker[0]))
 	}
+	return decodeObjectPayload(r)
+}
+
+// decodeValueWithMarker dispatches based on an already-consumed marker byte.
+// It reads the remaining payload from r without re-reading the marker, avoiding
+// the allocation overhead of io.MultiReader.
+func decodeValueWithMarker(marker byte, r io.Reader) (interface{}, error) {
+	switch marker {
+	case markerNumber:
+		var num [8]byte
+		if _, err := io.ReadFull(r, num[:]); err != nil {
+			return nil, amferrors.NewAMFError("decode.number.read", err)
+		}
+		u := binary.BigEndian.Uint64(num[:])
+		return math.Float64frombits(u), nil
+	case markerBoolean:
+		var b [1]byte
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return nil, amferrors.NewAMFError("decode.boolean.read", err)
+		}
+		return b[0] != 0x00, nil
+	case markerString:
+		return decodeStringPayload(r)
+	case markerNull:
+		return nil, nil // null has no payload beyond the marker
+	case markerObject:
+		return decodeObjectPayload(r)
+	case markerStrictArray:
+		return decodeStrictArrayPayload(r)
+	default:
+		return nil, fmt.Errorf("unsupported marker 0x%02x", marker)
+	}
+}
+
+// decodeStringPayload reads an AMF0 string payload (length + bytes) after the
+// marker has already been consumed.
+func decodeStringPayload(r io.Reader) (string, error) {
+	var ln [2]byte
+	if _, err := io.ReadFull(r, ln[:]); err != nil {
+		return "", amferrors.NewAMFError("decode.string.length.read", err)
+	}
+	l := binary.BigEndian.Uint16(ln[:])
+	if l == 0 {
+		return "", nil
+	}
+	buf := make([]byte, l)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return "", amferrors.NewAMFError("decode.string.read", err)
+	}
+	return string(buf), nil
+}
+
+// decodeObjectPayload reads an AMF0 object payload (key-value pairs + end marker)
+// after the object marker has already been consumed.
+func decodeObjectPayload(r io.Reader) (map[string]interface{}, error) {
 	out := make(map[string]interface{})
 	for {
 		var klenBuf [2]byte
@@ -131,13 +186,8 @@ func DecodeObject(r io.Reader) (map[string]interface{}, error) {
 		}
 		key := string(keyBytes)
 
-		// Peek marker for value to dispatch. We read one byte, then re-create a reader with it prefixed.
-		var valMarker [1]byte
-		if _, err := io.ReadFull(r, valMarker[:]); err != nil {
-			return nil, amferrors.NewAMFError("decode.object.value.marker.read", err)
-		}
-
-		val, err := decodeValueWithMarker(valMarker[0], r)
+		// Decode the value (reads marker internally).
+		val, err := DecodeValue(r)
 		if err != nil {
 			return nil, amferrors.NewAMFError("decode.object.value", fmt.Errorf("key '%s': %w", key, err))
 		}
@@ -146,26 +196,21 @@ func DecodeObject(r io.Reader) (map[string]interface{}, error) {
 	return out, nil
 }
 
-// decodeValueWithMarker dispatches based on an already-consumed marker byte. It consumes the
-// remaining payload from r appropriate to the marker.
-func decodeValueWithMarker(marker byte, r io.Reader) (interface{}, error) {
-	switch marker {
-	case markerNumber:
-		// Reconstruct a reader including the marker to reuse existing decoder.
-		return DecodeNumber(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-	case markerBoolean:
-		return DecodeBoolean(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-	case markerString:
-		return DecodeString(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-	case markerNull:
-		v, err := DecodeNull(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-		return v, err
-	case markerObject:
-		// Nested object: reuse DecodeObject by reconstructing the marker.
-		return DecodeObject(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-	case markerStrictArray:
-		return DecodeStrictArray(io.MultiReader(bytes.NewReader([]byte{marker}), r))
-	default:
-		return nil, fmt.Errorf("unsupported marker 0x%02x", marker)
+// decodeStrictArrayPayload reads an AMF0 strict array payload (count + elements)
+// after the array marker has already been consumed.
+func decodeStrictArrayPayload(r io.Reader) ([]interface{}, error) {
+	var countBuf [4]byte
+	if _, err := io.ReadFull(r, countBuf[:]); err != nil {
+		return nil, amferrors.NewAMFError("decode.array.count.read", err)
 	}
+	count := binary.BigEndian.Uint32(countBuf[:])
+	out := make([]interface{}, 0, count)
+	for i := uint32(0); i < count; i++ {
+		val, err := DecodeValue(r)
+		if err != nil {
+			return nil, amferrors.NewAMFError("decode.array.element", fmt.Errorf("index %d: %w", i, err))
+		}
+		out = append(out, val)
+	}
+	return out, nil
 }

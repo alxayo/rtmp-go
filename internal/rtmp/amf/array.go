@@ -39,7 +39,7 @@ func EncodeStrictArray(w io.Writer, arr []interface{}) error {
 // Error cases include:
 //   - Marker mismatch (decode.array.marker)
 //   - Short reads for header or elements (decode.array.header.read / decode.array.element.read)
-//   - Unsupported nested type markers (bubbled from decodeValueWithMarker)
+//   - Unsupported nested type markers (bubbled from DecodeValue)
 func DecodeStrictArray(r io.Reader) ([]interface{}, error) {
 	var marker [1]byte
 	if _, err := io.ReadFull(r, marker[:]); err != nil {
@@ -48,25 +48,7 @@ func DecodeStrictArray(r io.Reader) ([]interface{}, error) {
 	if marker[0] != markerStrictArray {
 		return nil, amferrors.NewAMFError("decode.array.marker", fmt.Errorf("expected 0x%02x got 0x%02x", markerStrictArray, marker[0]))
 	}
-	var countBuf [4]byte
-	if _, err := io.ReadFull(r, countBuf[:]); err != nil {
-		return nil, amferrors.NewAMFError("decode.array.count.read", err)
-	}
-	count := binary.BigEndian.Uint32(countBuf[:])
-	out := make([]interface{}, 0, count)
-	for i := uint32(0); i < count; i++ {
-		// Read marker for element then dispatch.
-		var elemMarker [1]byte
-		if _, err := io.ReadFull(r, elemMarker[:]); err != nil {
-			return nil, amferrors.NewAMFError("decode.array.element.marker.read", err)
-		}
-		val, err := decodeValueWithMarker(elemMarker[0], r)
-		if err != nil {
-			return nil, amferrors.NewAMFError("decode.array.element", fmt.Errorf("index %d: %w", i, err))
-		}
-		out = append(out, val)
-	}
-	return out, nil
+	return decodeStrictArrayPayload(r)
 }
 
 // roundTripStrictArray is a helper for tests: encode then decode an array for round-trip verification.
