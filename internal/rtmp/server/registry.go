@@ -19,6 +19,7 @@ import (
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 )
 
 // ErrPublisherExists is returned when trying to set a second publisher.
@@ -80,6 +81,7 @@ func (r *Registry) CreateStream(key string) (*Stream, bool) {
 	}
 	s := &Stream{Key: key, StartTime: time.Now(), Subscribers: make([]media.Subscriber, 0)}
 	r.streams[key] = s
+	metrics.StreamsActive.Add(1)
 	return s, true
 }
 
@@ -99,6 +101,7 @@ func (r *Registry) DeleteStream(key string) bool {
 	defer r.mu.Unlock()
 	if _, ok := r.streams[key]; ok {
 		delete(r.streams, key)
+		metrics.StreamsActive.Add(-1)
 		return true
 	}
 	return false
@@ -115,6 +118,8 @@ func (s *Stream) SetPublisher(pub interface{}) error {
 		return ErrPublisherExists
 	}
 	s.Publisher = pub
+	metrics.PublishersActive.Add(1)
+	metrics.PublishersTotal.Add(1)
 	return nil
 }
 
@@ -125,6 +130,8 @@ func (s *Stream) AddSubscriber(sub media.Subscriber) {
 	}
 	s.mu.Lock()
 	s.Subscribers = append(s.Subscribers, sub)
+	metrics.SubscribersActive.Add(1)
+	metrics.SubscribersTotal.Add(1)
 	s.mu.Unlock()
 }
 
@@ -144,6 +151,7 @@ func (s *Stream) RemoveSubscriber(sub media.Subscriber) {
 			s.Subscribers[i] = s.Subscribers[last]
 			s.Subscribers[last] = nil
 			s.Subscribers = s.Subscribers[:last]
+			metrics.SubscribersActive.Add(-1)
 			break
 		}
 	}
