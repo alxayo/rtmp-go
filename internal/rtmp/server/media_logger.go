@@ -14,6 +14,7 @@ import (
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 )
 
 // MediaLogger tracks and logs media packet statistics for a connection.
@@ -87,9 +88,11 @@ func (ml *MediaLogger) ProcessMessage(msg *chunk.Message) {
 
 	// Update counters
 	ml.totalBytes += uint64(len(msg.Payload))
+	metrics.BytesIngested.Add(int64(len(msg.Payload)))
 
 	if msg.TypeID == 8 {
 		ml.audioCount++
+		metrics.MessagesAudio.Add(1)
 		// Detect audio codec on first packet
 		if ml.audioCodec == "" && len(msg.Payload) > 0 {
 			if am, err := media.ParseAudioMessage(msg.Payload); err == nil {
@@ -101,6 +104,7 @@ func (ml *MediaLogger) ProcessMessage(msg *chunk.Message) {
 		}
 	} else if msg.TypeID == 9 {
 		ml.videoCount++
+		metrics.MessagesVideo.Add(1)
 		// Detect video codec on first packet
 		if ml.videoCodec == "" && len(msg.Payload) > 0 {
 			if vm, err := media.ParseVideoMessage(msg.Payload); err == nil {
