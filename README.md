@@ -130,10 +130,11 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ## Roadmap
 
-### Recently Completed
-- Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
-- Performance benchmarks for chunk parsing, AMF0 encoding, and array operations
+### v0.1.2 (current)
 - Expvar metrics: live counters for connections, publishers, subscribers, media bytes (HTTP `/debug/vars`)
+- Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
+- Performance optimizations: AMF0 decode allocations, chunk writer buffer reuse, RPC lazy-init
+- Dead code removal: unused bufpool package, unreachable error sentinels
 
 ### In Progress
 - Fuzz testing for AMF0 and chunk parsing (bounds safety)
@@ -141,9 +142,9 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 ### Planned
 - **RTMPS** — TLS/SSL encrypted connections
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers
+- **Clustering & HA** — horizontal scaling with cross-node relay and dual-ingest failover ([design](specs/007-clustering-ha/clustering_ha.md))
 - **DVR / time-shift** — seek into live stream history
 - **Transcoding** — server-side codec conversion (e.g. H.265 → H.264)
-- **Clustering** — horizontal scaling across multiple server instances
 
 ## Changelog
 

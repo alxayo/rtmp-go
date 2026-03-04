@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// version is set at build time using: go build -ldflags "-X main.version=v0.1.1"
+// version is set at build time using: go build -ldflags "-X main.version=v0.1.2"
 // When building without ldflags, it defaults to the value below.
-var version = "v0.1.1"
+var version = "v0.1.2"
 
 // cliConfig holds the parsed command-line flag values.
 // These are validated in parseFlags() before being mapped to server.Config.
