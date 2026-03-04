@@ -14,11 +14,13 @@ import (
 
 	rtmperrors "github.com/alxayo/go-rtmp/internal/errors"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
 // sender is the minimal interface required from a connection for this task.
-// *conn.Connection satisfies it. We keep it tiny so tests can use a stub.
+// The connection type from internal/rtmp/conn satisfies it. We keep it tiny
+// so tests can use a stub.
 type sender interface {
 	SendMessage(*chunk.Message) error
 }
@@ -76,6 +78,7 @@ func PublisherDisconnected(reg *Registry, streamKey string, pub sender) {
 	s.mu.Lock()
 	if s.Publisher == pub {
 		s.Publisher = nil
+		metrics.PublishersActive.Add(-1)
 	}
 	s.mu.Unlock()
 }

@@ -14,6 +14,7 @@ package amf
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -23,15 +24,13 @@ import (
 const goldenDir = "../../../tests/golden" // relative to this test file directory
 
 // readGolden loads a golden binary vector from tests/golden/.
-// It panics on failure because missing golden files indicate a broken
-// test environment, not a test failure.
+// Missing golden files indicate a broken test environment.
 func readGolden(t *testing.T, name string) []byte {
-	// Using filepath.Join for Windows compatibility.
+	t.Helper()
 	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {
-		// Provide context but fail fast; golden vectors are required.
-		panic(err)
+		t.Fatalf("read golden %s: %v", name, err)
 	}
 	return b
 }
@@ -94,17 +93,19 @@ func TestDecodeNumber_Golden_1_5(t *testing.T) {
 func TestNumber_EdgeCases_RoundTrip(t *testing.T) {
 	cases := []float64{1.0, -1.0, math.Inf(1), math.Inf(-1)}
 	for _, in := range cases {
-		var buf bytes.Buffer
-		if err := EncodeNumber(&buf, in); err != nil {
-			t.Fatalf("encode %v: %v", in, err)
-		}
-		out, err := DecodeNumber(&buf)
-		if err != nil {
-			t.Fatalf("decode %v: %v", in, err)
-		}
-		if in != out {
-			t.Fatalf("mismatch: in=%v out=%v", in, out)
-		}
+		t.Run(fmt.Sprintf("%v", in), func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := EncodeNumber(&buf, in); err != nil {
+				t.Fatalf("encode %v: %v", in, err)
+			}
+			out, err := DecodeNumber(&buf)
+			if err != nil {
+				t.Fatalf("decode %v: %v", in, err)
+			}
+			if in != out {
+				t.Fatalf("mismatch: in=%v out=%v", in, out)
+			}
+		})
 	}
 }
 

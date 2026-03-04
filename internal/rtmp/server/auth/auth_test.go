@@ -16,7 +16,6 @@ func TestSentinelErrors(t *testing.T) {
 	}{
 		{"ErrUnauthorized", ErrUnauthorized},
 		{"ErrTokenMissing", ErrTokenMissing},
-		{"ErrForbidden", ErrForbidden},
 	}
 	for _, s := range sentinels {
 		t.Run(s.name, func(t *testing.T) {

@@ -145,6 +145,7 @@ type Writer struct {
 	w           io.Writer
 	chunkSize   uint32                  // outbound chunk size (default 128 if zero)
 	lastHeaders map[uint32]*ChunkHeader // per-CSID state for FMT compression
+	scratch     []byte                  // reusable buffer for writeChunk to avoid per-call allocations
 }
 
 // NewWriter creates a new chunk Writer.
@@ -247,7 +248,7 @@ func (w *Writer) WriteMessage(msg *Message) error {
 	if uint32(len(toSend)) > cs {
 		toSend = toSend[:cs]
 	}
-	if err := writeChunk(w.w, hdr, toSend); err != nil {
+	if err := w.writeChunk(hdr, toSend); err != nil {
 		return err
 	}
 	written := uint32(len(toSend))
@@ -282,7 +283,7 @@ func (w *Writer) WriteMessage(msg *Message) error {
 		if end > uint32(len(msg.Payload)) {
 			return fmt.Errorf("writer: bounds (end=%d > len=%d)", end, len(msg.Payload))
 		}
-		if err := writeChunk(w.w, hdr3, msg.Payload[start:end]); err != nil {
+		if err := w.writeChunk(hdr3, msg.Payload[start:end]); err != nil {
 			return err
 		}
 		written = end
@@ -290,13 +291,19 @@ func (w *Writer) WriteMessage(msg *Message) error {
 	return nil
 }
 
-// writeChunk concatenates the header and payload into a single buffer and writes
-// it in one call. This ensures the chunk is sent atomically — the header and
-// payload bytes won't be split across separate TCP packets.
-func writeChunk(w io.Writer, header []byte, payload []byte) error {
-	buf := make([]byte, 0, len(header)+len(payload))
-	buf = append(buf, header...)
-	buf = append(buf, payload...)
-	_, err := w.Write(buf)
+// writeChunk concatenates the header and payload into the Writer's scratch
+// buffer and writes it in one call. This ensures the chunk is sent atomically
+// (header and payload bytes won't be split across separate TCP packets) while
+// reusing the buffer across calls to avoid per-chunk allocations.
+func (w *Writer) writeChunk(header []byte, payload []byte) error {
+	need := len(header) + len(payload)
+	if cap(w.scratch) < need {
+		w.scratch = make([]byte, need)
+	} else {
+		w.scratch = w.scratch[:need]
+	}
+	copy(w.scratch, header)
+	copy(w.scratch[len(header):], payload)
+	_, err := w.w.Write(w.scratch)
 	return err
 }

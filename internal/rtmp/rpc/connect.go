@@ -91,12 +91,15 @@ func ParseConnectCommand(msg *chunk.Message) (*ConnectCommand, error) {
 
 	// Capture any extra fields from the connect object (useful for auth tokens,
 	// custom parameters, etc.) that we don't explicitly parse above.
-	extra := make(map[string]interface{})
+	var extra map[string]interface{}
 	for k, v := range obj {
 		switch k {
 		case "app", "flashVer", "tcUrl", "objectEncoding":
 			continue // already extracted
 		default:
+			if extra == nil {
+				extra = make(map[string]interface{})
+			}
 			extra[k] = v
 		}
 	}

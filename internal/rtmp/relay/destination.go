@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 )
 
 // RTMPClient defines the interface for connecting to a remote RTMP server
@@ -160,6 +161,7 @@ func (d *Destination) SendMessage(msg *chunk.Message) error {
 		d.mu.Lock()
 		d.Metrics.MessagesDropped++
 		d.mu.Unlock()
+		metrics.RelayMessagesDropped.Add(1)
 		return fmt.Errorf("destination not connected (status: %v)", status)
 	}
 
@@ -179,6 +181,7 @@ func (d *Destination) SendMessage(msg *chunk.Message) error {
 		d.LastError = err
 		d.Metrics.MessagesDropped++
 		d.mu.Unlock()
+		metrics.RelayMessagesDropped.Add(1)
 		d.logger.Error("relay send failed", "type_id", msg.TypeID, "error", err)
 		return fmt.Errorf("send message: %w", err)
 	}
@@ -188,6 +191,8 @@ func (d *Destination) SendMessage(msg *chunk.Message) error {
 	d.Metrics.BytesSent += uint64(len(msg.Payload))
 	d.Metrics.LastSentTime = time.Now()
 	d.mu.Unlock()
+	metrics.RelayMessagesSent.Add(1)
+	metrics.RelayBytesSent.Add(int64(len(msg.Payload)))
 	return nil
 }
 

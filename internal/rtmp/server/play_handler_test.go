@@ -7,31 +7,15 @@
 //  4. If not found: sends onStatus Play.StreamNotFound.
 //
 // Key Go concepts:
-//   - capturingConn: records all sent messages in a slice for ordering assertions.
-//   - stubPublisher: minimal type to mark a stream as having a publisher.
+//   - capturingConn (helpers_test.go): records all sent messages.
+//   - stubPublisher (helpers_test.go): marks a stream as published.
 package server
 
 import (
 	"testing"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
-	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
-	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
-
-// capturingConn records every message sent via SendMessage.
-type capturingConn struct{ sent []*chunk.Message }
-
-func (c *capturingConn) SendMessage(m *chunk.Message) error { c.sent = append(c.sent, m); return nil }
-
-// buildPlayMessage constructs a minimal AMF0 "play" command message.
-func buildPlayMessage(streamName string) *chunk.Message {
-	payload, _ := amf.EncodeAll("play", float64(0), nil, streamName)
-	return &chunk.Message{TypeID: rpc.CommandMessageAMF0TypeIDForTest(), Payload: payload, MessageLength: uint32(len(payload)), MessageStreamID: 1}
-}
-
-// stubPublisher is a minimal placeholder to mark a stream as published.
-type stubPublisher struct{}
 
 // TestHandlePlaySuccess creates a stream with a publisher, then plays it.
 // Expects 2 messages sent (StreamBegin + onStatus Play.Start) and 1 subscriber.

@@ -18,6 +18,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/logger"
 	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
@@ -173,6 +174,8 @@ func (s *Server) acceptLoop() {
 		s.mu.Lock()
 		s.conns[c.ID()] = c
 		s.mu.Unlock()
+		metrics.ConnectionsActive.Add(1)
+		metrics.ConnectionsTotal.Add(1)
 		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String())
 
 		// Trigger connection accept hook event
@@ -265,6 +268,7 @@ func (s *Server) RemoveConnection(id string) {
 	s.mu.Lock()
 	delete(s.conns, id)
 	s.mu.Unlock()
+	metrics.ConnectionsActive.Add(-1)
 }
 
 // singleConnListener wraps a single pre-accepted net.Conn as a net.Listener.

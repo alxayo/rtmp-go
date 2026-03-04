@@ -12,13 +12,10 @@ import (
 	"testing"
 )
 
-// Reuse goldenDir constant pattern from number_test.go (keep consistency even if duplicated).
-const goldenDirBoolean = "../../../tests/golden"
-
 // readGoldenBoolean loads a golden binary vector.
 func readGoldenBoolean(t *testing.T, name string) []byte {
 	t.Helper()
-	p := filepath.Join(goldenDirBoolean, name)
+	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read golden %s: %v", name, err)

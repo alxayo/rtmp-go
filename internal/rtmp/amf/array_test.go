@@ -19,8 +19,8 @@ import (
 )
 
 // readGoldenArray loads a golden binary vector for array tests.
-// Reuses the goldenDir constant from number_test.go.
 func readGoldenArray(t *testing.T, name string) []byte {
+	t.Helper()
 	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {

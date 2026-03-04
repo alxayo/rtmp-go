@@ -31,6 +31,9 @@ type cliConfig struct {
 	hookTimeout     string   // hook execution timeout (e.g. "30s")
 	hookConcurrency int      // max concurrent hook executions
 
+	// Metrics
+	metricsAddr string // HTTP address for expvar metrics (e.g. ":8080"); empty = disabled
+
 	// Authentication
 	authMode            string   // "none", "token", "file", "callback"
 	authTokens          []string // "streamKey=token" pairs (for mode=token)
@@ -61,6 +64,9 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.hookStdioFormat, "hook-stdio-format", "", "Stdio hook output format: json|env (empty=disabled)")
 	fs.StringVar(&cfg.hookTimeout, "hook-timeout", "30s", "Hook execution timeout")
 	fs.IntVar(&cfg.hookConcurrency, "hook-concurrency", 10, "Max concurrent hook executions")
+
+	// Metrics
+	fs.StringVar(&cfg.metricsAddr, "metrics-addr", "", "HTTP address for metrics endpoint (e.g. :8080 or 127.0.0.1:8080). Empty = disabled")
 
 	// Authentication flags
 	fs.StringVar(&cfg.authMode, "auth-mode", "none", "Authentication mode: none|token|file|callback")

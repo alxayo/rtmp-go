@@ -60,5 +60,4 @@ type Request struct {
 var (
 	ErrUnauthorized = errors.New("authentication failed: invalid credentials")
 	ErrTokenMissing = errors.New("authentication failed: token missing")
-	ErrForbidden    = errors.New("authentication failed: access denied")
 )

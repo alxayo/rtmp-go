@@ -379,6 +379,45 @@ func TestWriter_ChunkReaderRoundTrip(t *testing.T) {
 	}
 }
 
+// TestWriter_WriteMessage_BoundaryChunkSizes verifies correct chunking at
+// the exact chunk size boundary: payloads of chunkSize-1, chunkSize, and
+// chunkSize+1 bytes. Off-by-one errors in the fragmentation loop would
+// show up here.
+func TestWriter_WriteMessage_BoundaryChunkSizes(t *testing.T) {
+	for _, cs := range []uint32{128, 4096} {
+		for _, delta := range []int{-1, 0, 1} {
+			size := int(cs) + delta
+			if size <= 0 {
+				continue
+			}
+			name := fmt.Sprintf("cs%d_payload%d", cs, size)
+			t.Run(name, func(t *testing.T) {
+				var sw simpleWriter
+				w := NewWriter(&sw, cs)
+				payload := bytes.Repeat([]byte{0xDD}, size)
+				msg := &Message{
+					CSID: 6, Timestamp: 1000, TypeID: 9,
+					MessageStreamID: 1,
+					MessageLength:   uint32(size),
+					Payload:         payload,
+				}
+				if err := w.WriteMessage(msg); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+				// Round-trip through Reader to verify correctness
+				r := NewReader(bytes.NewReader(sw.Bytes()), cs)
+				out, err := r.ReadMessage()
+				if err != nil {
+					t.Fatalf("read: %v", err)
+				}
+				if !bytes.Equal(out.Payload, payload) {
+					t.Fatalf("round-trip payload mismatch (len want=%d got=%d)", len(payload), len(out.Payload))
+				}
+			})
+		}
+	}
+}
+
 // --- Benchmarks ---
 
 // BenchmarkEncodeChunkHeader_FMT0 benchmarks header serialization for a full FMT0 header.

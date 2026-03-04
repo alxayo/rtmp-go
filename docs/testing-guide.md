@@ -15,7 +15,6 @@ This runs tests across all packages. Most complete in under 15 seconds. Some pac
 ### Core Utilities
 
 ```bash
-go test ./internal/bufpool/    # Buffer pool allocation and concurrency
 go test ./internal/errors/     # Error type classification and unwrapping
 go test ./internal/logger/     # Log level parsing and field extraction
 ```
@@ -161,6 +160,5 @@ See [wireshark_rtmp_capture_guide.md](wireshark_rtmp_capture_guide.md) for detai
 | Play handler | `server/play_handler_test.go` | Subscriber addition, sequence header delivery |
 | Media logging | `server/media_logger_test.go` | Packet counting, codec detection, stats |
 | Audio/video parsing | `media/*_test.go` | Codec detection, frame type classification |
-| Buffer pool | `bufpool/pool_test.go` | Allocation, reuse, concurrent access safety |
 | Event hooks | `server/hooks/hooks_test.go` | Hook registration, execution, concurrency pool, cleanup |
 | Integration | `tests/integration/*_test.go` | Full publish→play flow, multi-subscriber relay |

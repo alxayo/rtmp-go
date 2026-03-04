@@ -104,10 +104,12 @@ func TestDecodeValue_UnsupportedMarkers(t *testing.T) {
 	// Markers explicitly rejected: 0x06 (Undefined), 0x07 (Reference), 0x0B (Date), 0x11 (AMF3 switch)
 	markers := []byte{0x06, 0x07, 0x0B, 0x11}
 	for _, m := range markers {
-		_, err := DecodeValue(bytes.NewReader([]byte{m}))
-		if err == nil {
-			t.Fatalf("marker 0x%02x expected error", m)
-		}
+		t.Run(fmt.Sprintf("marker_0x%02x", m), func(t *testing.T) {
+			_, err := DecodeValue(bytes.NewReader([]byte{m}))
+			if err == nil {
+				t.Fatalf("marker 0x%02x expected error", m)
+			}
+		})
 	}
 }
 

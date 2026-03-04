@@ -13,15 +13,13 @@ import (
 	"testing"
 )
 
-const goldenDirString = "../../../tests/golden"
-
-// readGoldenString loads a golden vector; mirrors the helper in number_test.go.
+// readGoldenString loads a golden vector; reuses goldenDir from number_test.go.
 func readGoldenString(t *testing.T, name string) []byte {
-	// mirror helper pattern used in other tests
-	p := filepath.Join(goldenDirString, name)
+	t.Helper()
+	p := filepath.Join(goldenDir, name)
 	b, err := os.ReadFile(p)
 	if err != nil {
-		panic(err)
+		t.Fatalf("read golden %s: %v", name, err)
 	}
 	return b
 }

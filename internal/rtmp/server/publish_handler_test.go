@@ -7,7 +7,7 @@
 //  4. Sends an "onStatus" NetStream.Publish.Start response.
 //
 // Key Go concepts:
-//   - stubConn: captures the last message sent, simulating a real connection.
+//   - stubConn (helpers_test.go): captures the last message sent.
 //   - AMF decode of the onStatus payload to verify the response code.
 package server
 
@@ -15,21 +15,7 @@ import (
 	"testing"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/amf"
-	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
-	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
-
-// stubConn captures the last message sent via SendMessage for assertions.
-type stubConn struct{ last *chunk.Message }
-
-func (s *stubConn) SendMessage(m *chunk.Message) error { s.last = m; return nil }
-
-// buildPublishMessage builds a minimal AMF0 "publish" command message
-// for the given stream name.
-func buildPublishMessage(streamName string) *chunk.Message {
-	payload, _ := amf.EncodeAll("publish", float64(0), nil, streamName, "live")
-	return &chunk.Message{TypeID: rpc.CommandMessageAMF0TypeIDForTest(), Payload: payload, MessageLength: uint32(len(payload)), MessageStreamID: 1}
-}
 
 // TestHandlePublishSuccess publishes a stream and verifies:
 // the stream is registered, the publisher is set, and the onStatus
@@ -121,5 +107,23 @@ func TestHandlePublishWithQueryParams(t *testing.T) {
 	// Verify it's NOT registered with the query string in the key
 	if s := reg.GetStream("live/mystream?token=secret123"); s != nil {
 		t.Fatalf("stream should NOT be registered with query params in key")
+	}
+}
+
+// TestHandlePublishNilArgs verifies that HandlePublish returns an error
+// when called with nil arguments rather than panicking.
+func TestHandlePublishNilArgs(t *testing.T) {
+	reg := NewRegistry()
+	sc := &stubConn{}
+	msg := buildPublishMessage("test")
+
+	if _, err := HandlePublish(nil, sc, "app", msg); err == nil {
+		t.Fatal("expected error for nil registry")
+	}
+	if _, err := HandlePublish(reg, nil, "app", msg); err == nil {
+		t.Fatal("expected error for nil conn")
+	}
+	if _, err := HandlePublish(reg, sc, "app", nil); err == nil {
+		t.Fatal("expected error for nil message")
 	}
 }
