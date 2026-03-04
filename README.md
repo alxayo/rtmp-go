@@ -44,6 +44,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full guide with C
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
 | **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
 | **Metrics** | Expvar counters for connections, publishers, subscribers, media (HTTP `/debug/vars`) |
+| **RTMPS** | TLS/SSL encrypted connections via `-tls-cert` and `-tls-key` flags (dual-mode: RTMP + RTMPS) |
 | **Connection Cleanup** | TCP deadline enforcement (read 90s, write 30s), disconnect handlers, zombie detection |
 
 ## Architecture
@@ -119,6 +120,9 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -hook-timeout        Hook execution timeout (default 30s)
 -hook-concurrency    Max concurrent hook executions (default 10)
 -metrics-addr        HTTP address for metrics endpoint (e.g. :8080). Empty = disabled
+-tls-cert            Path to TLS certificate file (PEM). Enables RTMPS with -tls-key
+-tls-key             Path to TLS private key file (PEM). Enables RTMPS with -tls-cert
+-tls-listen           RTMPS listen address (default :443)
 -version             Print version and exit
 ```
 
@@ -140,7 +144,6 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 - Fuzz testing for AMF0 and chunk parsing (bounds safety)
 
 ### Planned
-- **RTMPS** — TLS/SSL encrypted connections
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers
 - **Clustering & HA** — horizontal scaling with cross-node relay and dual-ingest failover ([design](specs/007-clustering-ha/clustering_ha.md))
 - **DVR / time-shift** — seek into live stream history

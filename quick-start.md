@@ -537,6 +537,34 @@ This prevents memory corruption when multiple subscribers read payloads concurre
 ✅ **Simultaneous Operation** - Recording and relay work together  
 ✅ **Thread Safety** - Independent payload copies prevent corruption
 
+## RTMPS (TLS-Encrypted Connections)
+
+To enable encrypted RTMPS connections, generate a certificate and start with TLS flags:
+
+### Generate a Self-Signed Certificate (for testing)
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout server.key -out server.crt -days 365 -nodes \
+  -subj "/CN=localhost"
+```
+
+### Start with RTMPS Enabled
+
+```bash
+./rtmp-server -tls-cert server.crt -tls-key server.key -tls-listen :443
+```
+
+The server listens on both plain RTMP (`:1935`) and RTMPS (`:443`) simultaneously.
+
+### Publish over RTMPS
+
+```bash
+ffmpeg -re -i test.mp4 -c copy -f flv rtmps://localhost:443/live/test
+```
+
+For self-signed certificates, add `-tls_verify 0` to FFmpeg commands.
+
 **Last Updated:** October 13, 2025  
 **Status:** ✅ Production-Ready  
 **Validated:** RTMP Server with OBS Studio and ffplay

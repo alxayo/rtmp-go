@@ -17,7 +17,8 @@ internal/rtmp/
 │   └── hooks/   # Event hooks (webhooks, shell scripts, stdio)
 ├── relay/       # Multi-destination relay with late-join support
 ├── metrics/     # Expvar counters (connections, publishers, subscribers, media)
-└── media/       # Audio/video message handling + FLV recording
+├── media/       # Audio/video message handling + FLV recording
+└── client/      # Minimal RTMP/RTMPS test client (supports rtmp:// and rtmps://)
 ```
 
 **Data flow**: TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recording
@@ -82,6 +83,7 @@ tests := []struct{ name, file string; want interface{} }{
 | AMF0 | Object ends with 0x00 0x00 0x09 |
 | Media | TypeID 8=audio, 9=video; cache sequence headers for late-join |
 | Deadlines | Read 90s, Write 30s; reset on each I/O (zombie detection) |
+| TLS/RTMPS | Optional TLS via -tls-cert/-tls-key; dual-mode plain+TLS; min TLS 1.2 |
 
 ## Key Files for Onboarding
 
