@@ -92,14 +92,6 @@ func DecodeAll(data []byte) ([]interface{}, error) {
 	return out, nil
 }
 
-// Marshal encodes a single AMF0 value and returns the bytes.
-func Marshal(v interface{}) ([]byte, error) { return EncodeAll(v) }
-
-// Unmarshal decodes a single AMF0 value from data.
-func Unmarshal(data []byte) (interface{}, error) {
-	return DecodeValue(bytes.NewReader(data))
-}
-
 // unsupportedMarker returns true if the marker is explicitly listed by task
 // spec to be rejected (Undefined, Reference, AMF3+ reserved range).
 func unsupportedMarker(m byte) bool {

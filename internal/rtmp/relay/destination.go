@@ -53,7 +53,6 @@ func (s DestinationStatus) String() string {
 	}
 }
 
-// Destination represents a single RTMP relay destination
 // Destination represents a single relay target — a remote RTMP server that
 // receives a copy of the publisher's audio/video stream.
 type Destination struct {
@@ -127,6 +126,7 @@ func (d *Destination) Connect() error {
 	}
 
 	if err := client.Connect(); err != nil {
+		_ = client.Close() // prevent leak: factory may have allocated TCP resources
 		d.Status = StatusError
 		d.LastError = err
 		d.logger.Error("Failed to connect RTMP client", "error", err)
@@ -134,6 +134,7 @@ func (d *Destination) Connect() error {
 	}
 
 	if err := client.Publish(); err != nil {
+		_ = client.Close() // prevent leak: connection established but publish failed
 		d.Status = StatusError
 		d.LastError = err
 		d.logger.Error("Failed to publish to destination", "error", err)

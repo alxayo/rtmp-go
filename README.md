@@ -43,6 +43,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full guide with C
 | **Media Logging** | Per-connection codec detection and bitrate stats |
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
 | **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
+| **Connection Cleanup** | TCP deadline enforcement (read 90s, write 30s), disconnect handlers, zombie detection |
 
 ## Architecture
 
@@ -126,9 +127,11 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ## Roadmap
 
+### Recently Completed
+- Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
+- Performance benchmarks for chunk parsing, AMF0 encoding, and array operations
+
 ### In Progress
-- Enhanced error handling and graceful connection cleanup
-- Performance benchmarks for chunk and AMF0 encode/decode
 - Fuzz testing for AMF0 and chunk parsing (bounds safety)
 
 ### Planned
@@ -138,6 +141,10 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 - **DVR / time-shift** — seek into live stream history
 - **Transcoding** — server-side codec conversion (e.g. H.265 → H.264)
 - **Clustering** — horizontal scaling across multiple server instances
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all releases and changes.
 
 ## License
 

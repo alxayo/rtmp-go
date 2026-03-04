@@ -207,14 +207,18 @@ func (s *Server) Stop() error {
 
 	// Close all connections and clean up recorders.
 	s.mu.Lock()
-	for id, c := range s.conns {
-		s.triggerHookEvent(hooks.EventConnectionClose, id, "", map[string]interface{}{
-			"reason": "server_shutdown",
-		})
-		_ = c.Close()
+	connsToClose := make([]*iconn.Connection, 0, len(s.conns))
+	for _, c := range s.conns {
+		connsToClose = append(connsToClose, c)
 	}
 	clear(s.conns)
 	s.mu.Unlock()
+
+	// Close connections outside the lock to avoid deadlock with
+	// disconnect handler's RemoveConnection call.
+	for _, c := range connsToClose {
+		_ = c.Close()
+	}
 
 	// Clean up all active recorders
 	s.cleanupAllRecorders()
@@ -253,6 +257,14 @@ func (s *Server) ConnectionCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.conns)
+}
+
+// RemoveConnection removes a single connection from the tracking map.
+// Called by the disconnect handler when a connection's readLoop exits.
+func (s *Server) RemoveConnection(id string) {
+	s.mu.Lock()
+	delete(s.conns, id)
+	s.mu.Unlock()
 }
 
 // singleConnListener wraps a single pre-accepted net.Conn as a net.Listener.

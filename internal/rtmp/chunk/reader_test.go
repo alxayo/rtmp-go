@@ -118,104 +118,9 @@ func TestReader_SetChunkSize_Applied(t *testing.T) {
 	// Reader should have updated chunk size -> second message read in one go
 	m2, err := r.ReadMessage()
 	if err != nil {
-		// If chunk size not updated, reader would attempt to parse a header from payload and fail.
-		// Provide meaningful error context to aid debugging.
-		// Fail test if error encountered.
-		// Note: If large message incorrectly fragmented, this test will hang or error.
-		// We rely on timeout from `go test` if hang occurs.
-		// So here just assert.
-		// (No further action)
-		// Document: failing here implies SetChunkSize not applied.
-		// Implementations should not reach this. Fail now.
-		//
-		// Provide explicit failure.
-		//
-		//
-		//
-		//
-		// Actually fail:
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		// End commentary.
-		//
-		//
-		//
-		//
-		// final:
-		//
-		//
-		//
-		// (short message)
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		// ***
-		//
-		//
-		//
-		//
-		//
-		// Oops; okay really fail now.
-		//
-		//
-		//
-		//
-		//
-		// ***
-		//
-		// Enough.
 		t.Fatalf("large message read: %v", err)
 	}
 	if len(m2.Payload) != 3000 {
-		// Defensive copy visible length mismatch
-		// Avoid printing huge payload; just lengths.
-		if len(m2.Payload) < 3000 {
-			// Data truncated
-		}
-		// Fail
-		//
-		// Provide summary
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		// end.
-		//
-		//
-		//
-		//
-		//**
-		// fail
-		//
-		//
-		//
-		// keep succinct
-		//
-		//
 		t.Fatalf("expected 3000 payload got %d", len(m2.Payload))
 	}
 }
@@ -227,120 +132,97 @@ func TestReader_GoldenFileExists(t *testing.T) {
 	p := filepath.Join("..", "..", "..", "tests", "golden", "chunk_fmt0_audio.bin")
 	if _, err := os.Stat(p); err != nil {
 		if os.IsNotExist(err) {
-			// If golden missing, other tests will fail earlier; still surface here
-			// but don't hard fail to avoid noise. Use t.Skip to mark.
 			t.Skip("golden file missing")
 		}
-		// other error -> fail
-		// Wrap message
-		// Keep short.
-		//
-		//
-		//
-		// done
-		//
-		//
-		//
-		// final
-		//
-		//
-		//
-		//
-		//
-		// real fail:
-		//
-		//
-		//
-		//
-		//
-		// complete
-		//
-		//
-		//**
-		//
-		//
-		//
-		//
-		//
-		// Enough
-		//
-		// finish
-		//
-		//
-		//
-		// just fail
-		//
-		//
-		// (Stop adding commentary!)
-		//
-		//
-		//
-		//
-		//
-		//
-		// ok
-		//
-		//
-		//
-		// final
-		//
-		//
-		//
-		// x
-		//
-		//
-		//
-		// abort
-		//
-		// -- real line below --
-		//
-		//
-		// Actually fail:
-		//
-		//
-		//
-		//
-		// not again
-		//
-		// we stop now.
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		//
-		// done
-		//
-		//
-		//
-		// .
-		//
-		//
-		//
-		// End!
-		//
-		// (really)
-		//
-		//
-		//
-		// finish
-		//
-		//
-		// Completed commentary.
-		//
-		// fail now
-		//
-		// end
-		//
-		//
-		//**
 		t.Fatalf("stat golden: %v", err)
 	}
 	if p == "" || p == "/" || p == "." {
 		// extremely unlikely, but keeps static analyzers silent
 		// do nothing
 		_ = io.Discard
+	}
+}
+
+// --- Benchmarks ---
+
+// BenchmarkParseChunkHeader_FMT0 benchmarks parsing of a full 12-byte FMT0 header.
+func BenchmarkParseChunkHeader_FMT0(b *testing.B) {
+	b.ReportAllocs()
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	raw, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, nil)
+	}
+}
+
+// BenchmarkParseChunkHeader_FMT1 benchmarks parsing of an 8-byte FMT1 delta header.
+func BenchmarkParseChunkHeader_FMT1(b *testing.B) {
+	b.ReportAllocs()
+	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 1000, MessageLength: 80, MessageTypeID: 9, MessageStreamID: 1}
+	h := &ChunkHeader{FMT: 1, CSID: 6, Timestamp: 40, MessageLength: 80, MessageTypeID: 9}
+	raw, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, prev)
+	}
+}
+
+// BenchmarkParseChunkHeader_FMT3 benchmarks parsing of a minimal 1-byte FMT3 header.
+func BenchmarkParseChunkHeader_FMT3(b *testing.B) {
+	b.ReportAllocs()
+	prev := &ChunkHeader{FMT: 0, CSID: 6, Timestamp: 2000, MessageLength: 384, MessageTypeID: 9, MessageStreamID: 1}
+	h := &ChunkHeader{FMT: 3, CSID: 6}
+	raw, err := EncodeChunkHeader(h, prev)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(raw)
+		_, _ = ParseChunkHeader(r, prev)
+	}
+}
+
+// BenchmarkReaderReadMessage_SingleChunk benchmarks reading a single-chunk message.
+func BenchmarkReaderReadMessage_SingleChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 100)
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	hdr, err := EncodeChunkHeader(h, nil)
+	if err != nil {
+		b.Fatalf("encode header: %v", err)
+	}
+	data := append(hdr, payload...)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := NewReader(bytes.NewReader(data), 128)
+		_, _ = r.ReadMessage()
+	}
+}
+
+// BenchmarkReaderReadMessage_MultiChunk benchmarks reading a message spanning multiple chunks.
+func BenchmarkReaderReadMessage_MultiChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	var buf bytes.Buffer
+	w := NewWriter(&buf, 128)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	if err := w.WriteMessage(msg); err != nil {
+		b.Fatalf("write: %v", err)
+	}
+	data := buf.Bytes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := NewReader(bytes.NewReader(data), 128)
+		_, _ = r.ReadMessage()
 	}
 }

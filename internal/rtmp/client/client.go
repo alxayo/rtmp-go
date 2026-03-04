@@ -11,8 +11,6 @@ package client
 //   * Play mode: send play command and read incoming audio/video messages
 //     (parsing limited to chunk reassembly; higher‑level parsing lives in
 //     media layer packages already implemented for the server).
-//   * CLI compatibility hook (RunCLI) used by a future small main in
-//     cmd/rtmp-client – kept here so tests can exercise without duplication.
 //
 // Non‑Goals (for now): full error command responses, bandwidth / control
 // messages, extended timestamp edge cases, retransmission, AMF3.
@@ -34,7 +32,6 @@ package client
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/url"
@@ -352,50 +349,4 @@ func (c *Client) Close() error {
 	c.reader = nil
 	c.writer = nil
 	return err
-}
-
-// RunCLI executes a simplified publish / play action based on args.
-// Usage examples (from task requirements):
-//
-//	rtmp-client publish rtmp://host/app/stream file.flv
-//
-// For now we only implement the connect + publish handshake; file muxing
-// is out of current scope – we simulate by sending a single dummy audio tag.
-func RunCLI(args []string, stdout io.Writer) int {
-	if len(args) < 3 {
-		fmt.Fprintln(stdout, "usage: rtmp-client <publish|play> rtmp://host/app/stream [file]")
-		return 2
-	}
-	mode := args[0]
-	url := args[1]
-	c, err := New(url)
-	if err != nil {
-		fmt.Fprintln(stdout, "error:", err)
-		return 1
-	}
-	if err := c.Connect(); err != nil {
-		fmt.Fprintln(stdout, "connect error:", err)
-		return 1
-	}
-	switch mode {
-	case "publish":
-		if err := c.Publish(); err != nil {
-			fmt.Fprintln(stdout, "publish error:", err)
-			return 1
-		}
-		// send one dummy audio packet (AAC sequence header-ish)
-		_ = c.SendAudio(0, []byte{0xAF, 0x00})
-		fmt.Fprintln(stdout, "published", c.streamKey)
-	case "play":
-		if err := c.Play(); err != nil {
-			fmt.Fprintln(stdout, "play error:", err)
-			return 1
-		}
-		fmt.Fprintln(stdout, "play requested", c.streamKey)
-	default:
-		fmt.Fprintln(stdout, "unknown mode", mode)
-		return 2
-	}
-	_ = c.Close()
-	return 0
 }

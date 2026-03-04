@@ -10,14 +10,23 @@ import (
 // TestSentinelErrors verifies that each sentinel error has a non-empty
 // message and can be matched with errors.Is.
 func TestSentinelErrors(t *testing.T) {
-	sentinels := []error{ErrUnauthorized, ErrTokenMissing, ErrForbidden}
-	for _, e := range sentinels {
-		if e.Error() == "" {
-			t.Fatalf("sentinel error has empty message: %v", e)
-		}
-		if !errors.Is(e, e) {
-			t.Fatalf("errors.Is failed for %v", e)
-		}
+	sentinels := []struct {
+		name string
+		err  error
+	}{
+		{"ErrUnauthorized", ErrUnauthorized},
+		{"ErrTokenMissing", ErrTokenMissing},
+		{"ErrForbidden", ErrForbidden},
+	}
+	for _, s := range sentinels {
+		t.Run(s.name, func(t *testing.T) {
+			if s.err.Error() == "" {
+				t.Fatalf("sentinel error has empty message")
+			}
+			if !errors.Is(s.err, s.err) {
+				t.Fatalf("errors.Is failed")
+			}
+		})
 	}
 }
 

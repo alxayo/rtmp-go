@@ -195,6 +195,15 @@ go test ./tests/integration/
 | "stream not found" in play | Wrong stream key | Ensure publisher and subscriber use the same `app/streamName` |
 | High CPU usage | Debug logging | Use `-log-level info` instead of `debug` |
 | Recording file empty | Publisher disconnected before keyframe | Stream for at least a few seconds |
+| Connection dropped after ~90s | TCP read deadline | The server closes idle connections after 90 seconds of silence — ensure the publisher is actively streaming |
+
+## Connection Management
+
+The server automatically manages zombie connections:
+- **Read deadline (90s)**: If no data arrives from a client within 90 seconds, the connection is closed
+- **Write deadline (30s)**: If the server cannot write to a client within 30 seconds, the connection is dropped
+
+These deadlines reset on each successful I/O operation, so active streams are unaffected.
 
 ## Next Steps
 

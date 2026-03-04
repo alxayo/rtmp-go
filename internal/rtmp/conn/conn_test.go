@@ -263,3 +263,99 @@ func TestCloseGraceful(t *testing.T) {
 		t.Fatalf("expected error sending after close")
 	}
 }
+
+// --- Disconnect Handler Tests ---
+
+// TestDisconnectHandler_FiresOnEOF verifies the disconnect handler fires
+// when the client closes the connection (EOF in readLoop).
+func TestDisconnectHandler_FiresOnEOF(t *testing.T) {
+	logger.UseWriter(io.Discard)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	connCh := make(chan *Connection, 1)
+	go func() { c, _ := Accept(ln); connCh <- c }()
+	client := dialAndClientHandshake(t, ln.Addr().String())
+	serverConn := <-connCh
+	if serverConn == nil {
+		t.Fatalf("server conn nil")
+	}
+
+	var fired atomic.Bool
+	serverConn.SetDisconnectHandler(func() { fired.Store(true) })
+	serverConn.SetMessageHandler(func(m *chunk.Message) {})
+	serverConn.Start()
+
+	// Client close triggers EOF in readLoop
+	client.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !fired.Load() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !fired.Load() {
+		t.Fatal("disconnect handler did not fire on EOF")
+	}
+	_ = serverConn.Close()
+}
+
+// TestDisconnectHandler_FiresOnContextCancel verifies the disconnect handler
+// fires when Close() is called (context cancellation).
+func TestDisconnectHandler_FiresOnContextCancel(t *testing.T) {
+	logger.UseWriter(io.Discard)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	connCh := make(chan *Connection, 1)
+	go func() { c, _ := Accept(ln); connCh <- c }()
+	client := dialAndClientHandshake(t, ln.Addr().String())
+	defer client.Close()
+	serverConn := <-connCh
+	if serverConn == nil {
+		t.Fatalf("server conn nil")
+	}
+
+	var fired atomic.Bool
+	serverConn.SetDisconnectHandler(func() { fired.Store(true) })
+	serverConn.SetMessageHandler(func(m *chunk.Message) {})
+	serverConn.Start()
+
+	// Close triggers context cancel → readLoop exits → handler fires
+	_ = serverConn.Close()
+
+	if !fired.Load() {
+		t.Fatal("disconnect handler did not fire on context cancel")
+	}
+}
+
+// TestDisconnectHandler_NilSafe verifies readLoop exits cleanly when no
+// disconnect handler is set (nil handler must not panic).
+func TestDisconnectHandler_NilSafe(t *testing.T) {
+	logger.UseWriter(io.Discard)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	connCh := make(chan *Connection, 1)
+	go func() { c, _ := Accept(ln); connCh <- c }()
+	client := dialAndClientHandshake(t, ln.Addr().String())
+	serverConn := <-connCh
+	if serverConn == nil {
+		t.Fatalf("server conn nil")
+	}
+
+	// No disconnect handler set — just message handler
+	serverConn.SetMessageHandler(func(m *chunk.Message) {})
+	serverConn.Start()
+
+	// Client close triggers EOF → readLoop exits → no panic
+	client.Close()
+
+	// Close should complete without hanging or panicking
+	_ = serverConn.Close()
+}

@@ -21,9 +21,4 @@
 // The outbound queue is bounded (see [outboundQueueSize]) to provide
 // backpressure. [SendMessage] blocks briefly (see [sendTimeout]) and returns
 // an error if the queue is full.
-//
-// # Session State
-//
-// Per-connection metadata (app name, stream key, state machine) is tracked
-// by the [Session] type in session.go.
 package conn

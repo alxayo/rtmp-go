@@ -120,6 +120,45 @@ func TestEncodeObject_UnsupportedType(t *testing.T) {
 	}
 }
 
+// --- Benchmarks ---
+
+// BenchmarkEncodeObject benchmarks encoding a typical RTMP connect-style object.
+func BenchmarkEncodeObject(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		_ = EncodeObject(&buf, obj)
+	}
+}
+
+// BenchmarkDecodeObject benchmarks decoding a typical RTMP connect-style object.
+func BenchmarkDecodeObject(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	var buf bytes.Buffer
+	if err := EncodeObject(&buf, obj); err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	data := buf.Bytes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r := bytes.NewReader(data)
+		_, _ = DecodeObject(r)
+	}
+}
+
 // TestDecodeObject_InvalidEndMarker crafts bytes where the end-of-object
 // sentinel is wrong (0x08 instead of 0x09). The decoder must detect this.
 func TestDecodeObject_InvalidEndMarker(t *testing.T) {

@@ -4,7 +4,7 @@
 // used by RTMP to encode command parameters: numbers (float64), booleans,
 // strings, null, objects (string→value maps), and arrays.
 //
-// These tests exercise the top-level Marshal/Unmarshal and EncodeAll/DecodeAll
+// These tests exercise the EncodeAll/DecodeAll and DecodeValue
 // APIs, which delegate to type-specific encoders/decoders in sibling files.
 //
 // Key Go concepts demonstrated:
@@ -15,6 +15,7 @@ package amf
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -45,17 +46,19 @@ func TestEncodeDecodeRoundTrip_Primitives(t *testing.T) {
 		[]interface{}{[]interface{}{float64(1), float64(2)}, map[string]interface{}{"k": "v"}},
 	}
 	for i, v := range cases {
-		b, err := Marshal(v)
-		if err != nil {
-			t.Fatalf("case %d marshal error: %v", i, err)
-		}
-		rv, err := Unmarshal(b)
-		if err != nil {
-			t.Fatalf("case %d unmarshal error: %v", i, err)
-		}
-		if !deepEqual(v, rv) {
-			t.Fatalf("case %d mismatch\norig=%#v\nrtnd=%#v", i, v, rv)
-		}
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			b, err := EncodeAll(v)
+			if err != nil {
+				t.Fatalf("encode error: %v", err)
+			}
+			rv, err := DecodeValue(bytes.NewReader(b))
+			if err != nil {
+				t.Fatalf("decode error: %v", err)
+			}
+			if !deepEqual(v, rv) {
+				t.Fatalf("mismatch\norig=%#v\nrtnd=%#v", v, rv)
+			}
+		})
 	}
 }
 
@@ -155,5 +158,41 @@ func deepEqual(a, b interface{}) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// --- Benchmarks ---
+
+// BenchmarkEncodeAll_ConnectCommand benchmarks multi-value encoding of a full connect command.
+func BenchmarkEncodeAll_ConnectCommand(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = EncodeAll("connect", 1.0, obj)
+	}
+}
+
+// BenchmarkDecodeAll_ConnectCommand benchmarks multi-value decoding of a full connect command.
+func BenchmarkDecodeAll_ConnectCommand(b *testing.B) {
+	b.ReportAllocs()
+	obj := map[string]interface{}{
+		"app":      "live",
+		"type":     "nonprivate",
+		"flashVer": "FMLE/3.0",
+		"tcUrl":    "rtmp://localhost/live",
+	}
+	data, err := EncodeAll("connect", 1.0, obj)
+	if err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DecodeAll(data)
 	}
 }

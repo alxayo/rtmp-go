@@ -18,6 +18,7 @@ package chunk
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"testing"
 )
@@ -118,15 +119,17 @@ func TestEncodeChunkHeader_CSIDEncodings(t *testing.T) {
 		{320, 1, "41 00 01"}, // three byte form (fmt1 marker 1)
 	}
 	for _, c := range cases {
-		b, err := EncodeChunkHeader(&ChunkHeader{FMT: c.fmt, CSID: c.csid, Timestamp: 0, MessageLength: 0, MessageTypeID: 0, MessageStreamID: 0}, nil)
-		if err != nil {
-			t.Fatalf("csid %d: %v", c.csid, err)
-		}
-		// Only compare basic header prefix (length 1/2/3) because we added message header zeros.
-		wantBytes, _ := hex.DecodeString(c.want)
-		if !bytes.HasPrefix(b, wantBytes) {
-			t.Fatalf("csid %d expected prefix %x got %x", c.csid, wantBytes, b)
-		}
+		t.Run(fmt.Sprintf("csid_%d_fmt%d", c.csid, c.fmt), func(t *testing.T) {
+			b, err := EncodeChunkHeader(&ChunkHeader{FMT: c.fmt, CSID: c.csid, Timestamp: 0, MessageLength: 0, MessageTypeID: 0, MessageStreamID: 0}, nil)
+			if err != nil {
+				t.Fatalf("csid %d: %v", c.csid, err)
+			}
+			// Only compare basic header prefix (length 1/2/3) because we added message header zeros.
+			wantBytes, _ := hex.DecodeString(c.want)
+			if !bytes.HasPrefix(b, wantBytes) {
+				t.Fatalf("csid %d expected prefix %x got %x", c.csid, wantBytes, b)
+			}
+		})
 	}
 }
 
@@ -373,5 +376,56 @@ func TestWriter_ChunkReaderRoundTrip(t *testing.T) {
 		if !bytes.Equal(actualMsg.Payload, expectedMsg.Payload) {
 			t.Errorf("message %d payload mismatch", i)
 		}
+	}
+}
+
+// --- Benchmarks ---
+
+// BenchmarkEncodeChunkHeader_FMT0 benchmarks header serialization for a full FMT0 header.
+func BenchmarkEncodeChunkHeader_FMT0(b *testing.B) {
+	b.ReportAllocs()
+	h := &ChunkHeader{FMT: 0, CSID: 4, Timestamp: 1000, MessageLength: 100, MessageTypeID: 8, MessageStreamID: 1}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = EncodeChunkHeader(h, nil)
+	}
+}
+
+// BenchmarkWriterWriteMessage_SingleChunk benchmarks writing a single-chunk message.
+func BenchmarkWriterWriteMessage_SingleChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 100)
+	msg := &Message{CSID: 4, Timestamp: 1000, MessageLength: 100, TypeID: 8, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w := NewWriter(io.Discard, 128)
+		_ = w.WriteMessage(msg)
+	}
+}
+
+// BenchmarkWriterWriteMessage_MultiChunk benchmarks writing a multi-chunk message.
+func BenchmarkWriterWriteMessage_MultiChunk(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w := NewWriter(io.Discard, 128)
+		_ = w.WriteMessage(msg)
+	}
+}
+
+// BenchmarkWriterReaderRoundTrip benchmarks the end-to-end Write→Read cycle.
+func BenchmarkWriterReaderRoundTrip(b *testing.B) {
+	b.ReportAllocs()
+	payload := make([]byte, 4096)
+	msg := &Message{CSID: 6, Timestamp: 0, MessageLength: 4096, TypeID: 9, MessageStreamID: 1, Payload: payload}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		w := NewWriter(&buf, 128)
+		_ = w.WriteMessage(msg)
+		r := NewReader(&buf, 128)
+		_, _ = r.ReadMessage()
 	}
 }
