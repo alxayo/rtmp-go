@@ -1,111 +1,90 @@
 // Package integration – end-to-end integration tests for the RTMP server.
 //
-// commands_test.go is a TDD scaffold that specifies the full RTMP command
-// exchange sequence:
+// commands_test.go validates the full RTMP command exchange sequence through
+// a real server and client:
 //
 //  1. connect       → _result (NetConnection.Connect.Success)
-//  2. createStream   → _result with stream ID 1
-//  3. publish        → onStatus (NetStream.Publish.Start)
-//  4. play           → onStatus (NetStream.Play.Start)
+//  2. createStream  → _result with stream ID
+//  3. publish       → onStatus (NetStream.Publish.Start)
+//  4. play          → subscriber connected
 //
-// Each sub-flow is a separate subtest so failures are independent.
-// At present every subtest deliberately calls t.Fatal because the real
-// RPC / command layers are not yet wired up.  As those layers land,
-// the placeholders will be replaced with actual AMF0 command encoding,
-// chunk writing, and response verification over net.Pipe connections.
-//
-// Key Go patterns demonstrated:
-//   - net.Pipe()     – in-memory connection for protocol exchanges.
-//   - t.Fatal()      – intentional TDD failure to drive implementation.
-//   - Deferred Close – immediate cleanup of both pipe ends.
+// The test starts a real server on an ephemeral port, uses the RTMP client
+// to perform the full handshake + command sequence, and verifies that
+// publish and play complete without errors.
 package integration
 
 import (
-	"net"
+	"fmt"
 	"testing"
-	// Future imports (will be used once implementations exist):
-	// "github.com/alxayo/go-rtmp/internal/rtmp/handshake"
-	// "github.com/alxayo/go-rtmp/internal/rtmp/chunk"
-	// "github.com/alxayo/go-rtmp/internal/rtmp/rpc"
+	"time"
+
+	"github.com/alxayo/go-rtmp/internal/rtmp/client"
+	srv "github.com/alxayo/go-rtmp/internal/rtmp/server"
 )
 
-// TestCommandsFlow is the integration test scaffold for T011.
-// It defines the end-to-end command workflow expectations:
-//  1. connect        -> server replies _result (NetConnection.Connect.Success)
-//  2. createStream   -> server replies _result with stream ID (e.g., 1)
-//  3. publish        -> server sends onStatus NetStream.Publish.Start
-//  4. play           -> server sends onStatus NetStream.Play.Start
-//
-// Implementation Notes (to be satisfied by later tasks T032-T040):
-// - Handshake already covered by T009; this test begins AFTER a successful handshake.
-// - AMF0 generic encoder/decoder (T032) will provide helpers to build/parse command payloads.
-// - Command dispatcher (T040) will route messages based on first AMF0 string in payload.
-// - Stream ID allocation expected to start at 1.
-// - onStatus messages must include level="status", code matching the scenario, and description.
-//
-// Current State:
-//   - No RPC/command implementation yet; this test intentionally fails (TDD) via t.Fatal placeholders.
-//   - When implementing, replace the placeholders with real client/server harness using chunk.Reader/Writer
-//     to exchange AMF0 command messages over an in-memory net.Pipe().
-//
-// TestCommandsFlow encodes the expected RTMP command sequence as a
-// failing specification (TDD).  Four subtests map 1:1 to the protocol
-// command flow: connect → createStream → publish → play.
-//
-// Each currently fails with a descriptive message naming the blocking
-// tasks.  When the AMF0, RPC, and dispatcher layers are complete,
-// replace the t.Fatal placeholders with real handshake + chunk I/O.
+// TestCommandsFlow exercises the full command exchange through a live server.
+// It verifies connect → createStream → publish (and play) work end-to-end.
 func TestCommandsFlow(t *testing.T) {
-	// Use subtests so individual flows can be debugged independently.
-
-	// 1. connect flow
-	// Expected message sequence (logical):
-	//   C->S:  command(connect, tx=1, obj{app, tcUrl, objectEncoding=0})
-	//   S->C:  command(_result, tx=1, properties{fmsVer,capabilities,mode}, info{code=NetConnection.Connect.Success})
-	// Future assertions: verify properties + info fields and AMF0 types.
-	// Failure driver for now:
-	serverConn1, clientConn1 := net.Pipe()
-	_ = serverConn1.Close()
-	_ = clientConn1.Close()
-	if true { // placeholder branch; remove once implemented
-		// NOTE: This forces the test to fail until connect handling is implemented.
-		// Replace with real harness invoking handshake + command exchange.
-		// Keep failure message descriptive to guide implementation.
-		t.Fatal("connect flow not implemented (awaiting AMF0 + RPC layers T026-T040)")
+	s := srv.New(srv.Config{
+		ListenAddr: "127.0.0.1:0",
+		ChunkSize:  4096,
+	})
+	if err := s.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
 	}
+	defer s.Stop()
 
-	// 2. createStream flow
-	// Sequence (after successful connect):
-	//   C->S: command(createStream, tx=4, null)
-	//   S->C: command(_result, tx=4, null, 1.0)  // stream ID 1
-	// Placeholder failure:
-	serverConn2, clientConn2 := net.Pipe()
-	_ = serverConn2.Close()
-	_ = clientConn2.Close()
-	if true {
-		t.Fatal("createStream flow not implemented (awaiting RPC dispatcher & response builder T033-T036)")
-	}
+	addr := s.Addr().String()
 
-	// 3. publish flow
-	// Prerequisites: stream ID allocated.
-	// Sequence:
-	//   C->S: command(publish, tx=0, null, "streamKey", "live") on MSID=1
-	//   S->C: command(onStatus, 0, null, {code: NetStream.Publish.Start}) on MSID=1
-	serverConn3, clientConn3 := net.Pipe()
-	_ = serverConn3.Close()
-	_ = clientConn3.Close()
-	if true {
-		t.Fatal("publish flow not implemented (awaiting publish parser and onStatus builder T037-T039)")
-	}
+	t.Run("connect_createStream_publish", func(t *testing.T) {
+		c, err := client.New(fmt.Sprintf("rtmp://%s/live/test_publish", addr))
+		if err != nil {
+			t.Fatalf("client new: %v", err)
+		}
+		defer c.Close()
 
-	// 4. play flow
-	// Sequence:
-	//   C->S: command(play, tx=0, null, "streamKey", -2, -1, true) on MSID=1
-	//   S->C: command(onStatus, 0, null, {code: NetStream.Play.Start}) on MSID=1
-	serverConn4, clientConn4 := net.Pipe()
-	_ = serverConn4.Close()
-	_ = clientConn4.Close()
-	if true {
-		t.Fatal("play flow not implemented (awaiting play parser and onStatus builder T038-T039)")
-	}
+		// Connect performs: TCP dial → handshake → connect command → createStream
+		if err := c.Connect(); err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+
+		// Publish sends the publish command and expects onStatus success
+		if err := c.Publish(); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+
+		// Verify server registered the stream
+		time.Sleep(50 * time.Millisecond)
+		if s.ConnectionCount() < 1 {
+			t.Fatalf("expected at least 1 connection, got %d", s.ConnectionCount())
+		}
+	})
+
+	t.Run("connect_createStream_play", func(t *testing.T) {
+		// First, set up a publisher so play has something to subscribe to
+		pub, err := client.New(fmt.Sprintf("rtmp://%s/live/test_play", addr))
+		if err != nil {
+			t.Fatalf("publisher new: %v", err)
+		}
+		defer pub.Close()
+		if err := pub.Connect(); err != nil {
+			t.Fatalf("publisher connect: %v", err)
+		}
+		if err := pub.Publish(); err != nil {
+			t.Fatalf("publisher publish: %v", err)
+		}
+
+		// Now connect a subscriber
+		sub, err := client.New(fmt.Sprintf("rtmp://%s/live/test_play", addr))
+		if err != nil {
+			t.Fatalf("subscriber new: %v", err)
+		}
+		defer sub.Close()
+		if err := sub.Connect(); err != nil {
+			t.Fatalf("subscriber connect: %v", err)
+		}
+		if err := sub.Play(); err != nil {
+			t.Fatalf("subscriber play: %v", err)
+		}
+	})
 }

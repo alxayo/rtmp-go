@@ -156,19 +156,37 @@ func TestChunkingFlow(t *testing.T) {
 	b2 := encodeSingleMessage(multi, 128)
 
 	// Scenario 3: Interleaved (Audio CSID=4, Video CSID=6)
+	// Two 256-byte messages (audio + video) interleaved at 128-byte chunk size:
+	//   audio first chunk (FMT0) → video first chunk (FMT0) →
+	//   audio continuation (FMT3) → video continuation (FMT3)
 	interAudioPayload := make([]byte, 256)
 	interVideoPayload := make([]byte, 256)
 	interAudio := &chunk.Message{CSID: 4, Timestamp: 3000, MessageLength: 256, TypeID: 8, MessageStreamID: 1, Payload: interAudioPayload}
 	interVideo := &chunk.Message{CSID: 6, Timestamp: 3000, MessageLength: 256, TypeID: 9, MessageStreamID: 1, Payload: interVideoPayload}
-	// manually interleave first chunks then second chunks
-	iaFirst := encodeSingleMessage(&chunk.Message{CSID: interAudio.CSID, Timestamp: interAudio.Timestamp, MessageLength: interAudio.MessageLength, TypeID: interAudio.TypeID, MessageStreamID: interAudio.MessageStreamID, Payload: interAudio.Payload[:128]}, 128)
-	ivFirst := encodeSingleMessage(&chunk.Message{CSID: interVideo.CSID, Timestamp: interVideo.Timestamp, MessageLength: interVideo.MessageLength, TypeID: interVideo.TypeID, MessageStreamID: interVideo.MessageStreamID, Payload: interVideo.Payload[:128]}, 128)
-	// continuation halves (simulate by creating messages whose payload is remaining but same headers; encodeSingleMessage will still treat them as new FMT0 so adapt by slicing off headers later)
-	iaSecondFull := encodeSingleMessage(&chunk.Message{CSID: interAudio.CSID, Timestamp: interAudio.Timestamp, MessageLength: interAudio.MessageLength, TypeID: interAudio.TypeID, MessageStreamID: interAudio.MessageStreamID, Payload: interAudio.Payload[128:]}, 128)
-	ivSecondFull := encodeSingleMessage(&chunk.Message{CSID: interVideo.CSID, Timestamp: interVideo.Timestamp, MessageLength: interVideo.MessageLength, TypeID: interVideo.TypeID, MessageStreamID: interVideo.MessageStreamID, Payload: interVideo.Payload[128:]}, 128)
-	// For simplicity we just concatenate: first audio (first chunk only portion), first video, second audio continuation chunk basic header adjusted to FMT=3, second video continuation
-	// This simplistic approach produces extra FMT0 headers in second parts; the real writer test will refine this once writer implemented.
-	interleavedBytes := append(append(append(append(iaFirst, ivFirst...), iaSecondFull...), ivSecondFull...), []byte{}...)
+
+	// Build interleaved byte stream manually.
+	// First chunks use FMT 0 (full header) with MessageLength=256 but only 128
+	// bytes of payload in this chunk. encodeSingleMessage with a 256-byte payload
+	// limited to chunkSize=128 correctly produces FMT0 header + 128 bytes + FMT3
+	// continuation. We use the full encoder for each message, then interleave.
+	audioChunks := encodeSingleMessage(interAudio, 128)
+	videoChunks := encodeSingleMessage(interVideo, 128)
+
+	// Split each into first chunk and continuation chunk.
+	// FMT0 basic header (1 byte) + message header (11 bytes) = 12 bytes overhead + 128 payload = 140 bytes for first chunk.
+	// FMT3 basic header (1 byte) + 128 payload = 129 bytes for continuation chunk.
+	audioFirstChunk := audioChunks[:140]
+	audioContChunk := audioChunks[140:]
+	videoFirstChunk := videoChunks[:140]
+	videoContChunk := videoChunks[140:]
+
+	// Interleave: audio first → video first → audio cont → video cont
+	var interleavedBuf bytes.Buffer
+	interleavedBuf.Write(audioFirstChunk)
+	interleavedBuf.Write(videoFirstChunk)
+	interleavedBuf.Write(audioContChunk)
+	interleavedBuf.Write(videoContChunk)
+	interleavedBytes := interleavedBuf.Bytes()
 
 	// Scenario 4: Extended timestamp
 	extPayload := make([]byte, 64)
