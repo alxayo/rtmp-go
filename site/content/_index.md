@@ -10,9 +10,9 @@ type: page
     Zero external dependencies.
   </p>
   <p>
-    <a href="/go-rtmp/docs/quick-start/" style="display: inline-block; padding: 0.75rem 2rem; background: #0366d6; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">🚀 Quick Start</a>
-    <a href="https://github.com/alxayo/go-rtmp" style="display: inline-block; padding: 0.75rem 2rem; background: #24292e; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">⭐ GitHub</a>
-    <a href="/go-rtmp/docs/" style="display: inline-block; padding: 0.75rem 2rem; background: #28a745; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">📖 Documentation</a>
+    <a href="/rtmp-go/docs/quick-start/" style="display: inline-block; padding: 0.75rem 2rem; background: #0366d6; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">🚀 Quick Start</a>
+    <a href="https://github.com/alxayo/rtmp-go" style="display: inline-block; padding: 0.75rem 2rem; background: #24292e; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">⭐ GitHub</a>
+    <a href="/rtmp-go/docs/" style="display: inline-block; padding: 0.75rem 2rem; background: #28a745; color: white; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 0.25rem;">📖 Documentation</a>
   </p>
 </div>
 
@@ -82,7 +82,7 @@ ffplay rtmp://localhost:1935/live/test
 
 That's it. No config files, no databases, no containers. Just build and run.
 
-**[→ Full Quick Start Guide](/go-rtmp/docs/quick-start/)**
+**[→ Full Quick Start Guide](/rtmp-go/docs/quick-start/)**
 
 ---
 
@@ -90,9 +90,9 @@ That's it. No config files, no databases, no containers. Just build and run.
 
 | Section | Description |
 |---------|-------------|
-| [**Quick Start**](/go-rtmp/docs/quick-start/) | Up and running in 5 minutes |
-| [**Installation**](/go-rtmp/docs/installation/) | Download binaries or build from source |
-| [**User Guide**](/go-rtmp/docs/user-guide/) | Recording, relay, auth, hooks, metrics |
-| [**CLI Reference**](/go-rtmp/docs/configuration/) | Every command-line flag explained |
-| [**Developer Guide**](/go-rtmp/docs/developer/) | Architecture, protocol, testing, contributing |
-| [**Changelog**](/go-rtmp/docs/project/changelog/) | Release history |
+| [**Quick Start**](/rtmp-go/docs/quick-start/) | Up and running in 5 minutes |
+| [**Installation**](/rtmp-go/docs/installation/) | Download binaries or build from source |
+| [**User Guide**](/rtmp-go/docs/user-guide/) | Recording, relay, auth, hooks, metrics |
+| [**CLI Reference**](/rtmp-go/docs/configuration/) | Every command-line flag explained |
+| [**Developer Guide**](/rtmp-go/docs/developer/) | Architecture, protocol, testing, contributing |
+| [**Changelog**](/rtmp-go/docs/project/changelog/) | Release history |

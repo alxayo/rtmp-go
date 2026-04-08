@@ -7,7 +7,7 @@ weight: 2
 
 ## Download Pre-built Binaries
 
-Go to the [GitHub Releases](https://github.com/alxayo/go-rtmp/releases) page and download the archive for your platform:
+Go to the [GitHub Releases](https://github.com/alxayo/rtmp-go/releases) page and download the archive for your platform:
 
 | Platform | Architecture | Filename |
 |----------|-------------|----------|
@@ -43,7 +43,7 @@ Verify the binary works:
 Clone the repository and build:
 
 ```bash
-git clone https://github.com/alxayo/go-rtmp.git && cd go-rtmp
+git clone https://github.com/alxayo/rtmp-go.git && cd rtmp-go
 go build -o rtmp-server ./cmd/rtmp-server
 ```
 

@@ -1,4 +1,4 @@
-baseURL = "https://alxayo.github.io/go-rtmp/"
+baseURL = "https://alxayo.github.io/rtmp-go/"
 title = "go-rtmp"
 theme = "hugo-book"
 
@@ -34,7 +34,7 @@ enableGitInfo = true
   BookSection = "docs"
 
   # Set source repository location.
-  BookRepo = "https://github.com/alxayo/go-rtmp"
+  BookRepo = "https://github.com/alxayo/rtmp-go"
 
   # Specifies commit portion of the link to the page's last modified commit hash for 'doc' page type.
   BookCommitPath = "commit"
@@ -56,6 +56,6 @@ enableGitInfo = true
 
   # Custom params
   description = "Production-ready RTMP server in pure Go — zero external dependencies"
-  github_repo = "https://github.com/alxayo/go-rtmp"
+  github_repo = "https://github.com/alxayo/rtmp-go"
 
 [menu]
