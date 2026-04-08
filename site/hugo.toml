@@ -1,0 +1,61 @@
+baseURL = "https://alxayo.github.io/go-rtmp/"
+title = "go-rtmp"
+theme = "hugo-book"
+
+# Book configuration
+enableGitInfo = true
+
+# Needed for mermaid shortcodes
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+  [markup.highlight]
+    style = "monokai"
+    lineNos = false
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 4
+
+[params]
+  # (Optional, default light) Sets color theme: light, dark or auto.
+  BookTheme = "auto"
+
+  # (Optional, default true) Controls table of contents visibility on right side of pages.
+  BookToC = true
+
+  # (Optional) Set the path to a logo for the book.
+  # BookLogo = "/images/logo.png"
+
+  # (Optional, default none) Set leaf bundle to render as side menu
+  # BookMenuBundle = "/menu"
+
+  # (Optional, default docs) Specify root page to render child pages as menu.
+  BookSection = "docs"
+
+  # Set source repository location.
+  BookRepo = "https://github.com/alxayo/go-rtmp"
+
+  # Specifies commit portion of the link to the page's last modified commit hash for 'doc' page type.
+  BookCommitPath = "commit"
+
+  # Enable "Edit this page" links for 'doc' page type.
+  BookEditPath = "edit/main/site/content"
+
+  # (Optional, default January 2, 2006) Configure the date format used on the pages
+  BookDateFormat = "Jan 2, 2006"
+
+  # (Optional, default true) Enables search function with flexsearch
+  BookSearch = true
+
+  # (Optional, default true) Enables comments template on pages
+  BookComments = false
+
+  # (Optional, default none) Set the path to a logo for the book
+  # BookLogo = '/images/logo.png'
+
+  # Custom params
+  description = "Production-ready RTMP server in pure Go — zero external dependencies"
+  github_repo = "https://github.com/alxayo/go-rtmp"
+
+[menu]
