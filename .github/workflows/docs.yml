@@ -33,6 +33,10 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Install Hugo
         run: |
           wget -q -O ${{ runner.temp }}/hugo.deb \
