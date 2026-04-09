@@ -11,6 +11,30 @@ Each script is available as both **Bash** (`.sh` for Linux/macOS) and **PowerShe
 
 ## Scripts
 
+### `build` - Local Build Helper
+Builds local binaries for `rtmp-server` and/or `rtmp-client` into `bin/`.
+
+```bash
+# Linux/macOS
+./scripts/build.sh
+./scripts/build.sh --target server
+./scripts/build.sh --target client --race
+
+# Windows
+.\scripts\build.ps1
+.\scripts\build.ps1 -Target server
+.\scripts\build.ps1 -Target client -Race
+```
+
+**Options:**
+
+| Bash | PowerShell | Description |
+|------|-----------|-------------|
+| `--target server\|client\|all` | `-Target server\|client\|all` | Which binary to build (default: all) |
+| `--output DIR` | `-OutputDir DIR` | Output directory (default: `bin/`) |
+| `--clean` | `-Clean` | Remove old binaries before build |
+| `--race` | `-Race` | Build with Go race detector |
+
 ### `check-deps` — Dependency Checker
 Verifies that all required tools are installed and reports their versions.
 
@@ -132,6 +156,7 @@ scripts/
 ├── logs/                # Test and server logs (gitignored)
 ├── .test-tmp/           # Temporary test artifacts (cleaned up)
 ├── README.md            # This file
+├── build.sh/.ps1
 ├── check-deps.sh/.ps1
 ├── generate-certs.sh/.ps1
 ├── on-publish-hls.sh/.ps1
