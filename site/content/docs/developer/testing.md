@@ -141,6 +141,42 @@ Terminal 4 — subscribe from edge:
 ffplay rtmp://localhost:1936/live/test
 ```
 
+## E2E Testing Scripts
+
+The `scripts/` directory contains cross-platform E2E test scripts that validate the full streaming pipeline using FFmpeg, ffplay, and the go-rtmp server.
+
+### Running the Full Suite
+
+**Linux/macOS:**
+```bash
+./scripts/run-all-tests.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\run-all-tests.ps1
+```
+
+### Test Cases
+
+| Test | Validates |
+|------|-----------|
+| RTMP Publish + Capture | Basic publish → capture → ffprobe verify |
+| RTMPS Publish + Capture | TLS connection with dual listener |
+| RTMP + HLS via Hook | Publish hook triggers FFmpeg → HLS conversion |
+| RTMPS + HLS via Hook | TLS transport with hook-based HLS |
+| RTMP + Auth (allowed) | Token auth with valid credentials |
+| RTMP + Auth (rejected) | Token auth rejects invalid/missing credentials |
+| RTMPS + Auth | TLS + authentication combined |
+
+Each test starts its own server instance on a unique port, runs the scenario, and cleans up on exit.
+
+### Prerequisites
+
+Run `scripts/check-deps.sh` (or `.ps1` on Windows) to verify that FFmpeg, ffplay, ffprobe, and the go-rtmp binary are available.
+
+For full documentation on the scripts, see the [E2E Testing Guide]({{< relref "/docs/guides/e2e-testing" >}}).
+
 ## Test Coverage Map
 
 | Area | Test Files | What's Verified |
@@ -157,3 +193,4 @@ ffplay rtmp://localhost:1936/live/test
 | Media | `media/*_test.go` | Audio/video parsing, codec detection, FLV writing |
 | Relay | `relay/*_test.go` | Destination management, reconnection, late-join |
 | Integration | `tests/integration/*_test.go` | End-to-end publish/subscribe through full stack |
+| E2E Scripts | `scripts/test-e2e.*` | Full pipeline: publish, capture, HLS hooks, auth, TLS |

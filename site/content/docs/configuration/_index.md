@@ -21,6 +21,18 @@ go-rtmp is configured entirely through command-line flags. There is no configura
 | `-chunk-size` | `4096` | Outbound chunk payload size (1–65536 bytes) |
 | `-version` | | Print version and exit |
 
+## TLS (RTMPS)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-tls-listen` | *(disabled)* | TCP address for RTMPS (TLS-encrypted RTMP) connections |
+| `-tls-cert` | *(none)* | Path to TLS certificate file (PEM format) |
+| `-tls-key` | *(none)* | Path to TLS private key file (PEM format) |
+
+When `-tls-listen` is set, the server runs a second listener for encrypted RTMP connections. Both plain RTMP (`-listen`) and RTMPS (`-tls-listen`) can run simultaneously. TLS requires both `-tls-cert` and `-tls-key` to be provided.
+
+The minimum TLS version is 1.2.
+
 ## Recording
 
 | Flag | Default | Description |
@@ -32,7 +44,7 @@ go-rtmp is configured entirely through command-line flags. There is no configura
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-relay-to` | *(none)* | RTMP URL to relay streams to (repeatable) |
+| `-relay-to` | *(none)* | RTMP/RTMPS URL to relay streams to (repeatable) |
 
 ## Authentication
 
@@ -151,3 +163,31 @@ This configuration:
 - Notifies an API on stream start/stop and connection events
 - Runs a Slack notification script on publish
 - Exposes metrics at `http://localhost:8080/debug/vars`
+
+### 6. RTMPS (TLS-Encrypted) Server
+
+Serve encrypted RTMP connections:
+
+```bash
+./rtmp-server \
+  -tls-listen :1936 \
+  -tls-cert /path/to/cert.pem \
+  -tls-key /path/to/key.pem
+```
+
+This listens for TLS-encrypted RTMP on port 1936. Clients connect with `rtmps://server:1936/live/test`.
+
+### 7. Dual Listener (RTMP + RTMPS)
+
+Run both plain and encrypted listeners simultaneously:
+
+```bash
+./rtmp-server \
+  -listen :1935 \
+  -tls-listen :1936 \
+  -tls-cert /path/to/cert.pem \
+  -tls-key /path/to/key.pem \
+  -log-level info
+```
+
+Plain RTMP on port 1935 and encrypted RTMPS on port 1936. Useful during migration or when supporting both legacy and modern clients.

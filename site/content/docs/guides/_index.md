@@ -11,3 +11,4 @@ Practical recipes for common tasks with go-rtmp.
 - [OBS Studio Setup]({{< relref "/docs/guides/obs-setup" >}}) — configure OBS to stream to your server
 - [FFmpeg Commands]({{< relref "/docs/guides/ffmpeg" >}}) — publish, subscribe, record, and convert with FFmpeg
 - [Troubleshooting]({{< relref "/docs/guides/troubleshooting" >}}) — diagnose and fix common issues
+- [E2E Testing Scripts]({{< relref "/docs/guides/e2e-testing" >}}) — run the cross-platform RTMP/RTMPS/HLS/auth test suite

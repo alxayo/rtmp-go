@@ -114,6 +114,37 @@ ffplay "rtmp://localhost:1935/live/test?token=secret123"
 
 > **Important**: The quotes are required. Without them, the shell may interpret `?` as a glob pattern.
 
+## With RTMPS (TLS)
+
+FFmpeg does not natively support `rtmps://` as an output format. To publish to an RTMPS-enabled go-rtmp server, use the plain RTMP listener or the Go client:
+
+### Publishing
+
+```bash
+# Option 1: Use the plain RTMP listener (if dual-listener is enabled)
+ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/test
+
+# Option 2: Use the Go client for true RTMPS publishing
+go run ./cmd/rtmp-client -url rtmps://localhost:1936/live/test -publish video.flv
+```
+
+### Subscribing
+
+```bash
+# Subscribe via plain RTMP
+ffplay rtmp://localhost:1935/live/test
+```
+
+### Testing TLS Connections
+
+The E2E test suite validates RTMPS using the Go client:
+
+```bash
+./scripts/test-e2e.sh --test "RTMPS Publish + Capture"
+```
+
+> **Note**: Even though FFmpeg connects via plain RTMP, the TLS listener can be verified independently via the Go client. All streams are shared between both listeners — a publisher on one listener is visible to subscribers on the other.
+
 ## Useful Flags
 
 | Flag | Description |

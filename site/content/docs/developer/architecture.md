@@ -23,7 +23,8 @@ TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recor
 
 ```
                     ┌──────────────────────────────────┐
-                    │           TCP Listener            │
+                    │         TCP Listener(s)           │
+                    │   Plain (:1935) + TLS (:1936)     │
                     └──────────┬───────────────────────┘
                                │ Accept()
                                ▼

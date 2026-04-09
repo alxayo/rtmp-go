@@ -176,6 +176,35 @@ Extract specific media components from a live RTMP stream:
 
 Options: `--duration SEC`, `--output FILE`, `--format FORMAT`, `--quality PRESET`.
 
+## Automated HLS via Publish Hook
+
+Instead of manually starting FFmpeg for HLS conversion, use the included hook script to automatically convert every published stream to HLS:
+
+```bash
+./rtmp-server \
+  -listen :1935 \
+  -hook-script "publish_start=./scripts/on-publish-hls.sh" \
+  -hook-timeout 30s
+```
+
+**Windows:**
+```powershell
+.\rtmp-server.exe `
+  -listen :1935 `
+  -hook-script "publish_start=.\scripts\on-publish-hls.ps1" `
+  -hook-timeout 30s
+```
+
+When a publisher connects, the hook script:
+1. Reads `RTMP_STREAM_KEY` from the environment (set by the hook system)
+2. Starts FFmpeg in the background to subscribe to the RTMP stream
+3. Outputs HLS segments to `hls-output/{stream_name}/playlist.m3u8`
+4. Logs to `scripts/logs/hls-{stream_key}.log`
+
+This works with both plain RTMP and RTMPS connections — hooks execute after TLS termination, so the transport layer is transparent.
+
+See [E2E Testing Scripts]({{< relref "/docs/guides/e2e-testing" >}}) for automated testing of the hook-based HLS pipeline.
+
 ## Complete Example
 
 End-to-end HLS streaming from OBS to browser:

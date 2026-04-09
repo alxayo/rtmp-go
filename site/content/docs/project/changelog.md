@@ -9,6 +9,23 @@ All notable changes to go-rtmp are documented here.
 
 ---
 
+## v0.1.3
+
+### Added
+- **RTMPS (TLS) support** — encrypted RTMP connections via TLS termination at the transport layer
+  - New CLI flags: `-tls-listen`, `-tls-cert`, `-tls-key`
+  - Dual-listener architecture: plain RTMP and RTMPS simultaneously
+  - `rtmps://` URL support in the Go client and relay destinations
+  - Minimum TLS 1.2 enforced; TLS startup failure is fatal (no silent fallback)
+  - 4 TLS integration tests with self-signed certificate helper
+- **Cross-platform E2E testing scripts** — comprehensive test suite in `scripts/`
+  - 12 scripts (6 Bash + 6 PowerShell pairs) for Linux/macOS/Windows
+  - 7 E2E test cases: RTMP, RTMPS, HLS hooks, authentication (allowed + rejected), combined TLS + auth
+  - Helper scripts: dependency checker, TLS cert generator, parameterized server launcher, HLS hook
+  - Fixed shell hook Windows compatibility (`powershell.exe` detection)
+
+---
+
 ## v0.1.2 (2026-03-04)
 
 ### Added

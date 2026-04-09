@@ -16,6 +16,8 @@ The go-rtmp server is designed around a simple philosophy: **zero configuration 
 
 **Authentication** protects your streams with pluggable token-based validation. Choose from static tokens for simple setups, a JSON file with live reload for medium deployments, or a webhook callback for full integration with your existing auth infrastructure. Auth is enforced at the publish/play command level, and the default mode is `none` for full backward compatibility.
 
+**RTMPS (TLS Encryption)** secures your RTMP connections with TLS, preventing eavesdropping on stream data in transit. Enable it with `-tls-listen` to run a TLS-encrypted listener alongside (or instead of) the plain RTMP listener. The server handles TLS termination at the transport layer — all protocol features (relay, recording, hooks, auth) work identically over both plain and encrypted connections. Generate self-signed certificates for development with the included helper scripts, or use Let's Encrypt certificates for production.
+
 **Event Hooks** notify external systems when things happen in your RTMP server. Webhooks, shell scripts, and stdio output cover lifecycle events like publish start/stop, subscriber count changes, and authentication failures. Hooks execute asynchronously — they never block RTMP message processing, so a slow webhook won't affect your stream.
 
 **Metrics & Monitoring** expose live server statistics via an HTTP endpoint using Go's built-in `expvar` package. When enabled with `-metrics-addr`, you get real-time gauges (active connections, publishers, subscribers) and counters (total messages, bytes ingested, relay stats) in JSON format — ready for Prometheus, Grafana, or custom monitoring scripts.

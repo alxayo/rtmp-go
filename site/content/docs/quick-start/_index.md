@@ -82,6 +82,23 @@ Open additional terminals and run the same `ffplay` command — each viewer conn
 ffplay rtmp://localhost:1935/live/test
 ```
 
+## 7. Try RTMPS (Encrypted Streaming)
+
+Generate self-signed certificates and start with TLS:
+
+```bash
+# Generate certs (one-time)
+./scripts/generate-certs.sh
+
+# Start with both plain and TLS listeners
+./rtmp-server -listen :1935 -tls-listen :1936 \
+  -tls-cert scripts/.certs/cert.pem \
+  -tls-key scripts/.certs/key.pem \
+  -log-level info
+```
+
+RTMPS clients can now connect on port 1936 with `rtmps://localhost:1936/live/test`. Plain RTMP continues working on port 1935. See the [RTMPS Guide]({{< relref "/docs/user-guide/rtmps" >}}) for production setup with trusted certificates.
+
 ---
 
 ## What Just Happened?
@@ -99,3 +116,5 @@ Here is what happened under the hood during the session above:
 - [Installation]({{< relref "/docs/installation" >}}) — Download pre-built binaries or cross-compile for other platforms.
 - [User Guide]({{< relref "/docs/user-guide" >}}) — Configure recording, relay, authentication, and event hooks.
 - [CLI Reference]({{< relref "/docs/configuration" >}}) — See every command-line flag and its default value.
+- [RTMPS (TLS)]({{< relref "/docs/user-guide/rtmps" >}}) — Set up encrypted RTMP connections.
+- [E2E Testing]({{< relref "/docs/guides/e2e-testing" >}}) — Run the cross-platform test suite.

@@ -15,6 +15,8 @@ weight: 2
 - ✅ **Expvar metrics** — live counters via HTTP endpoint *(v0.1.2)*
 - ✅ **TCP deadline enforcement** — zombie detection and cleanup *(v0.1.2)*
 - ✅ **Performance optimizations** — AMF0 decode, chunk writer, RPC lazy-init *(v0.1.2)*
+- ✅ **RTMPS (TLS)** — encrypted RTMP connections via TLS termination *(v0.1.3)*
+- ✅ **E2E testing scripts** — cross-platform Bash + PowerShell test suite for RTMP/RTMPS/HLS/auth *(v0.1.3)*
 
 ## In Progress
 
@@ -22,7 +24,6 @@ weight: 2
 
 ## Planned
 
-- 📋 **RTMPS (TLS)** — encrypted RTMP connections via TLS termination
 - 📋 **Configurable backpressure** — tunable queue sizes, drop policies, and subscriber eviction strategies
 - 📋 **Clustering & HA** — multi-node stream distribution with failover
 - 📋 **DVR / Time-shift** — seek-back into recorded streams for live rewind
