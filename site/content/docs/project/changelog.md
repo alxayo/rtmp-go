@@ -9,7 +9,7 @@ All notable changes to go-rtmp are documented here.
 
 ---
 
-## v0.1.3
+## v0.1.3 (2026-04-09)
 
 ### Added
 - **RTMPS (TLS) support** — encrypted RTMP connections via TLS termination at the transport layer
@@ -22,7 +22,13 @@ All notable changes to go-rtmp are documented here.
   - 12 scripts (6 Bash + 6 PowerShell pairs) for Linux/macOS/Windows
   - 7 E2E test cases: RTMP, RTMPS, HLS hooks, authentication (allowed + rejected), combined TLS + auth
   - Helper scripts: dependency checker, TLS cert generator, parameterized server launcher, HLS hook
-  - Fixed shell hook Windows compatibility (`powershell.exe` detection)
+- **Cross-platform build scripts** — `scripts/build.sh` and `scripts/build.ps1` for local compilation
+- **Hugo documentation site** — full docs with GitHub Pages deployment, Hugo-book theme
+
+### Fixed
+- Shell hook Windows compatibility (`powershell.exe` detection instead of hardcoded `/bin/bash`)
+- Docs workflow Hugo version bump for theme compatibility
+- GitHub Pages deployment configuration
 
 ---
 

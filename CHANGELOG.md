@@ -5,6 +5,34 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.3] — 2026-04-09
+
+### Added
+- **RTMPS (TLS) support**: Encrypted RTMP connections via TLS termination at the transport layer ([`33212e4`](https://github.com/alxayo/rtmp-go/commit/33212e4))
+  - New CLI flags: `-tls-listen`, `-tls-cert`, `-tls-key` for TLS-encrypted listener
+  - Dual-listener architecture: plain RTMP (`-listen`) and RTMPS (`-tls-listen`) run simultaneously
+  - `rtmps://` URL support in the Go client and relay destinations
+  - Minimum TLS 1.2 enforced; TLS startup failure is fatal (no silent fallback to unencrypted)
+  - 4 TLS integration tests with self-signed certificate helper using `crypto/x509`
+- **Cross-platform E2E testing scripts**: Comprehensive test suite in `scripts/` ([`ece5ae8`](https://github.com/alxayo/rtmp-go/commit/ece5ae8))
+  - 12 scripts (6 Bash + 6 PowerShell pairs) for Linux/macOS/Windows
+  - 7 E2E test cases: RTMP publish/capture, RTMPS publish/capture, HLS via hooks (plain + TLS), auth allowed/rejected, RTMPS + auth
+  - Helper scripts: dependency checker, TLS cert generator, parameterized server launcher, HLS hook
+- **Cross-platform build scripts**: `scripts/build.sh` and `scripts/build.ps1` for local binary compilation ([`8266217`](https://github.com/alxayo/rtmp-go/commit/8266217))
+- **Hugo documentation site**: Full documentation site with GitHub Pages deployment ([`8f5840d`](https://github.com/alxayo/rtmp-go/commit/8f5840d))
+  - Quick Start, User Guide, CLI Reference, How-To Guides, Developer docs, Project roadmap/changelog
+  - Hugo-book theme with weight-based navigation
+  - GitHub Actions workflow for automatic deployment on push to main
+  - Local development scripts (`serve-docs.sh`, `serve-docs.ps1`)
+- **Documentation site updates**: RTMPS guide, E2E testing guide, CLI reference TLS flags, architecture diagram updates ([`ad40537`](https://github.com/alxayo/rtmp-go/commit/ad40537))
+
+### Fixed
+- **Shell hook Windows compatibility**: `NewShellHook()` detects `runtime.GOOS == "windows"` and uses `powershell.exe -ExecutionPolicy Bypass -File` instead of hardcoded `/bin/bash` ([`ece5ae8`](https://github.com/alxayo/rtmp-go/commit/ece5ae8))
+- **Docs workflow Hugo version**: Bumped to Hugo 0.158.0+ for hugo-book theme compatibility ([`5490da4`](https://github.com/alxayo/rtmp-go/commit/5490da4))
+- **Docs workflow Pages config**: Fixed GitHub Pages setup step and baseURL for deployment ([`bb2242d`](https://github.com/alxayo/rtmp-go/commit/bb2242d), [`74647c9`](https://github.com/alxayo/rtmp-go/commit/74647c9))
+
+---
+
 ## [v0.1.2] — 2026-03-04
 
 ### Added
@@ -154,6 +182,7 @@ First feature-complete release of the RTMP server. Supports end-to-end streaming
 | `003-multi-destination-relay` | [specs/003](specs/003-multi-destination-relay/) | Multi-destination relay to external RTMP servers |
 | `T001-init-go-module` | [specs/001](specs/001-rtmp-server-implementation/spec.md) | Core RTMP server implementation (handshake through media streaming) |
 
+[v0.1.3]: https://github.com/alxayo/rtmp-go/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/alxayo/rtmp-go/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/alxayo/rtmp-go/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/alxayo/rtmp-go/releases/tag/v0.1.0
