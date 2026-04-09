@@ -56,6 +56,9 @@ func main() {
 		HookTimeout:       cfg.hookTimeout,
 		HookConcurrency:   cfg.hookConcurrency,
 		AuthValidator:     authValidator,
+		TLSListenAddr:     cfg.tlsListenAddr,
+		TLSCertFile:       cfg.tlsCertFile,
+		TLSKeyFile:        cfg.tlsKeyFile,
 	})
 
 	if err := server.Start(); err != nil {
@@ -64,6 +67,9 @@ func main() {
 	}
 
 	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode)
+	if server.TLSAddr() != nil {
+		log.Info("RTMPS enabled", "tls_addr", server.TLSAddr().String())
+	}
 
 	// Start HTTP metrics server if configured
 	if cfg.metricsAddr != "" {

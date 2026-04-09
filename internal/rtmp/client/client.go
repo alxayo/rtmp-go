@@ -30,6 +30,8 @@ package client
 // Simplifications are documented inline so future tasks can extend safely.
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -62,8 +64,9 @@ const (
 // Client represents a minimal RTMP client for testing and relay purposes.
 // It handles the full connection lifecycle: TCP dial → handshake → connect
 // command → createStream → publish/play → send audio/video.
+// Supports both plaintext RTMP (rtmp://) and encrypted RTMPS (rtmps://).
 type Client struct {
-	conn   net.Conn      // underlying TCP connection
+	conn   net.Conn      // underlying TCP connection (plain or TLS)
 	writer *chunk.Writer // encodes outbound messages into chunks
 	reader *chunk.Reader // decodes inbound chunks into messages
 	url    *url.URL      // parsed RTMP URL
@@ -72,15 +75,21 @@ type Client struct {
 	app       string // application name extracted from URL path (e.g. "live")
 	streamKey string // full stream key: "app/streamName" (e.g. "live/mystream")
 	streamID  uint32 // message stream ID assigned by server's createStream response
+	useTLS    bool   // true for rtmps:// connections
+
+	// TLSConfig allows callers to customize TLS behavior (e.g., skip verification
+	// for self-signed certs in tests). When nil, the default tls.Config is used.
+	TLSConfig *tls.Config
 
 	trxMu sync.Mutex // protects trxID from concurrent access
 	trxID float64    // incrementing transaction ID for request-response matching
 }
 
 // New creates a new Client (not yet connected).
+// Accepts both rtmp:// and rtmps:// URLs.
 func New(rawurl string) (*Client, error) {
-	if !strings.HasPrefix(rawurl, "rtmp://") {
-		return nil, fmt.Errorf("url must start with rtmp://")
+	if !strings.HasPrefix(rawurl, "rtmp://") && !strings.HasPrefix(rawurl, "rtmps://") {
+		return nil, fmt.Errorf("url must start with rtmp:// or rtmps://")
 	}
 	u, err := url.Parse(rawurl)
 	if err != nil {
@@ -89,7 +98,7 @@ func New(rawurl string) (*Client, error) {
 	// Path expected: /app/streamName
 	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("rtmp url must be rtmp://host/app/stream")
+		return nil, fmt.Errorf("rtmp url must be rtmp[s]://host/app/stream")
 	}
 	app := parts[0]
 	stream := strings.Join(parts[1:], "/")
@@ -99,6 +108,7 @@ func New(rawurl string) (*Client, error) {
 		streamKey: app + "/" + stream,
 		trxID:     0,
 		log:       logger.Logger().With("component", "rtmp_client"),
+		useTLS:    u.Scheme == "rtmps",
 	}
 	return c, nil
 }
@@ -106,17 +116,36 @@ func New(rawurl string) (*Client, error) {
 // nextTrx increments and returns the next transaction ID (AMF0 number semantics).
 func (c *Client) nextTrx() float64 { c.trxMu.Lock(); defer c.trxMu.Unlock(); c.trxID++; return c.trxID }
 
-// Connect performs TCP dial, RTMP simple handshake, then sends connect + createStream.
+// Connect performs TCP dial (plain or TLS), RTMP simple handshake, then sends connect + createStream.
 func (c *Client) Connect() error {
 	if c.conn != nil {
 		return nil
 	}
 	host := c.url.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":1935"
+		if c.useTLS {
+			host = host + ":443"
+		} else {
+			host = host + ":1935"
+		}
 	}
-	d := net.Dialer{Timeout: DialTimeout}
-	conn, err := d.Dial("tcp", host)
+
+	var conn net.Conn
+	var err error
+	if c.useTLS {
+		tlsCfg := c.TLSConfig
+		if tlsCfg == nil {
+			tlsCfg = &tls.Config{}
+		}
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{Timeout: DialTimeout},
+			Config:    tlsCfg,
+		}
+		conn, err = dialer.DialContext(context.Background(), "tcp", host)
+	} else {
+		d := net.Dialer{Timeout: DialTimeout}
+		conn, err = d.Dial("tcp", host)
+	}
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}

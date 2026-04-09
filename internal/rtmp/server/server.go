@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,6 +34,12 @@ type Config struct {
 	RecordDir         string   // directory for FLV recordings (default "recordings")
 	LogLevel          string   // log verbosity: "debug", "info", "warn", "error" (default "info")
 	RelayDestinations []string // RTMP URLs to forward published streams to (e.g. rtmp://cdn/live/key)
+
+	// TLS configuration (all optional). When TLSListenAddr is non-empty, the server
+	// starts a second listener for RTMPS (RTMP over TLS) alongside the plain RTMP listener.
+	TLSListenAddr string // RTMPS listen address (e.g. ":443"). Empty = disabled
+	TLSCertFile   string // Path to PEM-encoded TLS certificate file
+	TLSKeyFile    string // Path to PEM-encoded TLS private key file
 
 	// Event hook configuration (all optional)
 	HookScripts     []string // Shell hooks: "event_type=/path/to/script" pairs
@@ -69,6 +76,7 @@ func (c *Config) applyDefaults() {
 type Server struct {
 	cfg                Config
 	l                  net.Listener
+	tlsListener        net.Listener // optional RTMPS listener (nil when TLS disabled)
 	log                *slog.Logger
 	reg                *Registry
 	destinationManager *relay.DestinationManager
@@ -133,21 +141,52 @@ func (s *Server) Start() error {
 
 	s.log.Info("RTMP server listening", "addr", ln.Addr().String())
 	s.acceptingWg.Add(1)
-	go s.acceptLoop()
+	go s.acceptLoop(ln)
+
+	// Start optional RTMPS (TLS) listener
+	if s.cfg.TLSListenAddr != "" {
+		tlsLn, err := s.startTLSListener()
+		if err != nil {
+			// TLS listener failure is fatal — stop the plain listener and return error
+			_ = ln.Close()
+			s.mu.Lock()
+			s.l = nil
+			s.mu.Unlock()
+			return fmt.Errorf("tls listen: %w", err)
+		}
+		s.mu.Lock()
+		s.tlsListener = tlsLn
+		s.mu.Unlock()
+		s.log.Info("RTMPS server listening", "addr", tlsLn.Addr().String())
+		s.acceptingWg.Add(1)
+		go s.acceptLoop(tlsLn)
+	}
+
 	return nil
+}
+
+// startTLSListener creates and returns a TLS-wrapped net.Listener.
+func (s *Server) startTLSListener() (net.Listener, error) {
+	cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	tcpLn, err := net.Listen("tcp", s.cfg.TLSListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen %s: %w", s.cfg.TLSListenAddr, err)
+	}
+	return tls.NewListener(tcpLn, tlsCfg), nil
 }
 
 // acceptLoop runs until listener close. Each successful accept performs the
 // RTMP handshake via conn.Accept which internally sends the control burst.
-func (s *Server) acceptLoop() {
+func (s *Server) acceptLoop(l net.Listener) {
 	defer s.acceptingWg.Done()
 	for {
-		s.mu.RLock()
-		l := s.l
-		s.mu.RUnlock()
-		if l == nil {
-			return
-		}
 		raw, err := l.Accept()
 		if err != nil {
 			// If we are shutting down, Accept will return an error (use closing flag to suppress noise).
@@ -163,6 +202,10 @@ func (s *Server) acceptLoop() {
 			s.log.Warn("accept error", "error", err)
 			return
 		}
+
+		// Detect whether this connection arrived over TLS
+		_, isTLS := raw.(*tls.Conn)
+
 		// Handshake + control burst integration lives in conn.Accept.
 		// We temporarily wrap the raw listener to reuse existing function.
 		// Trick: create a one-off fake listener returning this raw conn.
@@ -176,11 +219,12 @@ func (s *Server) acceptLoop() {
 		s.mu.Unlock()
 		metrics.ConnectionsActive.Add(1)
 		metrics.ConnectionsTotal.Add(1)
-		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String())
+		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String(), "tls", isTLS)
 
 		// Trigger connection accept hook event
 		s.triggerHookEvent(hooks.EventConnectionAccept, c.ID(), "", map[string]interface{}{
 			"remote_addr": raw.RemoteAddr().String(),
+			"tls":         isTLS,
 		})
 
 		// Wire command handling so real clients (OBS/ffmpeg) can complete
@@ -205,8 +249,13 @@ func (s *Server) Stop() error {
 	s.closing = true
 	l := s.l
 	s.l = nil
+	tlsLn := s.tlsListener
+	s.tlsListener = nil
 	s.mu.Unlock()
 	_ = l.Close()
+	if tlsLn != nil {
+		_ = tlsLn.Close()
+	}
 
 	// Close all connections and clean up recorders.
 	s.mu.Lock()
@@ -253,6 +302,16 @@ func (s *Server) Addr() net.Addr {
 		return nil
 	}
 	return s.l.Addr()
+}
+
+// TLSAddr returns the bound TLS listener address (nil if TLS not enabled).
+func (s *Server) TLSAddr() net.Addr {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.tlsListener == nil {
+		return nil
+	}
+	return s.tlsListener.Addr()
 }
 
 // ConnectionCount returns current number of tracked active connections.

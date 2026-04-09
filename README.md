@@ -27,10 +27,28 @@ ffplay rtmp://localhost:1935/live/test
 
 See [docs/getting-started.md](docs/getting-started.md) for the full guide with CLI flags, OBS setup, and troubleshooting.
 
+### RTMPS (Encrypted)
+
+```bash
+# Generate self-signed cert (or use Let's Encrypt for production)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+
+# Run with both RTMP and RTMPS
+./rtmp-server -listen :1935 -tls-listen :443 -tls-cert cert.pem -tls-key key.pem
+
+# Publish over RTMPS
+ffmpeg -re -i test.mp4 -c copy -f flv rtmps://localhost:443/live/test
+
+# Watch over RTMPS
+ffplay rtmps://localhost:443/live/test
+```
+
 ## Features
 
 | Feature | Description |
 |---------|-------------|
+| **RTMPS (TLS)** | Encrypted RTMP via TLS termination (`-tls-listen`, `-tls-cert`, `-tls-key`) |
 | **RTMP v3 Handshake** | C0/C1/C2 ↔ S0/S1/S2 with 5s timeouts |
 | **Chunk Streaming** | FMT 0-3 header compression, extended timestamps |
 | **Control Messages** | Set Chunk Size, Window Ack, Peer Bandwidth, User Control |
@@ -103,6 +121,9 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ```
 -listen              TCP listen address (default :1935)
+-tls-listen          RTMPS listen address (e.g. :443). Requires -tls-cert and -tls-key
+-tls-cert            Path to PEM-encoded TLS certificate file
+-tls-key             Path to PEM-encoded TLS private key file
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)
 -record-dir          Recording directory (default recordings)
@@ -140,7 +161,6 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 - Fuzz testing for AMF0 and chunk parsing (bounds safety)
 
 ### Planned
-- **RTMPS** — TLS/SSL encrypted connections
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers
 - **Clustering & HA** — horizontal scaling with cross-node relay and dual-ingest failover ([design](specs/007-clustering-ha/clustering_ha.md))
 - **DVR / time-shift** — seek into live stream history

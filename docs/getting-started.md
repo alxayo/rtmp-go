@@ -44,6 +44,38 @@ Every published stream will be saved as an FLV file in the `recordings/` directo
 
 The server will forward all incoming media to the specified destinations.
 
+### With RTMPS (TLS Encryption)
+
+```bash
+# Generate a self-signed certificate (for testing)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -nodes -keyout key.pem -out cert.pem -days 365 -subj "/CN=localhost"
+
+# Run with both RTMP (plaintext) and RTMPS (encrypted)
+./rtmp-server -listen :1935 -tls-listen :443 -tls-cert cert.pem -tls-key key.pem
+```
+
+The server will accept plaintext RTMP on port 1935 and encrypted RTMPS on port 443 simultaneously.
+
+**For production**, use certificates from Let's Encrypt or another CA:
+```bash
+./rtmp-server -listen :1935 \
+  -tls-listen :443 \
+  -tls-cert /etc/letsencrypt/live/stream.example.com/fullchain.pem \
+  -tls-key /etc/letsencrypt/live/stream.example.com/privkey.pem
+```
+
+**Streaming clients** use `rtmps://` URLs:
+```bash
+# Publish over RTMPS
+ffmpeg -re -i test.mp4 -c copy -f flv rtmps://localhost:443/live/test
+
+# Watch over RTMPS
+ffplay rtmps://localhost:443/live/test
+```
+
+OBS Studio: Set Server to `rtmps://your-server:443/live` and Stream Key as usual.
+
 ### With Event Hooks
 
 ```bash

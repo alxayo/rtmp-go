@@ -44,6 +44,16 @@ The outbound message queue has a fixed size (100 messages). When a slow subscrib
 
 This prevents a single slow viewer from consuming unbounded memory or blocking the publisher.
 
+### TLS Termination (RTMPS)
+
+RTMPS wraps the entire RTMP protocol inside a TLS tunnel, encrypted at the transport layer. The implementation uses Go's `crypto/tls.NewListener()` to wrap a standard `net.Listener`. Since the full RTMP stack (handshake, chunk, AMF, control, RPC, media) operates on the `net.Conn` interface, and `tls.Conn` implements `net.Conn`, TLS is completely transparent — zero changes are needed in any protocol layer.
+
+**Dual-listener architecture:** The server supports running both listeners simultaneously — plaintext RTMP on one port and encrypted RTMPS on another. Both share the same `acceptLoop` logic and feed into the same stream registry, hooks, auth, and relay infrastructure. This mirrors how production HTTP servers run both HTTP and HTTPS.
+
+**TLS configuration:** Minimum TLS 1.2 is enforced to reject insecure TLS 1.0/1.1 connections. Certificate and key are loaded from PEM files at startup.
+
+**Client-side RTMPS:** The internal RTMP client supports `rtmps://` URLs for outbound relay, using `tls.Dialer` with a configurable `*tls.Config` for testing flexibility (e.g., `InsecureSkipVerify` for self-signed certs).
+
 ### Defensive Copying for Media Relay
 
 When broadcasting media to multiple subscribers, each subscriber receives an independent copy of the message payload. This prevents a race condition where one subscriber's chunk writer could modify shared bytes while another subscriber is still reading them.

@@ -24,6 +24,11 @@ type cliConfig struct {
 	showVersion       bool     // print version and exit
 	relayDestinations []string // RTMP URLs to relay published streams to
 
+	// TLS (RTMPS) configuration
+	tlsListenAddr string // optional RTMPS listen address (e.g. ":443")
+	tlsCertFile   string // path to PEM-encoded TLS certificate
+	tlsKeyFile    string // path to PEM-encoded TLS private key
+
 	// Event hooks
 	hookScripts     []string // shell hooks: "event_type=/path/to/script"
 	hookWebhooks    []string // webhook hooks: "event_type=https://url"
@@ -59,6 +64,12 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.UintVar(&cfg.chunkSize, "chunk-size", 4096, "Initial outbound chunk size")
 	fs.BoolVar(&cfg.showVersion, "version", false, "Print version and exit")
 	fs.Var(&relayDests, "relay-to", "RTMP destination URL (can be specified multiple times)")
+
+	// TLS (RTMPS) flags
+	fs.StringVar(&cfg.tlsListenAddr, "tls-listen", "", "RTMPS listen address (e.g. :443). Requires -tls-cert and -tls-key")
+	fs.StringVar(&cfg.tlsCertFile, "tls-cert", "", "Path to PEM-encoded TLS certificate file")
+	fs.StringVar(&cfg.tlsKeyFile, "tls-key", "", "Path to PEM-encoded TLS private key file")
+
 	fs.Var(&hookScripts, "hook-script", "Shell hook: event_type=/path/to/script (repeatable)")
 	fs.Var(&hookWebhooks, "hook-webhook", "Webhook hook: event_type=https://url (repeatable)")
 	fs.StringVar(&cfg.hookStdioFormat, "hook-stdio-format", "", "Stdio hook output format: json|env (empty=disabled)")
@@ -101,6 +112,16 @@ func parseFlags(args []string) (*cliConfig, error) {
 		}
 	}
 
+	// Validate TLS configuration
+	if cfg.tlsListenAddr != "" {
+		if cfg.tlsCertFile == "" || cfg.tlsKeyFile == "" {
+			return nil, errors.New("-tls-listen requires both -tls-cert and -tls-key")
+		}
+	}
+	if (cfg.tlsCertFile != "" || cfg.tlsKeyFile != "") && cfg.tlsListenAddr == "" {
+		return nil, errors.New("-tls-cert and -tls-key require -tls-listen")
+	}
+
 	// Validate authentication configuration
 	switch cfg.authMode {
 	case "none":
@@ -141,15 +162,15 @@ func (s *stringSliceFlag) Set(value string) error {
 	return nil
 }
 
-// validateRelayDestination validates an RTMP URL
+// validateRelayDestination validates an RTMP or RTMPS URL
 func validateRelayDestination(rawURL string) error {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
-	if parsedURL.Scheme != "rtmp" {
-		return fmt.Errorf("URL must use rtmp:// scheme, got %s", parsedURL.Scheme)
+	if parsedURL.Scheme != "rtmp" && parsedURL.Scheme != "rtmps" {
+		return fmt.Errorf("URL must use rtmp:// or rtmps:// scheme, got %s", parsedURL.Scheme)
 	}
 
 	if parsedURL.Host == "" {
