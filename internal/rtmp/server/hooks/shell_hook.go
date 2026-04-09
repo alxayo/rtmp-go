@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -26,10 +27,16 @@ type ShellHook struct {
 
 // NewShellHook creates a new shell hook
 func NewShellHook(id, scriptPath string, timeout time.Duration) *ShellHook {
+	command := "/bin/bash"
+	args := []string{scriptPath}
+	if runtime.GOOS == "windows" {
+		command = "powershell.exe"
+		args = []string{"-ExecutionPolicy", "Bypass", "-File", scriptPath}
+	}
 	return &ShellHook{
 		id:      id,
-		command: "/bin/bash",
-		args:    []string{scriptPath},
+		command: command,
+		args:    args,
 		env:     []string{},
 		timeout: timeout,
 	}

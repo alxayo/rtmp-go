@@ -42,6 +42,13 @@ rtmp-client
 /cmd/rtmp-server/rtmp-server
 /cmd/rtmp-client/rtmp-client
 
+# Scripts artifacts (generated, not committed)
+scripts/.certs/
+scripts/logs/
+scripts/.test-tmp/
+scripts/.server.pid
+hls-output/
+
 # Debug and profiling files
 *.prof
 *.pprof
