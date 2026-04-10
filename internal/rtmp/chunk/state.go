@@ -81,7 +81,7 @@ func (s *ChunkStreamState) ApplyHeader(h *ChunkHeader) error {
 		s.ResetBuffer()
 		s.inProgress = true
 	case 2: // delta only (reuse length, type, stream id)
-		if s.LastMsgStreamID == 0 || s.LastMsgLength == 0 {
+		if s.LastMsgLength == 0 && s.LastMsgTypeID == 0 {
 			return protoerr.NewChunkError("state.apply_header", fmt.Errorf("FMT2 without prior state"))
 		}
 		s.LastTimestamp += h.Timestamp

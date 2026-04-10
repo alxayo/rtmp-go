@@ -162,4 +162,27 @@ func TestChunkStreamState_Flow(t *testing.T) {
 			t.Fatalf("expected error")
 		}
 	})
+
+	t.Run("fmt2_control_msg_with_msid_zero", func(t *testing.T) {
+		// Control messages (Window Ack, Set Peer Bandwidth, etc.) use MSID=0.
+		// FMT2 must not reject these when prior state exists.
+		var s ChunkStreamState
+		// Seed with FMT0 control message: CSID=2, MSID=0, TypeID=3 (Acknowledgement)
+		if err := s.ApplyHeader(h(0, 2, 100, 4, 3, 0)); err != nil {
+			t.Fatalf("fmt0: %v", err)
+		}
+		if complete, _, err := s.AppendChunkData([]byte{0, 0, 0, 1}); err != nil || !complete {
+			t.Fatalf("first complete err=%v complete=%v", err, complete)
+		}
+		// FMT2 with delta on same CSID — must succeed despite MSID=0
+		if err := s.ApplyHeader(h(2, 2, 50, 0, 0, 0)); err != nil {
+			t.Fatalf("fmt2 with MSID=0 should succeed: %v", err)
+		}
+		if s.LastTimestamp != 150 {
+			t.Fatalf("expected ts 150 got %d", s.LastTimestamp)
+		}
+		if s.LastMsgLength != 4 || s.LastMsgTypeID != 3 || s.LastMsgStreamID != 0 {
+			t.Fatalf("fields not reused: len=%d type=%d msid=%d", s.LastMsgLength, s.LastMsgTypeID, s.LastMsgStreamID)
+		}
+	})
 }
