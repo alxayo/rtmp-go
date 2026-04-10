@@ -181,11 +181,20 @@ func Listen(addr string, cfg Config) (*Listener, error) {
 		return nil, err
 	}
 
+	log := slog.Default().With("component", "srt_listener")
+
+	// Log the actual bound address at DEBUG for troubleshooting
+	log.Debug("SRT UDP socket opened",
+		"requested_addr", addr,
+		"bound_addr", udpConn.LocalAddr().String(),
+		"network", udpConn.LocalAddr().Network(),
+	)
+
 	l := &Listener{
 		udpConn:    udpConn,
 		config:     cfg,
 		acceptChan: make(chan *ConnRequest, 16),
-		log:        slog.Default().With("component", "srt_listener"),
+		log:        log,
 	}
 
 	// Start the read loop in a background goroutine. This goroutine
@@ -208,6 +217,7 @@ func (l *Listener) readLoop() {
 	// Allocate a reusable read buffer sized to the configured MTU.
 	// We never expect a packet larger than this.
 	buf := make([]byte, l.config.MTU)
+	l.log.Debug("SRT read loop started", "mtu", l.config.MTU, "local_addr", l.udpConn.LocalAddr().String())
 
 	for {
 		// ReadFromUDP blocks until a packet arrives or the socket is closed.
@@ -220,6 +230,7 @@ func (l *Listener) readLoop() {
 			closing := l.closing
 			l.mu.RUnlock()
 			if closing {
+				l.log.Debug("SRT read loop exiting (listener closing)")
 				return
 			}
 			// Unexpected error — log it and keep trying. UDP is lossy
@@ -227,6 +238,11 @@ func (l *Listener) readLoop() {
 			l.log.Warn("UDP read error", "error", err)
 			continue
 		}
+
+		l.log.Debug("SRT UDP packet received",
+			"remote", remoteAddr.String(),
+			"bytes", n,
+		)
 
 		// Make a copy of the received data. We must copy because the
 		// buf slice is reused on the next ReadFromUDP call, and the
@@ -256,8 +272,18 @@ func (l *Listener) dispatch(data []byte, from *net.UDPAddr) {
 	// Every valid SRT packet has at least a 16-byte header.
 	// Discard anything smaller — it's either corrupted or not SRT.
 	if len(data) < srtHeaderMinBytes {
+		l.log.Debug("SRT packet too small (discarded)",
+			"remote", from.String(),
+			"bytes", len(data),
+			"min_required", srtHeaderMinBytes,
+		)
 		return
 	}
+
+	l.log.Debug("SRT packet dispatching",
+		"remote", from.String(),
+		"bytes", len(data),
+	)
 
 	// Phase 5 will add:
 	// - SRT header parsing to extract socketID and packet type

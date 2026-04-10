@@ -35,6 +35,13 @@ func (s *Server) startSRTListener() error {
 		PbKeyLen:   s.cfg.SRTPbKeyLen,
 	}
 
+	s.log.Debug("SRT listener starting",
+		"requested_addr", cfg.ListenAddr,
+		"latency_ms", cfg.Latency,
+		"encryption", cfg.Passphrase != "",
+		"pb_key_len", cfg.PbKeyLen,
+	)
+
 	// Start the SRT listener (binds a UDP socket and starts the read loop)
 	ln, err := srt.Listen(cfg.ListenAddr, cfg)
 	if err != nil {
@@ -46,24 +53,85 @@ func (s *Server) startSRTListener() error {
 	s.srtListener = ln
 	s.mu.Unlock()
 
-	// Log SRT listener info directly (SRT listener has a different interface)
+	// Log details about the bound UDP socket
 	addr := ln.Addr().String()
-	netAddr := ln.Addr().(*net.UDPAddr)
+	netAddr, _ := ln.Addr().(*net.UDPAddr)
+
+	s.log.Debug("SRT UDP socket bound",
+		"requested", s.cfg.SRTListenAddr,
+		"actual", addr,
+		"network", "udp",
+		"port", netAddr.Port,
+		"is_wildcard", netAddr.IP.IsUnspecified(),
+	)
+
+	// Resolve all reachable addresses when listening on wildcard
 	if netAddr != nil && netAddr.IP.IsUnspecified() {
-		// IPv6 or IPv4 wildcard
-		isIPv6 := netAddr.IP.To4() == nil
-		var details []string
-		details = append(details, fmt.Sprintf("listen_addr=%s", addr))
-		if isIPv6 {
-			details = append(details, fmt.Sprintf("[::1]:%d (localhost)", netAddr.Port))
-		} else {
-			details = append(details, fmt.Sprintf("127.0.0.1:%d (localhost)", netAddr.Port))
+		var ipv4Addrs []string
+		var ipv6Addrs []string
+
+		ifaces, err := net.Interfaces()
+		if err == nil {
+			for _, iface := range ifaces {
+				if iface.Flags&net.FlagUp == 0 {
+					continue
+				}
+				addrs, err := iface.Addrs()
+				if err != nil {
+					continue
+				}
+				for _, ifaceAddr := range addrs {
+					ipNet, ok := ifaceAddr.(*net.IPNet)
+					if !ok {
+						continue
+					}
+					ip := ipNet.IP
+					isLoopback := iface.Flags&net.FlagLoopback != 0
+
+					if ip.To4() != nil {
+						label := fmt.Sprintf("%s:%d", ip, netAddr.Port)
+						if isLoopback {
+							label += " (loopback)"
+						}
+						ipv4Addrs = append(ipv4Addrs, label)
+						s.log.Debug("SRT reachable address",
+							"interface", iface.Name,
+							"ip_version", "IPv4",
+							"address", fmt.Sprintf("%s:%d", ip, netAddr.Port),
+							"loopback", isLoopback,
+						)
+					} else if ip.To16() != nil && !ip.IsLinkLocalUnicast() {
+						label := fmt.Sprintf("[%s]:%d", ip, netAddr.Port)
+						if isLoopback {
+							label += " (loopback)"
+						}
+						ipv6Addrs = append(ipv6Addrs, label)
+						s.log.Debug("SRT reachable address",
+							"interface", iface.Name,
+							"ip_version", "IPv6",
+							"address", fmt.Sprintf("[%s]:%d", ip, netAddr.Port),
+							"loopback", isLoopback,
+						)
+					}
+				}
+			}
 		}
+
+		var accessible []string
+		if len(ipv4Addrs) > 0 {
+			accessible = append(accessible, "IPv4: "+strings.Join(ipv4Addrs, ", "))
+		}
+		if len(ipv6Addrs) > 0 {
+			accessible = append(accessible, "IPv6: "+strings.Join(ipv6Addrs, ", "))
+		}
+
 		s.log.Info("SRT server listening",
-			"addr", addr,
-			"accessible_at", strings.Join(details, ", "))
+			"listen_addr", addr,
+			"port", netAddr.Port,
+			"protocol", "UDP",
+			"accessible_at", strings.Join(accessible, " | "))
 	} else {
-		s.log.Info("SRT server listening", "addr", addr)
+		s.log.Info("SRT server listening", "addr", addr, "protocol", "UDP")
 	}
 
 	// Start the accept loop in a background goroutine.
@@ -82,6 +150,7 @@ func (s *Server) startSRTListener() error {
 // spawns its own goroutine for actual media processing).
 func (s *Server) srtAcceptLoop() {
 	defer s.acceptingWg.Done()
+	s.log.Debug("SRT accept loop started", "listener_addr", s.srtListener.Addr().String())
 
 	for {
 		// Block until a new SRT connection completes its handshake
@@ -92,15 +161,25 @@ func (s *Server) srtAcceptLoop() {
 			closing := s.closing
 			s.mu.RUnlock()
 			if closing {
+				s.log.Debug("SRT accept loop exiting (listener closed)")
 				return
 			}
 			// Check for listener closed error
 			if err == net.ErrClosed {
+				s.log.Debug("SRT accept loop exiting (net.ErrClosed)")
 				return
 			}
 			s.log.Warn("SRT accept error", "error", err)
 			continue
 		}
+
+		// Log every incoming SRT connection attempt at DEBUG — fires after
+		// the handshake completes but before the server accepts/rejects.
+		s.log.Debug("SRT incoming connection request",
+			"remote", req.PeerAddr().String(),
+			"stream_id", req.StreamID(),
+			"stage", "pre-accept",
+		)
 
 		// Handle each connection in its own goroutine so we can
 		// immediately go back to accepting the next one.
@@ -123,6 +202,14 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	// and simple ("live/test" or "publish:live/test") formats.
 	info := srt.ParseStreamID(req.StreamID())
 
+	s.log.Debug("SRT stream ID parsed",
+		"raw_stream_id", req.StreamID(),
+		"stream_key", info.StreamKey(),
+		"mode", info.Mode,
+		"is_publish", info.IsPublish(),
+		"remote", req.PeerAddr().String(),
+	)
+
 	// Only accept publish connections for now.
 	// SRT playback (subscribing) is not supported in this version.
 	if !info.IsPublish() {
@@ -130,15 +217,26 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 			"stream_id", req.StreamID(),
 			"mode", info.Mode,
 			"remote", req.PeerAddr().String(),
+			"stage", "rejected",
 		)
 		req.Reject(srt.RejectBadRequest)
 		return
 	}
 
 	// Accept the SRT connection — this completes the handshake.
+	s.log.Debug("SRT accepting connection",
+		"remote", req.PeerAddr().String(),
+		"stream_key", info.StreamKey(),
+		"stage", "accepting",
+	)
 	conn, err := req.Accept()
 	if err != nil {
-		s.log.Error("SRT accept failed", "error", err)
+		s.log.Error("SRT accept failed",
+			"error", err,
+			"remote", req.PeerAddr().String(),
+			"stream_key", info.StreamKey(),
+			"stage", "accept-failed",
+		)
 		return
 	}
 
@@ -154,6 +252,15 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		"remote", conn.PeerAddr().String(),
 		"stream_key", info.StreamKey(),
 		"stream_id", req.StreamID(),
+		"stage", "connected",
+	)
+	s.log.Debug("SRT connection details",
+		"conn_id", connID,
+		"remote", conn.PeerAddr().String(),
+		"stream_key", info.StreamKey(),
+		"socket_id", conn.LocalSocketID(),
+		"active_srt_connections", metrics.SRTConnectionsActive.Value(),
+		"total_srt_connections", metrics.SRTConnectionsTotal.Value(),
 	)
 
 	// Fire the connection accept hook event so external systems are notified.
@@ -173,12 +280,18 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 
 	// Register the publisher with the ingress manager.
 	// This ensures uniqueness (only one publisher per stream key).
+	s.log.Debug("SRT registering publisher",
+		"conn_id", connID,
+		"stream_key", info.StreamKey(),
+		"stage", "registering",
+	)
 	session, err := s.ingressManager.BeginPublish(pub)
 	if err != nil {
 		s.log.Error("SRT publish rejected",
 			"error", err,
 			"stream_key", info.StreamKey(),
 			"conn_id", connID,
+			"stage", "publish-rejected",
 		)
 		conn.Close()
 		metrics.SRTConnectionsActive.Add(-1)
@@ -194,6 +307,11 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	// Start the bridge — this blocks until the SRT connection closes.
 	// The bridge reads MPEG-TS from SRT, converts to RTMP, and pushes
 	// through the publish session.
+	s.log.Debug("SRT bridge starting",
+		"conn_id", connID,
+		"stream_key", info.StreamKey(),
+		"stage", "bridge-starting",
+	)
 	bridge := srt.NewBridge(conn, session, s.log.With("conn_id", connID))
 	bridgeErr := bridge.Run()
 
@@ -201,6 +319,13 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		s.log.Warn("SRT bridge exited with error",
 			"conn_id", connID,
 			"error", bridgeErr,
+			"stage", "bridge-error",
+		)
+	} else {
+		s.log.Debug("SRT bridge exited cleanly",
+			"conn_id", connID,
+			"stream_key", info.StreamKey(),
+			"stage", "bridge-done",
 		)
 	}
 
@@ -212,6 +337,11 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	s.log.Info("SRT connection closed",
 		"conn_id", connID,
 		"stream_key", info.StreamKey(),
+		"stage", "disconnected",
+	)
+	s.log.Debug("SRT connection cleanup done",
+		"conn_id", connID,
+		"active_srt_connections", metrics.SRTConnectionsActive.Value(),
 	)
 }
 

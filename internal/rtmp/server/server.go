@@ -222,71 +222,116 @@ func (s *Server) startTLSListener() (net.Listener, error) {
 	return tls.NewListener(tcpLn, tlsCfg), nil
 }
 
-// logListenerInfo logs the listening address and resolves IPv4/IPv6 addresses.
-// Handles wildcard addresses like [:], [::], or :port by resolving to local IPs.
+// logListenerInfo logs the listening address and resolves all reachable IPs.
+// For wildcard addresses ([::]  or 0.0.0.0), it enumerates every network interface
+// so the operator can see exactly which IPs the server is reachable at.
 func (s *Server) logListenerInfo(protocol string, listener net.Listener) {
 	addr := listener.Addr().String()
-	
+
 	// Try to resolve which IPs this listener is actually bound to
-	netAddr := listener.Addr().(*net.TCPAddr)
-	if netAddr == nil {
+	netAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || netAddr == nil {
 		s.log.Info(protocol+" server listening", "addr", addr)
 		return
 	}
-	
-	// If listening on a wildcard address, resolve the actual IPs
-	if netAddr.IP.IsUnspecified() { // 0.0.0.0 or [::]
-		isIPv6Only := netAddr.IP.To4() == nil
-		
-		var ipv4Addrs []string
-		var ipv6Addrs []string
-		
-		// Get all local addresses
-		addrs, err := net.InterfaceAddrs()
-		if err == nil {
-			for _, ifaceAddr := range addrs {
-				ipNet, ok := ifaceAddr.(*net.IPNet)
-				if !ok {
-					continue
+
+	// Log the raw bind result at DEBUG so operators can see network/address details
+	s.log.Debug(protocol+" TCP socket bound",
+		"requested", s.cfg.ListenAddr,
+		"actual", addr,
+		"network", netAddr.Network(),
+		"ip", netAddr.IP.String(),
+		"port", netAddr.Port,
+		"is_ipv4", netAddr.IP.To4() != nil,
+		"is_ipv6", netAddr.IP.To4() == nil,
+		"is_wildcard", netAddr.IP.IsUnspecified(),
+	)
+
+	// If listening on a specific IP (not wildcard), just log that address
+	if !netAddr.IP.IsUnspecified() {
+		s.log.Info(protocol+" server listening", "addr", addr)
+		return
+	}
+
+	// Wildcard address — resolve every reachable IP from all interfaces
+	var ipv4Addrs []string
+	var ipv6Addrs []string
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		s.log.Debug("failed to list network interfaces", "error", err)
+		s.log.Info(protocol+" server listening", "addr", addr)
+		return
+	}
+
+	for _, iface := range ifaces {
+		// Skip interfaces that are down or loopback
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, ifaceAddr := range addrs {
+			ipNet, ok := ifaceAddr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipNet.IP
+
+			isLoopback := iface.Flags&net.FlagLoopback != 0
+
+			if ip.To4() != nil {
+				label := fmt.Sprintf("%s:%d", ip, netAddr.Port)
+				if isLoopback {
+					label += " (loopback)"
 				}
-				ip := ipNet.IP
-				
-				// Collect IPv4 addresses
-				if ip.To4() != nil && !ip.IsLoopback() {
-					ipv4Addrs = append(ipv4Addrs, fmt.Sprintf("%s:%d", ip, netAddr.Port))
+				ipv4Addrs = append(ipv4Addrs, label)
+				s.log.Debug(protocol+" reachable address",
+					"interface", iface.Name,
+					"ip_version", "IPv4",
+					"address", fmt.Sprintf("%s:%d", ip, netAddr.Port),
+					"loopback", isLoopback,
+				)
+			} else if ip.To16() != nil && !ip.IsLinkLocalUnicast() {
+				label := fmt.Sprintf("[%s]:%d", ip, netAddr.Port)
+				if isLoopback {
+					label += " (loopback)"
 				}
-				
-				// Collect IPv6 addresses (non-loopback, non-link-local)
-				if ip.To4() == nil && ip.To16() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-					ipv6Addrs = append(ipv6Addrs, fmt.Sprintf("[%s]:%d", ip, netAddr.Port))
-				}
+				ipv6Addrs = append(ipv6Addrs, label)
+				s.log.Debug(protocol+" reachable address",
+					"interface", iface.Name,
+					"ip_version", "IPv6",
+					"address", fmt.Sprintf("[%s]:%d", ip, netAddr.Port),
+					"loopback", isLoopback,
+				)
 			}
 		}
-		
-		// Add localhost for convenience
-		ipv4Addrs = append(ipv4Addrs, fmt.Sprintf("127.0.0.1:%d", netAddr.Port))
-		ipv6Addrs = append(ipv6Addrs, fmt.Sprintf("[::1]:%d", netAddr.Port))
-		
-		var accessible []string
-		if !isIPv6Only && len(ipv4Addrs) > 0 {
-			accessible = append(accessible, "IPv4: "+strings.Join(ipv4Addrs, ", "))
-		}
-		if len(ipv6Addrs) > 0 {
-			accessible = append(accessible, "IPv6: "+strings.Join(ipv6Addrs, ", "))
-		}
-		
-		s.log.Info(protocol+" server listening",
-			"listen_addr", addr,
-			"accessible_at", strings.Join(accessible, " | "))
-	} else {
-		s.log.Info(protocol+" server listening", "addr", addr)
 	}
+
+	// Build a human-readable summary for the INFO line
+	var accessible []string
+	if len(ipv4Addrs) > 0 {
+		accessible = append(accessible, "IPv4: "+strings.Join(ipv4Addrs, ", "))
+	}
+	if len(ipv6Addrs) > 0 {
+		accessible = append(accessible, "IPv6: "+strings.Join(ipv6Addrs, ", "))
+	}
+
+	s.log.Info(protocol+" server listening",
+		"listen_addr", addr,
+		"port", netAddr.Port,
+		"accessible_at", strings.Join(accessible, " | "))
 }
 
 // acceptLoop runs until listener close. Each successful accept performs the
 // RTMP handshake via conn.Accept which internally sends the control burst.
 func (s *Server) acceptLoop(l net.Listener) {
 	defer s.acceptingWg.Done()
+	s.log.Debug("RTMP accept loop started", "listener_addr", l.Addr().String())
+
 	for {
 		raw, err := l.Accept()
 		if err != nil {
@@ -295,14 +340,26 @@ func (s *Server) acceptLoop(l net.Listener) {
 			closing := s.closing
 			s.mu.RUnlock()
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				s.log.Debug("RTMP accept timeout (retrying)", "error", err)
 				continue
 			}
 			if closing || errors.Is(err, net.ErrClosed) {
+				s.log.Debug("RTMP accept loop exiting (listener closed)")
 				return
 			}
-			s.log.Warn("accept error", "error", err)
+			s.log.Warn("RTMP accept error (loop terminating)", "error", err)
 			return
 		}
+
+		// Log every incoming TCP connection at DEBUG — this fires BEFORE the
+		// RTMP handshake, so you can see connection attempts even if they fail.
+		remoteAddr := raw.RemoteAddr().String()
+		localAddr := raw.LocalAddr().String()
+		s.log.Debug("RTMP incoming TCP connection",
+			"remote", remoteAddr,
+			"local", localAddr,
+			"stage", "pre-handshake",
+		)
 
 		// Detect whether this connection arrived over TLS
 		_, isTLS := raw.(*tls.Conn)
@@ -312,15 +369,39 @@ func (s *Server) acceptLoop(l net.Listener) {
 		// Trick: create a one-off fake listener returning this raw conn.
 		single := &singleConnListener{conn: raw}
 		c, err := iconn.Accept(single)
-		if err != nil { // handshake failure already logged; continue accepting.
+		if err != nil {
+			// Handshake failed — log at WARN so operators can diagnose
+			s.log.Warn("RTMP handshake failed",
+				"remote", remoteAddr,
+				"local", localAddr,
+				"tls", isTLS,
+				"error", err,
+				"stage", "handshake",
+			)
 			continue
 		}
+
 		s.mu.Lock()
 		s.conns[c.ID()] = c
 		s.mu.Unlock()
 		metrics.ConnectionsActive.Add(1)
 		metrics.ConnectionsTotal.Add(1)
-		s.log.Info("connection registered", "conn_id", c.ID(), "remote", raw.RemoteAddr().String(), "tls", isTLS)
+
+		s.log.Info("RTMP connection registered",
+			"conn_id", c.ID(),
+			"remote", remoteAddr,
+			"local", localAddr,
+			"tls", isTLS,
+			"stage", "connected",
+		)
+		s.log.Debug("RTMP connection details",
+			"conn_id", c.ID(),
+			"remote", remoteAddr,
+			"local", localAddr,
+			"tls", isTLS,
+			"active_connections", metrics.ConnectionsActive.Value(),
+			"total_connections", metrics.ConnectionsTotal.Value(),
+		)
 
 		// Trigger connection accept hook event
 		s.triggerHookEvent(hooks.EventConnectionAccept, c.ID(), "", map[string]interface{}{
