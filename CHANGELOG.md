@@ -5,6 +5,37 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.0] — 2025-07-14
+
+### Added
+- **SRT (Secure Reliable Transport) Ingest**: Accept SRT streams over UDP alongside RTMP. SRT publishers are transparently converted to RTMP format, allowing RTMP subscribers to watch SRT sources without any changes.
+  - SRT v5 handshake with SYN cookie exchange and extension negotiation
+  - Stream ID parsing: simple (`live/test`), prefixed (`publish:live/test`), and structured (`#!::r=live/test,m=publish`) formats
+  - TSBPD (Timestamp-Based Packet Delivery) jitter buffer with configurable latency
+  - ACK/NAK reliability with RTT measurement and retransmission
+  - Optional AES encryption (128/192/256-bit) with PBKDF2 key derivation and AES Key Wrap (RFC 3394)
+  - 31-bit circular sequence number arithmetic with wraparound handling
+- **MPEG-TS Demuxer** (`internal/ts/`): Full transport stream parser with PAT/PMT table decoding, PES packet reassembly, and stream type detection (H.264, AAC, HEVC)
+- **Codec Converters** (`internal/codec/`): H.264 Annex B→AVCC and AAC ADTS→raw frame converters for SRT-to-RTMP bridge
+  - NALU splitter, SPS/PPS extraction, AVCDecoderConfigurationRecord builder
+  - ADTS parser, AudioSpecificConfig builder
+  - 90kHz→1ms timestamp conversion with CTS (Composition Time Offset) calculation
+- **SRT-to-RTMP Bridge** (`internal/srt/bridge.go`): End-to-end pipeline converting SRT data packets through MPEG-TS demuxing and codec conversion into `chunk.Message` for the existing stream registry
+- **Ingress Abstraction** (`internal/ingress/`): Protocol-agnostic publish lifecycle manager shared by RTMP and SRT ingest paths
+- **SRT CLI Flags**: `-srt-listen`, `-srt-latency` (default 120ms), `-srt-passphrase`, `-srt-pbkeylen` (16/24/32)
+- **SRT Metrics**: 6 new expvar counters — `srt_connections_active`, `srt_connections_total`, `srt_bytes_received`, `srt_packets_received`, `srt_packets_retransmit`, `srt_packets_dropped`
+- **SRT Documentation**: `docs/srt-protocol.md` technical reference with architecture diagram, codec conversion details, Stream ID format reference
+
+### New Packages
+- `internal/srt/packet/` — SRT wire protocol types
+- `internal/srt/circular/` — Circular sequence number arithmetic
+- `internal/srt/crypto/` — AES Key Wrap and PBKDF2
+- `internal/srt/handshake/` — SRT v5 handshake FSM
+- `internal/srt/conn/` — Connection state machine with reliability (TSBPD, ACK, NAK)
+- `internal/ts/` — MPEG-TS demuxer
+- `internal/codec/` — Video/audio codec converters
+- `internal/ingress/` — Publish lifecycle abstraction
+
 ## [v0.1.4] — 2026-04-10
 
 ### Added

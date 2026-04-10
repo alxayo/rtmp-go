@@ -2,9 +2,11 @@
 
 A production-ready RTMP server in pure Go. Zero external dependencies.
 
-Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording + multi-destination relay.
+Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording + multi-destination relay.  
+**Now with SRT ingest** — accept both RTMP and SRT streams simultaneously.
 
 > **Status:** ✅ Core features operational  
+> **Protocols:** ✅ RTMP, RTMPS (TLS), SRT (UDP ingest)  
 > **Codecs:** ✅ H.264, H.265 (HEVC), AV1, VP9 via Enhanced RTMP  
 > **Recording:** ✅ Automatic FLV recording  
 > **Relay:** ✅ Multi-subscriber with late-join support  
@@ -19,12 +21,27 @@ go build -o rtmp-server ./cmd/rtmp-server
 # Run (with recording)
 ./rtmp-server -listen :1935 -record-all true
 
-# Publish (terminal 2)
+# Publish via RTMP (terminal 2)
 ffmpeg -re -i test.mp4 -c copy -f flv rtmp://localhost:1935/live/test
 
 # Watch (terminal 3)
 ffplay rtmp://localhost:1935/live/test
 ```
+
+### SRT Ingest
+
+```bash
+# Run with both RTMP and SRT enabled
+./rtmp-server -listen :1935 -srt-listen :10080
+
+# Publish via SRT (MPEG-TS)
+ffmpeg -re -i test.mp4 -c copy -f mpegts srt://localhost:10080?streamid=publish:live/test
+
+# Watch via RTMP (SRT streams are transparently converted)
+ffplay rtmp://localhost:1935/live/test
+```
+
+SRT streams carry MPEG-TS, which is automatically demuxed and converted to RTMP format (H.264 Annex B→AVCC, AAC ADTS→raw). SRT publishers appear identical to RTMP publishers from the subscriber's perspective.
 
 See [docs/getting-started.md](docs/getting-started.md) for the full guide with CLI flags, OBS setup, and troubleshooting.
 
@@ -49,6 +66,7 @@ ffplay rtmps://localhost:443/live/test
 
 | Feature | Description |
 |---------|-------------|
+| **SRT Ingest** | Accept SRT (UDP) streams alongside RTMP — automatic MPEG-TS→RTMP conversion |
 | **RTMPS (TLS)** | Encrypted RTMP via TLS termination (`-tls-listen`, `-tls-cert`, `-tls-key`) |
 | **RTMP v3 Handshake** | C0/C1/C2 ↔ S0/S1/S2 with 5s timeouts |
 | **Enhanced RTMP** | H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling |
@@ -69,7 +87,8 @@ ffplay rtmps://localhost:443/live/test
 ## Architecture
 
 ```
-TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recording
+RTMP: TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recording
+SRT:  UDP Accept → SRT Handshake → MPEG-TS Demux → Codec Convert → Media Relay/Recording
 ```
 
 ```
@@ -80,13 +99,27 @@ internal/rtmp/
 ├── control/      Protocol control messages (types 1-6)
 ├── rpc/          Command parsing (connect, publish, play)
 ├── conn/         Connection lifecycle (read/write loops)
-├── server/       Listener, stream registry, pub/sub
+├── server/       Listener, stream registry, pub/sub, SRT accept loop
 │   ├── auth/     Token-based authentication (validators)
 │   └── hooks/    Event hook system (webhooks, shell, stdio)
 ├── media/        Audio/video parsing, codec detection (Enhanced RTMP), FLV recording
 ├── relay/        Multi-destination forwarding
-├── metrics/      Expvar counters for live monitoring
+├── metrics/      Expvar counters for live monitoring (RTMP + SRT)
 └── client/       Minimal test client
+
+internal/srt/
+├── packet/       SRT packet types (header, data, control, handshake, ACK, NAK)
+├── circular/     31-bit circular sequence number arithmetic
+├── crypto/       AES Key Wrap (RFC 3394), PBKDF2
+├── handshake/    SRT v5 handshake FSM (cookie, extensions, stream ID)
+├── conn/         Connection state machine, sender, receiver, reliability
+├── bridge.go     SRT→RTMP bridge (TS demux → codec convert → chunk.Message)
+├── listener.go   UDP multiplexed listener
+└── config.go     SRT configuration
+
+internal/ts/       MPEG-TS demuxer (PAT/PMT, PES reassembly, H.264/AAC)
+internal/codec/    H.264 Annex B→AVCC, AAC ADTS→raw converters
+internal/ingress/  Protocol-agnostic publish lifecycle (RTMP + SRT)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full system overview with diagrams.
@@ -99,6 +132,7 @@ See [docs/architecture.md](docs/architecture.md) for the full system overview wi
 | [Architecture](docs/architecture.md) | System overview, data flow, package map |
 | [Design](docs/design.md) | Design principles, concurrency model, key decisions |
 | [RTMP Protocol](docs/rtmp-protocol.md) | Wire-level reference: chunks, AMF0, commands |
+| [SRT Protocol](docs/srt-protocol.md) | SRT ingest: handshake, reliability, MPEG-TS conversion |
 | [Implementation](docs/implementation.md) | Code walkthrough, data structures, media flow |
 | [Testing Guide](docs/testing-guide.md) | Unit tests, golden vectors, interop testing |
 | [Documentation Index](docs/README.md) | Full index of all docs |
@@ -126,6 +160,10 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -tls-listen          RTMPS listen address (e.g. :443). Requires -tls-cert and -tls-key
 -tls-cert            Path to PEM-encoded TLS certificate file
 -tls-key             Path to PEM-encoded TLS private key file
+-srt-listen          SRT UDP listen address (e.g. :10080). Empty = disabled
+-srt-latency         SRT buffer latency in milliseconds (default 120)
+-srt-passphrase      SRT encryption passphrase (empty = no encryption)
+-srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16)
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)
 -record-dir          Recording directory (default recordings)
@@ -153,7 +191,17 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ## Roadmap
 
-### v0.1.4 (current)
+### v0.2.0 (current)
+- **SRT Ingest**: Accept SRT (Secure Reliable Transport) streams over UDP alongside RTMP
+- Automatic MPEG-TS → RTMP conversion (H.264 Annex B→AVCC, AAC ADTS→raw)
+- SRT v5 handshake with Stream ID access control
+- TSBPD (Timestamp-Based Packet Delivery) with configurable latency
+- ACK/NAK reliability with RTT measurement
+- Optional AES encryption (128/192/256-bit)
+- CLI flags: `-srt-listen`, `-srt-latency`, `-srt-passphrase`, `-srt-pbkeylen`
+- SRT-specific expvar metrics
+
+### v0.1.4
 - **Enhanced RTMP (E-RTMP v2)**: H.265/HEVC, AV1, VP9 codec support via FourCC signaling
 - Compatible with FFmpeg 6.1+, OBS 29.1+, SRS 6.0+
 - Automatic codec detection — no configuration needed

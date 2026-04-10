@@ -13,6 +13,7 @@
 | Document | Description |
 |----------|-------------|
 | [RTMP Protocol Reference](rtmp-protocol.md) | Wire-level protocol details: chunks, headers, AMF0, commands |
+| [SRT Protocol Reference](srt-protocol.md) | SRT ingest: handshake, reliability, MPEG-TS conversion |
 | [Implementation Guide](implementation.md) | Code walkthrough: connection lifecycle, data structures, media flow |
 | [Testing Guide](testing-guide.md) | How to run tests, golden vectors, manual interop testing |
 | [Definition of Done](definition-of-done.md) | Feature completion checklist and verification commands |

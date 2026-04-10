@@ -2,12 +2,12 @@
 
 **Date:** October 13, 2025  
 **Status:** ✅ Fully Operational  
-**Purpose:** Stream from OBS → RTMP Server → ffplay (with simultaneous recording)
+**Purpose:** Stream from OBS/FFmpeg → RTMP/SRT Server → ffplay (with simultaneous recording)
 
 ## Overview
 
 This guide demonstrates the complete RTMP server functionality:
-- **Publisher:** OBS Studio streaming to the server
+- **Publisher:** OBS Studio or FFmpeg streaming to the server via RTMP or SRT
 - **Recording:** Server automatically saves streams to FLV files
 - **Relay:** Multiple subscribers (ffplay, VLC, etc.) can play the live stream
 - **Late-Join Support:** Subscribers joining mid-stream receive codec initialization
@@ -17,6 +17,7 @@ This guide demonstrates the complete RTMP server functionality:
 ✅ **Simultaneous Recording & Relay** - Record to file while streaming to live viewers  
 ✅ **Late-Join Support** - Subscribers joining mid-stream receive H.264/H.265 SPS/PPS and AAC config  
 ✅ **Enhanced RTMP** - H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling  
+✅ **SRT Ingest** - Accept SRT (UDP) streams alongside RTMP, auto-convert MPEG-TS to RTMP  
 ✅ **Multiple Subscribers** - Support unlimited concurrent viewers  
 ✅ **Thread-Safe** - Independent payload copies prevent corruption between connections
 
@@ -249,6 +250,65 @@ ffmpeg -i .\recordings\live_test_20251013_121100.flv -c copy output.mp4
 ✅ **Recording continues** while subscribers are connected  
 ✅ **Relay continues** while recording is active  
 ✅ **Both features work independently** without interference
+
+## SRT Ingest (Optional)
+
+SRT (Secure Reliable Transport) provides low-latency, reliable streaming over UDP. You can publish via SRT while subscribers watch via RTMP.
+
+### Step A: Start Server with SRT Enabled
+
+```bash
+./rtmp-server -listen :1935 -srt-listen :10080 -record-all true
+```
+
+### Step B: Publish via SRT
+
+```bash
+# Publish using FFmpeg with SRT output
+ffmpeg -re -i test.mp4 -c copy -f mpegts "srt://localhost:10080?streamid=publish:live/test"
+```
+
+The `streamid` parameter tells the server which stream key to use. Format: `publish:<app>/<stream>`.
+
+### Step C: Watch via RTMP
+
+SRT streams are automatically converted to RTMP format. Subscribe normally:
+
+```bash
+ffplay rtmp://localhost:1935/live/test
+```
+
+### SRT with Encryption
+
+```bash
+# Server with encryption
+./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "mysecretkey"
+
+# Publisher must use same passphrase
+ffmpeg -re -i test.mp4 -c copy -f mpegts \
+  "srt://localhost:10080?streamid=publish:live/test&passphrase=mysecretkey"
+```
+
+### SRT + RTMP Simultaneously
+
+You can have RTMP and SRT publishers at the same time (on different stream keys):
+
+```bash
+# Terminal 1: Start server
+./rtmp-server -listen :1935 -srt-listen :10080
+
+# Terminal 2: Publish via RTMP
+ffmpeg -re -i video1.mp4 -c copy -f flv rtmp://localhost:1935/live/rtmp-stream
+
+# Terminal 3: Publish via SRT
+ffmpeg -re -i video2.mp4 -c copy -f mpegts "srt://localhost:10080?streamid=publish:live/srt-stream"
+
+# Terminal 4: Watch RTMP stream
+ffplay rtmp://localhost:1935/live/rtmp-stream
+
+# Terminal 5: Watch SRT stream (via RTMP)
+ffplay rtmp://localhost:1935/live/srt-stream
+```
 
 ## Architecture Flow
 
