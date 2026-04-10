@@ -129,10 +129,22 @@ func (a *ACKState) GetACKSendTime(ackSeqNum uint32) uint64 {
 
 // GenerateACK creates an ACK control packet from the current receiver state.
 // The ACK tells the sender what we've received and provides network statistics.
-// Returns nil if there's nothing new to acknowledge.
+// Returns nil if there's nothing new to acknowledge (the receiver hasn't
+// delivered any new contiguous packets since the last ACK).
 func (c *Conn) GenerateACK() *packet.ControlPacket {
-	// Get the next expected sequence number from the receiver
+	// Get the next expected sequence number from the receiver.
+	// This is lastDelivered + 1 — everything before it has been received in order.
 	ackSeq := c.receiver.GetACKSequence()
+
+	// Check if we have new data to acknowledge since the last ACK.
+	// If the receiver hasn't advanced, there's nothing new to report.
+	c.receiver.mu.Lock()
+	if ackSeq == c.receiver.lastACKed {
+		c.receiver.mu.Unlock()
+		return nil
+	}
+	c.receiver.lastACKed = ackSeq
+	c.receiver.mu.Unlock()
 
 	// Record that we're sending this ACK (for RTT measurement)
 	nowUs := microsecondNow()

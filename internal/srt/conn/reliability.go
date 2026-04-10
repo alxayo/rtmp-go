@@ -45,12 +45,14 @@ func (c *Conn) reliabilityLoop() {
 	// time.NewTicker creates a channel that sends a value at regular intervals.
 	ackTicker := time.NewTicker(time.Duration(ACKIntervalMs) * time.Millisecond)
 	nakTicker := time.NewTicker(time.Duration(NAKIntervalMs) * time.Millisecond)
+	deliveryTicker := time.NewTicker(1 * time.Millisecond)
 	keepaliveTicker := time.NewTicker(time.Duration(KeepaliveIntervalMs) * time.Millisecond)
 
 	// Stop all tickers when the loop exits to free resources.
 	// "defer" means these run when the function returns, even if it returns due to error.
 	defer ackTicker.Stop()
 	defer nakTicker.Stop()
+	defer deliveryTicker.Stop()
 	defer keepaliveTicker.Stop()
 
 	for {
@@ -73,6 +75,17 @@ func (c *Conn) reliabilityLoop() {
 			// Time to check for losses (every 20ms).
 			// Send NAK for any missing packets and process retransmissions.
 			c.handleNAKTick()
+
+		case <-deliveryTicker.C:
+			// TSBPD delivery check (every 1ms).
+			// First, drop packets that are past their delivery deadline
+			// (TLPKTDROP). This resolves gaps caused by permanently lost
+			// packets, allowing delivery to continue.
+			c.dropTooLate()
+
+			// Then deliver packets whose TSBPD delivery time has arrived.
+			// This handles packets released after TLPKTDROP clears gaps.
+			c.deliverTSBPD()
 
 		case <-keepaliveTicker.C:
 			// Time to send a keepalive (every 1s).
@@ -132,5 +145,133 @@ func (c *Conn) sendKeepalive() {
 
 	if err := c.sendControl(keepalive); err != nil {
 		c.log.Warn("failed to send keepalive", "error", err)
+	}
+}
+
+// deliverTSBPD delivers packets whose TSBPD delivery time has arrived.
+// It checks the next expected packet in sequence and delivers it if:
+//  1. It exists in the receive buffer (no gap), AND
+//  2. Its scheduled delivery time has passed
+//
+// This complements the receiver's contiguous delivery (which delivers in-order
+// packets immediately on arrival). deliverTSBPD handles packets that became
+// deliverable after TLPKTDROP resolved a gap by skipping lost packets.
+func (c *Conn) deliverTSBPD() {
+	now := microsecondNow()
+
+	// Lock the receiver to safely access its buffer and delivery state.
+	// We hold the lock for the entire delivery pass because we're modifying
+	// lastDelivered and the receiveBuffer.
+	c.receiver.mu.Lock()
+	defer c.receiver.mu.Unlock()
+
+	// Try to deliver as many contiguous ready packets as possible
+	for {
+		// The next packet we need to deliver (in sequence order)
+		nextSeq := c.receiver.lastDelivered.Inc()
+
+		// Check if we have this packet in the buffer
+		pkt, exists := c.receiver.receiveBuffer[nextSeq]
+		if !exists {
+			// Gap — can't deliver until this packet arrives or is dropped
+			break
+		}
+
+		// Check if the packet's delivery time has arrived.
+		// TSBPD ensures we don't deliver packets too early — they wait
+		// in the buffer until their scheduled playout time.
+		if !c.tsbpd.IsReady(pkt.Timestamp, now) {
+			// Packet arrived early — hold it until its delivery time
+			break
+		}
+
+		// Delivery time has passed — send the payload to the application.
+		// Non-blocking send avoids blocking the reliability loop if the
+		// application is slow to consume data.
+		select {
+		case c.receiver.deliveryChan <- pkt.Payload:
+			// Successfully delivered — remove from buffer and advance
+			delete(c.receiver.receiveBuffer, nextSeq)
+			c.receiver.lastDelivered = nextSeq
+		default:
+			// Delivery channel is full — back-pressure from application.
+			// Stop delivering and try again on the next tick.
+			return
+		}
+	}
+}
+
+// dropTooLate removes packets from the receive buffer that are past their
+// delivery deadline. This implements TLPKTDROP (Too Late Packet Drop).
+//
+// TLPKTDROP handles two cases:
+//  1. A buffered packet whose delivery time has passed → drop it
+//  2. A missing packet (gap) where later packets are already too late →
+//     skip the gap so delivery can continue
+//
+// Without TLPKTDROP, a single permanently lost packet would block delivery
+// of ALL subsequent packets. By dropping late packets, we keep the live
+// stream flowing with minimal interruption (the application sees a small
+// glitch instead of a complete stall).
+func (c *Conn) dropTooLate() {
+	now := microsecondNow()
+
+	c.receiver.mu.Lock()
+	defer c.receiver.mu.Unlock()
+
+	dropped := 0
+
+	// Check the next expected packet and its successors.
+	// Limit iterations to prevent infinite loops in edge cases.
+	for i := 0; i < 100; i++ {
+		nextSeq := c.receiver.lastDelivered.Inc()
+
+		pkt, exists := c.receiver.receiveBuffer[nextSeq]
+		if exists {
+			// Case 1: The packet IS in the buffer — check if it's too late
+			if c.tsbpd.TooLate(pkt.Timestamp, now) {
+				// Past its deadline — drop it instead of delivering stale data
+				delete(c.receiver.receiveBuffer, nextSeq)
+				delete(c.receiver.lossDetected, nextSeq)
+				c.receiver.lastDelivered = nextSeq
+				dropped++
+				continue
+			}
+			// Packet is still within its delivery window — stop checking
+			break
+		}
+
+		// Case 2: The next packet is MISSING (gap in sequence).
+		// Check if packets AFTER the gap are already too late. If so,
+		// the missing packet would also be too late even if it arrived now,
+		// so we should skip it and move on.
+		skipGap := false
+		checkSeq := nextSeq.Inc()
+		for j := 0; j < 64; j++ {
+			if laterPkt, ok := c.receiver.receiveBuffer[checkSeq]; ok {
+				// Found a buffered packet after the gap.
+				// If it's too late, the missing one is definitely too late too.
+				if c.tsbpd.TooLate(laterPkt.Timestamp, now) {
+					skipGap = true
+				}
+				break
+			}
+			checkSeq = checkSeq.Inc()
+		}
+
+		if skipGap {
+			// Skip the missing packet — it's too late to matter
+			delete(c.receiver.lossDetected, nextSeq)
+			c.receiver.lastDelivered = nextSeq
+			dropped++
+			continue
+		}
+
+		// Gap exists but subsequent packets aren't too late yet — wait
+		break
+	}
+
+	if dropped > 0 {
+		c.log.Debug("TLPKTDROP: dropped too-late packets", "count", dropped)
 	}
 }
