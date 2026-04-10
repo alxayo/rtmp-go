@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Stream</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 24px;
+    }
+    h1 { font-size: 1.4rem; letter-spacing: 0.05em; }
+    #player-wrap {
+      width: 100%;
+      max-width: 900px;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
+    video { width: 100%; display: block; aspect-ratio: 16/9; }
+    #status {
+      font-size: 0.85rem;
+      padding: 6px 12px;
+      border-radius: 4px;
+      background: #1e2a1e;
+      color: #6fcf6f;
+      min-width: 320px;
+      text-align: center;
+    }
+    #status.error { background: #2a1e1e; color: #cf6f6f; }
+    .info {
+      font-size: 0.8rem;
+      color: #888;
+      text-align: center;
+    }
+    code { color: #7dd3fc; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>&#127909; Live RTMP → HLS Stream</h1>
+
+  <div id="player-wrap">
+    <video id="video" controls autoplay muted playsinline></video>
+  </div>
+
+  <div id="status">Connecting to stream…</div>
+
+  <div class="info">
+    HLS playlist: <code id="playlist-url"></code>
+  </div>
+
+  <script>
+    const HLS_URL = `${location.protocol}//${location.hostname}:8080/hls/stream.m3u8`;
+    document.getElementById("playlist-url").textContent = HLS_URL;
+
+    const video  = document.getElementById("video");
+    const status = document.getElementById("status");
+
+    function setStatus(msg, isError) {
+      status.textContent = msg;
+      status.className = isError ? "error" : "";
+    }
+
+    function startHLS() {
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          lowLatencyMode: true,
+          liveSyncDurationCount: 3,
+          liveMaxLatencyDurationCount: 6,
+          maxBufferLength: 10,
+        });
+        hls.loadSource(HLS_URL);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setStatus("▶ Stream live — playing");
+          video.play().catch(() => setStatus("▶ Stream ready — click play"));
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            setStatus(`Reconnecting… (${data.details})`, true);
+            setTimeout(startHLS, 3000);
+          }
+        });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        // Safari native HLS
+        video.src = HLS_URL;
+        video.addEventListener("loadedmetadata", () => {
+          setStatus("▶ Stream live (native HLS)");
+          video.play().catch(() => {});
+        });
+        video.addEventListener("error", () => {
+          setStatus("Waiting for stream…", true);
+          setTimeout(startHLS, 3000);
+        });
+      } else {
+        setStatus("HLS not supported in this browser", true);
+      }
+    }
+
+    startHLS();
+  </script>
+</body>
+</html>

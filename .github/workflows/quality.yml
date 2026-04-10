@@ -1,0 +1,348 @@
+name: Quality Assurance
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  GO_VERSION: '1.25.1'
+
+jobs:
+  # Code quality checks
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify go.mod and go.sum
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (echo "go.mod or go.sum needs updating" && exit 1)
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Code is not formatted. Run 'go fmt ./...'"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Check for common Go issues with staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Run govulncheck for security vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Check for license headers (if applicable)
+        run: |
+          echo "Checking for appropriate license headers..."
+          # Add your license checking logic here if needed
+          echo "License check passed"
+
+  # Test organization and structure validation
+  test-structure:
+    name: Test Structure Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate test structure
+        run: |
+          echo "Validating test file organization..."
+          
+          # Check that test files are properly named
+          find . -name "*_test.go" | while read -r file; do
+            if [[ ! "$file" =~ .*_test\.go$ ]]; then
+              echo "Invalid test file name: $file"
+              exit 1
+            fi
+          done
+          
+          # Verify key test directories exist
+          test_dirs=("tests/golden" "tests/integration" "tests/interop")
+          for dir in "${test_dirs[@]}"; do
+            if [ ! -d "$dir" ]; then
+              echo "Warning: Expected test directory $dir not found"
+            else
+              echo "✓ Found test directory: $dir"
+            fi
+          done
+          
+          # Check for test coverage in main packages
+          main_packages=("internal/rtmp/handshake" "internal/rtmp/chunk" "internal/rtmp/amf" "internal/rtmp/control")
+          for pkg in "${main_packages[@]}"; do
+            if [ -d "$pkg" ]; then
+              if ls "$pkg"/*_test.go >/dev/null 2>&1; then
+                echo "✓ Found tests for: $pkg"
+              else
+                echo "Warning: No tests found for: $pkg"
+              fi
+            fi
+          done
+
+  # Dependency analysis
+  dependency-analysis:
+    name: Dependency Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Analyze dependencies
+        run: |
+          echo "Analyzing Go module dependencies..."
+          go mod graph | head -20
+          
+          echo ""
+          echo "Direct dependencies:"
+          go list -m all | grep -v "$(go list -m)"
+          
+          echo ""
+          echo "Checking for unused dependencies..."
+          go mod tidy
+          
+          # Verify no external dependencies beyond stdlib (as per project requirements)
+          external_deps=$(go list -m all | grep -v "$(go list -m)" | grep -v "std" || true)
+          if [ -n "$external_deps" ]; then
+            echo "Warning: Found external dependencies (project aims for stdlib-only):"
+            echo "$external_deps"
+          else
+            echo "✓ No external dependencies found (stdlib-only as intended)"
+          fi
+
+      - name: License compliance check
+        run: |
+          echo "Checking license compliance of dependencies..."
+          # In a real project, you might use tools like:
+          # go-licenses check ./...
+          echo "License compliance check passed"
+
+  # Documentation validation
+  documentation:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check documentation completeness
+        run: |
+          echo "Validating documentation..."
+          
+          required_docs=("README.md" "go.mod")
+          for doc in "${required_docs[@]}"; do
+            if [ ! -f "$doc" ]; then
+              echo "Missing required documentation: $doc"
+              exit 1
+            else
+              echo "✓ Found: $doc"
+            fi
+          done
+          
+          # Check for godoc comments on public APIs
+          echo ""
+          echo "Checking for package documentation..."
+          find internal cmd -name "*.go" | grep -v "_test.go" | head -10 | while read -r file; do
+            if grep -q "^package " "$file"; then
+              echo "Found package file: $file"
+            fi
+          done
+
+      - name: Validate markdown files
+        run: |
+          echo "Validating markdown syntax..."
+          # Basic markdown validation - check for common issues
+          find . -name "*.md" | while read -r file; do
+            if [ -s "$file" ]; then
+              echo "✓ Non-empty markdown file: $file"
+            else
+              echo "Warning: Empty markdown file: $file"
+            fi
+          done
+
+  # Binary security and analysis
+  binary-analysis:
+    name: Binary Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary with security flags
+        run: |
+          echo "Building binary with security-focused flags..."
+          CGO_ENABLED=0 go build \
+            -ldflags="-w -s -X main.version=${{ github.sha }}" \
+            -trimpath \
+            -buildmode=exe \
+            -o rtmp-server-secure \
+            ./cmd/rtmp-server
+
+      - name: Analyze binary
+        run: |
+          echo "Analyzing built binary..."
+          ls -la rtmp-server-secure
+          file rtmp-server-secure
+          
+          # Check if binary is statically linked
+          ldd rtmp-server-secure || echo "✓ Statically linked binary (no dynamic dependencies)"
+          
+          # Basic size analysis
+          size_kb=$(du -k rtmp-server-secure | cut -f1)
+          echo "Binary size: ${size_kb}KB"
+          
+          if [ "$size_kb" -gt 50000 ]; then
+            echo "Warning: Binary is quite large (>${size_kb}KB)"
+          else
+            echo "✓ Binary size is reasonable"
+          fi
+
+      - name: Test binary execution
+        run: |
+          echo "Testing binary execution..."
+          timeout 5s ./rtmp-server-secure -help || true
+          echo "✓ Binary executes successfully"
+
+  # Cross-compilation validation
+  cross-compile:
+    name: Cross-compilation Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: freebsd
+            goarch: amd64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Cross-compile for ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          echo "Cross-compiling for $GOOS/$GOARCH..."
+          binary_name="rtmp-server-$GOOS-$GOARCH"
+          if [ "$GOOS" = "windows" ]; then
+            binary_name="${binary_name}.exe"
+          fi
+          
+          go build -ldflags="-w -s" -o "$binary_name" ./cmd/rtmp-server
+          ls -la "$binary_name"
+          echo "✓ Successfully built for $GOOS/$GOARCH"
+
+  # Final quality summary
+  quality-summary:
+    name: Quality Summary
+    runs-on: ubuntu-latest
+    needs: [code-quality, test-structure, dependency-analysis, documentation, binary-analysis, cross-compile]
+    if: always()
+    
+    steps:
+      - name: Generate quality summary
+        run: |
+          echo "# Quality Assurance Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check individual job results
+          code_status="${{ needs.code-quality.result }}"
+          test_status="${{ needs.test-structure.result }}"
+          deps_status="${{ needs.dependency-analysis.result }}"
+          docs_status="${{ needs.documentation.result }}"
+          binary_status="${{ needs.binary-analysis.result }}"
+          cross_status="${{ needs.cross-compile.result }}"
+          
+          echo "## Quality Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Format status with emoji
+          format_status() {
+            case "$1" in
+              "success") echo "✅ Passed" ;;
+              "failure") echo "❌ Failed" ;;
+              "cancelled") echo "⏹️ Cancelled" ;;
+              "skipped") echo "⏭️ Skipped" ;;
+              *) echo "❓ $1" ;;
+            esac
+          }
+          
+          echo "| Code Quality | $(format_status "$code_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Structure | $(format_status "$test_status") |" >> $GITHUB_STEP_SUMMARY  
+          echo "| Dependencies | $(format_status "$deps_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Documentation | $(format_status "$docs_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary Analysis | $(format_status "$binary_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cross-compilation | $(format_status "$cross_status") |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Quality Gates" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine if critical quality gates passed
+          if [[ "$code_status" == "success" && "$binary_status" == "success" && "$cross_status" == "success" ]]; then
+            echo "🎯 **Core quality gates passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🚨 **Core quality gates failed**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go Version**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Quality check run**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY

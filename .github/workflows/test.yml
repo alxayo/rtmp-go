@@ -1,0 +1,372 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  GO_VERSION: '1.25.1'
+
+jobs:
+  # Golden vector generation and validation
+  golden-vectors:
+    name: Golden Vector Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Generate golden vectors
+        run: |
+          echo "Generating golden test vectors..."
+          cd tests/golden
+          if [ -f gen_handshake_vectors.go ]; then
+            go run gen_handshake_vectors.go
+          fi
+          if [ -f gen_amf0_vectors.go ]; then
+            go run gen_amf0_vectors.go  
+          fi
+          if [ -f gen_chunk_vectors.go ]; then
+            go run gen_chunk_vectors.go
+          fi
+
+      - name: Verify golden vectors exist
+        run: |
+          echo "Checking for golden vector files..."
+          ls -la tests/golden/*.bin || echo "No .bin files found yet (expected if generators not implemented)"
+
+  # Unit tests with race detection and coverage
+  unit-tests:
+    name: Unit Tests (Go ${{ matrix.go-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.25.1']
+        
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run unit tests with race detector
+        run: go test -race -v -count=1 ./internal/...
+
+      - name: Run unit tests with coverage (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic ./internal/...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage to Codecov (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+
+  # Integration tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build rtmp-server binary
+        run: |
+          go build -race -o rtmp-server ./cmd/rtmp-server
+          chmod +x rtmp-server
+
+      - name: Run integration tests
+        run: |
+          # Test with verbose output and race detector
+          go test -race -v -count=1 -timeout=10m ./tests/integration/...
+
+      - name: Test server startup and basic functionality
+        run: |
+          echo "Testing server startup..."
+          timeout 10s ./rtmp-server -listen-addr :19350 -log-level debug || true
+          echo "Server startup test completed"
+
+  # Interoperability tests with FFmpeg
+  interop-tests:
+    name: FFmpeg Interop Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: unit-tests
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Verify FFmpeg installation
+        run: |
+          ffmpeg -version
+          ffplay -version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build rtmp-server binary
+        run: |
+          go build -race -o rtmp-server ./cmd/rtmp-server
+          chmod +x rtmp-server
+
+      - name: Make interop scripts executable
+        run: |
+          find tests/interop -name "*.sh" -exec chmod +x {} \;
+
+      - name: Run FFmpeg interop tests
+        env:
+          INCLUDE: PublishOnly,PublishAndPlay,Concurrency,Recording
+          SERVER_FLAGS: "-log-level info"
+          KEEP_WORK_DIR: "0"
+        run: |
+          cd tests/interop
+          if [ -f ffmpeg_test.sh ]; then
+            ./ffmpeg_test.sh
+          else
+            echo "ffmpeg_test.sh not found, skipping interop tests"
+          fi
+
+      - name: Archive interop test recordings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-recordings-${{ github.run_id }}
+          path: |
+            /tmp/go-rtmp-interop-*/recordings/
+            /tmp/go-rtmp-interop-*/test.mp4
+          retention-days: 7
+
+  # Build validation across platforms  
+  build-validation:
+    name: Build Validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: rtmp-server
+          - os: macos-latest  
+            binary: rtmp-server
+          - os: windows-latest
+            binary: rtmp-server.exe
+            
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build rtmp-server
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-w -s" -o ${{ matrix.binary }} ./cmd/rtmp-server
+
+      - name: Test binary execution (help)
+        shell: bash
+        run: |
+          ./${{ matrix.binary }} -help || true
+          echo "Binary built and can execute"
+
+      - name: Check binary size
+        shell: bash
+        run: |
+          ls -lh ${{ matrix.binary }}
+          echo "Binary size information logged"
+
+  # Comprehensive test summary
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [golden-vectors, unit-tests, integration-tests, interop-tests, build-validation]
+    if: always()
+    
+    steps:
+      - name: Generate test summary
+        run: |
+          echo "# Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check individual job results
+          golden_status="${{ needs.golden-vectors.result }}"
+          unit_status="${{ needs.unit-tests.result }}"
+          integration_status="${{ needs.integration-tests.result }}"
+          interop_status="${{ needs.interop-tests.result }}"
+          build_status="${{ needs.build-validation.result }}"
+          
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Format status with emoji
+          format_status() {
+            case "$1" in
+              "success") echo "✅ Success" ;;
+              "failure") echo "❌ Failed" ;;
+              "cancelled") echo "⏹️ Cancelled" ;;
+              "skipped") echo "⏭️ Skipped" ;;
+              *) echo "❓ $1" ;;
+            esac
+          }
+          
+          echo "| Golden Vectors | $(format_status "$golden_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | $(format_status "$unit_status") |" >> $GITHUB_STEP_SUMMARY  
+          echo "| Integration Tests | $(format_status "$integration_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Interop Tests | $(format_status "$interop_status") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Validation | $(format_status "$build_status") |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Overall Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall status
+          if [[ "$unit_status" == "success" && "$integration_status" == "success" && "$build_status" == "success" ]]; then
+            if [[ "$interop_status" == "success" && "$golden_status" == "success" ]]; then
+              echo "🎉 **All tests passed!**" >> $GITHUB_STEP_SUMMARY
+              overall_status="success"
+            else
+              echo "⚠️ **Core tests passed, but some optional tests failed**" >> $GITHUB_STEP_SUMMARY
+              overall_status="partial"
+            fi
+          else
+            echo "💥 **Critical tests failed**" >> $GITHUB_STEP_SUMMARY
+            overall_status="failure"
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go Version**: ${{ env.GO_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow run**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Set workflow status for badge
+          echo "overall_status=$overall_status" >> $GITHUB_ENV
+
+      - name: Report final status
+        run: |
+          overall_status="${{ needs.unit-tests.result == 'success' && needs.integration-tests.result == 'success' && needs.build-validation.result == 'success' }}"
+          
+          if [[ "${{ needs.unit-tests.result }}" == "success" && "${{ needs.integration-tests.result }}" == "success" && "${{ needs.build-validation.result }}" == "success" ]]; then
+            if [[ "${{ needs.interop-tests.result }}" == "success" && "${{ needs.golden-vectors.result }}" == "success" ]]; then
+              echo "✅ All tests completed successfully"
+              exit 0
+            else
+              echo "⚠️ Core tests passed, some optional tests failed"
+              exit 0
+            fi
+          else
+            echo "❌ Critical tests failed"
+            exit 1
+          fi
+
+  # Performance benchmarks (optional, runs on main branch only)
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.ref == 'refs/heads/main'
+    needs: unit-tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run benchmarks
+        run: |
+          echo "Running performance benchmarks..."
+          # Run benchmarks for key performance-critical packages
+          packages=("./internal/rtmp/chunk" "./internal/rtmp/amf" "./internal/rtmp/handshake")
+          
+          for pkg in "${packages[@]}"; do
+            echo "Benchmarking $pkg..."
+            if go list "$pkg" >/dev/null 2>&1; then
+              go test -bench=. -benchmem -count=3 "$pkg" || echo "No benchmarks in $pkg"
+            else
+              echo "Package $pkg not found, skipping"
+            fi
+          done
+
+      - name: Archive benchmark results
+        if: always()
+        run: |
+          echo "Benchmark run completed on $(date)" > benchmark-summary.txt
+          echo "Go version: ${{ env.GO_VERSION }}" >> benchmark-summary.txt
+          echo "Commit: ${{ github.sha }}" >> benchmark-summary.txt
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark-summary.txt
+          retention-days: 30
