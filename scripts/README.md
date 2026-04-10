@@ -137,6 +137,32 @@ Comprehensive automated test suite with 7 test cases covering RTMP, RTMPS, HLS, 
 Each test uses unique ports (19351–19367) to avoid conflicts and cleans up all
 processes on exit.
 
+### `test-enhanced-rtmp` — Enhanced RTMP (H.265) Test
+Validates that the server correctly receives and records an H.265/HEVC stream sent
+via Enhanced RTMP (E-RTMP v2). Requires FFmpeg 6.1+ with libx265.
+
+```bash
+# Linux/macOS
+./scripts/test-enhanced-rtmp.sh           # Automated test
+./scripts/test-enhanced-rtmp.sh --play    # Test + play recorded file
+
+# Windows
+.\scripts\test-enhanced-rtmp.ps1           # Automated test
+.\scripts\test-enhanced-rtmp.ps1 -Play     # Test + play recorded file
+```
+
+**Verification checks:**
+
+| Check | Description |
+|-------|-------------|
+| File exists | Recorded FLV is present and non-empty |
+| Video codec | HEVC (H.265) detected by ffprobe |
+| Audio codec | AAC detected by ffprobe |
+| Duration | Within ±2s of 5s source |
+| Decode test | All frames decodable without errors |
+
+Uses port 19370 to avoid conflicts with other tests.
+
 ### `run-all-tests` — Full Test Runner
 Convenience wrapper that runs the complete E2E test suite and reports results.
 
@@ -162,6 +188,7 @@ scripts/
 ├── on-publish-hls.sh/.ps1
 ├── start-server.sh/.ps1
 ├── test-e2e.sh/.ps1
+├── test-enhanced-rtmp.sh/.ps1
 └── run-all-tests.sh/.ps1
 ```
 
