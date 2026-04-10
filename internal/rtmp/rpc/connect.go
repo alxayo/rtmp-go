@@ -24,6 +24,7 @@ type ConnectCommand struct {
 	FlashVer       string
 	TcURL          string
 	ObjectEncoding float64                // must be 0 (AMF0)
+	FourCcList     []string               // Enhanced RTMP: codec FourCCs the client supports (e.g. ["hvc1","av01"])
 	Extra          map[string]interface{} // all other connect object fields (auth tokens, etc.)
 }
 
@@ -89,12 +90,24 @@ func ParseConnectCommand(msg *chunk.Message) (*ConnectCommand, error) {
 		}
 	}
 
+	// Extract fourCcList if present (Enhanced RTMP capability signaling).
+	// Clients like FFmpeg/OBS send this as an AMF Strict Array of FourCC strings.
+	if v, ok := obj["fourCcList"]; ok {
+		if arr, ok := v.([]interface{}); ok {
+			for _, item := range arr {
+				if s, ok := item.(string); ok && len(s) == 4 {
+					cc.FourCcList = append(cc.FourCcList, s)
+				}
+			}
+		}
+	}
+
 	// Capture any extra fields from the connect object (useful for auth tokens,
 	// custom parameters, etc.) that we don't explicitly parse above.
 	var extra map[string]interface{}
 	for k, v := range obj {
 		switch k {
-		case "app", "flashVer", "tcUrl", "objectEncoding":
+		case "app", "flashVer", "tcUrl", "objectEncoding", "fourCcList":
 			continue // already extracted
 		default:
 			if extra == nil {

@@ -39,6 +39,8 @@ type commandState struct {
 	mediaLogger   *MediaLogger           // tracks audio/video packet statistics
 	codecDetector *media.CodecDetector   // identifies audio/video codecs on first packets
 	role          string                 // "publisher" or "subscriber" — set by OnPublish/OnPlay handlers
+	enhancedRTMP  bool                   // true if client advertised fourCcList in connect
+	fourCcList    []string               // Enhanced RTMP FourCC codecs supported by client
 }
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
@@ -119,7 +121,15 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		log.Debug("OnConnect handler invoked", "app", cc.App, "tcUrl", cc.TcURL, "txn_id", cc.TransactionID)
 		st.app = cc.App
 		st.connectParams = cc.Extra // preserve extra connect fields for auth context
-		resp, err := rpc.BuildConnectResponse(cc.TransactionID, "Connection succeeded.")
+
+		// Track Enhanced RTMP capabilities from client's fourCcList.
+		if len(cc.FourCcList) > 0 {
+			st.enhancedRTMP = true
+			st.fourCcList = cc.FourCcList
+			log.Info("Enhanced RTMP client detected", "fourCcList", cc.FourCcList)
+		}
+
+		resp, err := rpc.BuildConnectResponse(cc.TransactionID, "Connection succeeded.", cc.FourCcList)
 		if err != nil {
 			log.Error("connect response build failed", "error", err)
 			return nil

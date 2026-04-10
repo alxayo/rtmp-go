@@ -235,11 +235,10 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		detector.Process(msg.TypeID, msg.Payload, s, logger)
 	}
 
-	// Cache sequence headers for late-joining subscribers
-	// Video: type_id=9, avc_packet_type=0 (byte offset 1)
-	// Audio: type_id=8, aac_packet_type=0 (high nibble of byte 0 == 0xAF for AAC)
-	if msg.TypeID == 9 && len(msg.Payload) >= 2 && msg.Payload[1] == 0 {
-		// Video sequence header (AVC sequence header with SPS/PPS)
+	// Cache sequence headers for late-joining subscribers.
+	// Uses media.IsVideoSequenceHeader / media.IsAudioSequenceHeader helpers
+	// which support both legacy (AVC/AAC) and Enhanced RTMP (FourCC) formats.
+	if msg.TypeID == 9 && media.IsVideoSequenceHeader(msg.Payload) {
 		s.mu.Lock()
 		s.VideoSequenceHeader = &chunk.Message{
 			CSID:            msg.CSID,
@@ -252,8 +251,7 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		copy(s.VideoSequenceHeader.Payload, msg.Payload)
 		s.mu.Unlock()
 		logger.Info("Cached video sequence header", "stream_key", s.Key, "size", len(msg.Payload))
-	} else if msg.TypeID == 8 && len(msg.Payload) >= 2 && (msg.Payload[0]>>4) == 0x0A && msg.Payload[1] == 0 {
-		// Audio sequence header (AAC sequence header with AudioSpecificConfig)
+	} else if msg.TypeID == 8 && media.IsAudioSequenceHeader(msg.Payload) {
 		s.mu.Lock()
 		s.AudioSequenceHeader = &chunk.Message{
 			CSID:            msg.CSID,
@@ -269,19 +267,32 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 	}
 
 	// DIAGNOSTIC: Log video packet structure to verify FLV format integrity
-	if msg.TypeID == 9 && len(msg.Payload) >= 5 {
-		frameType := (msg.Payload[0] >> 4) & 0x0F
-		codecID := msg.Payload[0] & 0x0F
-		avcPacketType := msg.Payload[1]
+	if msg.TypeID == 9 && len(msg.Payload) >= 1 {
+		b0 := msg.Payload[0]
+		isEnhanced := (b0 >> 7) & 1
 
-		logger.Debug("Video packet structure before relay",
-			"frame_type", frameType,
-			"codec_id", codecID,
-			"avc_packet_type", avcPacketType,
-			"payload_len", len(msg.Payload))
+		if isEnhanced == 1 {
+			frameType := (b0 >> 4) & 0x07
+			pktType := b0 & 0x0F
+			fourCC := ""
+			if len(msg.Payload) >= 5 {
+				fourCC = string(msg.Payload[1:5])
+			}
+			logger.Debug("Enhanced video packet",
+				"frame_type", frameType,
+				"packet_type", pktType,
+				"fourcc", fourCC,
+				"payload_len", len(msg.Payload))
+		} else if len(msg.Payload) >= 5 {
+			frameType := (b0 >> 4) & 0x0F
+			codecID := b0 & 0x0F
+			avcPacketType := msg.Payload[1]
 
-		if codecID != 7 {
-			logger.Warn("Invalid AVC codec ID in video packet", "codec_id", codecID, "expected", 7)
+			logger.Debug("Legacy video packet",
+				"frame_type", frameType,
+				"codec_id", codecID,
+				"avc_packet_type", avcPacketType,
+				"payload_len", len(msg.Payload))
 		}
 	}
 

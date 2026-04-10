@@ -25,10 +25,13 @@ import (
 //	code:        "NetConnection.Connect.Success"
 //	description: caller provided description
 //
+// When fourCcList is non-nil/non-empty, the info object includes the fourCcList
+// to signal Enhanced RTMP support back to the client.
+//
 // The returned message uses MessageStreamID=0 (connection level). CSID is left
 // as zero here; actual assignment (typically 3 for command) is handled by the
 // chunk writer layer when serialising for the wire.
-func BuildConnectResponse(transactionID float64, description string) (*chunk.Message, error) {
+func BuildConnectResponse(transactionID float64, description string, fourCcList ...[]string) (*chunk.Message, error) {
 	props := map[string]interface{}{
 		"fmsVer":       "FMS/3,0,1,123",
 		"capabilities": 31.0,
@@ -40,6 +43,15 @@ func BuildConnectResponse(transactionID float64, description string) (*chunk.Mes
 		"code":        "NetConnection.Connect.Success",
 		"description": description,
 		"data":        map[string]interface{}{"version": "3,0,1,123"},
+	}
+
+	// Echo fourCcList to signal Enhanced RTMP support.
+	if len(fourCcList) > 0 && len(fourCcList[0]) > 0 {
+		arr := make([]interface{}, len(fourCcList[0]))
+		for i, s := range fourCcList[0] {
+			arr[i] = s
+		}
+		info["fourCcList"] = arr
 	}
 
 	payload, err := amf.EncodeAll("_result", transactionID, props, info)
