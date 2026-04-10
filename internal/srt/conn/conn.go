@@ -133,6 +133,13 @@ type Conn struct {
 	// receiver manages incoming packets: reordering, delivery, loss detection.
 	receiver *Receiver
 
+	// ackState tracks ACK generation timing and ACKACK-based RTT measurement.
+	ackState *ACKState
+
+	// tsbpd manages timestamp-based packet delivery scheduling.
+	// It determines when buffered packets should be delivered to the application.
+	tsbpd *TSBPDManager
+
 	// --- Configuration ---
 
 	// config holds the negotiated connection parameters from the handshake.
@@ -175,6 +182,12 @@ func New(localSID, peerSID uint32, peerAddr *net.UDPAddr, udpConn *net.UDPConn, 
 	// Create send and receive subsystems with the negotiated initial sequence number
 	c.sender = NewSender(circular.New(cfg.InitialSeqNum), cfg, log)
 	c.receiver = NewReceiver(circular.New(cfg.InitialSeqNum), cfg, log)
+
+	// Create ACK state for tracking acknowledgement timing and RTT measurement
+	c.ackState = NewACKState()
+
+	// Create TSBPD manager for timestamp-based packet delivery
+	c.tsbpd = NewTSBPDManager(cfg.TSBPDDelay)
 
 	// Set up a cancel function that transitions state when called
 	c.cancel = func() {
@@ -337,6 +350,9 @@ func (c *Conn) handleDataPacket(data []byte) {
 
 	// Hand it off to the receiver for buffering and delivery
 	c.receiver.OnData(pkt)
+
+	// Track the received packet for ACK interval calculation
+	c.ackState.OnDataReceived()
 }
 
 // handleControlPacket parses a raw control packet and dispatches it
@@ -357,11 +373,11 @@ func (c *Conn) handleControlPacket(data []byte) {
 
 	case packet.CtrlNAK:
 		// NAK: the peer is reporting lost packets that need retransmission
-		c.handleNAK(ctrl)
+		c.HandleIncomingNAK(ctrl)
 
 	case packet.CtrlACKACK:
 		// ACKACK: response to our ACK — used for RTT measurement
-		c.handleACKACK(ctrl)
+		c.HandleACKACK(ctrl.TypeSpecific)
 
 	case packet.CtrlShutdown:
 		// Shutdown: the peer wants to close the connection
@@ -428,15 +444,6 @@ func (c *Conn) handleNAK(ctrl *packet.ControlPacket) {
 
 	// Tell the sender to queue these packets for retransmission
 	c.sender.OnNAK(ranges)
-}
-
-// handleACKACK processes an ACKACK control packet. This is the response
-// to an ACK we sent earlier. By comparing timestamps, we can measure RTT.
-func (c *Conn) handleACKACK(ctrl *packet.ControlPacket) {
-	// The RTT sample is the time between when we sent the ACK and now.
-	// In a full implementation, we'd track ACK send timestamps and
-	// compute the difference. For now, we use the RTT from the peer's ACK.
-	c.log.Debug("received ACKACK", "ack_seq", ctrl.TypeSpecific)
 }
 
 // sendPacket sends raw bytes to the peer via the shared UDP socket.
