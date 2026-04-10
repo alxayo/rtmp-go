@@ -144,6 +144,19 @@ func (s *Server) Start() error {
 	if s == nil {
 		return errors.New("nil server")
 	}
+
+	s.log.Debug("starting server",
+		"listen_addr", s.cfg.ListenAddr,
+		"chunk_size", s.cfg.ChunkSize,
+		"window_ack_size", s.cfg.WindowAckSize,
+		"record_all", s.cfg.RecordAll,
+		"record_dir", s.cfg.RecordDir,
+		"log_level", s.cfg.LogLevel,
+		"srt_listen", s.cfg.SRTListenAddr,
+		"srt_latency_ms", s.cfg.SRTLatency,
+		"tls_listen", s.cfg.TLSListenAddr,
+	)
+
 	s.mu.Lock()
 	if s.l != nil {
 		s.mu.Unlock()

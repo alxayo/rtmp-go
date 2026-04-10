@@ -34,6 +34,7 @@ func main() {
 		fmt.Printf("Warning: invalid log level %q, using default\n", cfg.logLevel)
 	}
 	log := logger.Logger().With("component", "cli")
+	log.Debug("logger initialized", "level", cfg.logLevel)
 
 	// Build authentication validator from CLI flags
 	authValidator, err := buildAuthValidator(cfg, log)
@@ -70,7 +71,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode)
+	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode, "log_level", cfg.logLevel)
 	if server.TLSAddr() != nil {
 		log.Info("RTMPS enabled", "tls_addr", server.TLSAddr().String())
 	}
