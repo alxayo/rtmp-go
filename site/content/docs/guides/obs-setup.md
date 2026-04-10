@@ -32,7 +32,7 @@ Open OBS → **Settings** → **Output** → **Streaming** tab:
 
 | Setting | Recommended Value |
 |---------|-------------------|
-| Encoder | **x264** (H.264) or hardware (NVENC, QuickSync) |
+| Encoder | **x264** (H.264), **x265** (H.265/HEVC), or hardware encoders (NVENC, QuickSync, AMF) |
 | Rate Control | CBR |
 | Bitrate | 2500 Kbps (adjust for your upload speed) |
 | Keyframe Interval | **2 seconds** (critical for late-join performance) |
@@ -108,7 +108,7 @@ The full OBS stream settings become:
 **Symptom**: ffplay connects but shows a black screen.
 
 **Fix**:
-1. Ensure OBS is using **H.264** (not H.265/HEVC or AV1)
+1. OBS can use **H.264**, **H.265/HEVC**, or **AV1** encoders. go-rtmp supports all of them via Enhanced RTMP.
 2. Restart the stream in OBS
 3. Wait 2–3 seconds before starting the subscriber
 

@@ -17,6 +17,7 @@ weight: 2
 - ✅ **Performance optimizations** — AMF0 decode, chunk writer, RPC lazy-init *(v0.1.2)*
 - ✅ **RTMPS (TLS)** — encrypted RTMP connections via TLS termination *(v0.1.3)*
 - ✅ **E2E testing scripts** — cross-platform Bash + PowerShell test suite for RTMP/RTMPS/HLS/auth *(v0.1.3)*
+- ✅ **Enhanced RTMP (E-RTMP v2)** — H.265, AV1, VP9 codec support via FourCC signaling *(v0.1.4)*
 
 ## In Progress
 
@@ -27,7 +28,7 @@ weight: 2
 - 📋 **Configurable backpressure** — tunable queue sizes, drop policies, and subscriber eviction strategies
 - 📋 **Clustering & HA** — multi-node stream distribution with failover
 - 📋 **DVR / Time-shift** — seek-back into recorded streams for live rewind
-- 📋 **Transcoding** — on-the-fly quality adaptation (ABR) for multi-bitrate delivery
+- 📋 **Transcoding** — on-the-fly quality adaptation (ABR) for multi-bitrate delivery *(note: H.265/HEVC is now natively supported for passthrough via E-RTMP v2)*
 
 ## How to Contribute
 

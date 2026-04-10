@@ -117,6 +117,15 @@ This verifies that sequence header caching works:
 
 If the subscriber sees a black screen for more than a few seconds, sequence header caching may be broken.
 
+### Enhanced RTMP (H.265) Test
+
+```bash
+# Requires FFmpeg 6.1+ with libx265
+./scripts/test-enhanced-rtmp.sh
+```
+
+This verifies H.265/HEVC publishing via Enhanced RTMP, recording, and codec detection.
+
 ### Relay Test
 
 Test multi-destination relay between two servers:
@@ -190,7 +199,7 @@ For full documentation on the scripts, see the [E2E Testing Guide]({{< relref "/
 | Server | `server/*_test.go` | Registry, pub/sub fan-out, disconnect cleanup |
 | Auth | `server/auth/*_test.go` | Token validation, file-based auth, callback auth |
 | Hooks | `server/hooks/*_test.go` | Webhook delivery, shell execution, stdio format |
-| Media | `media/*_test.go` | Audio/video parsing, codec detection, FLV writing |
+| Media | `media/*_test.go` | Audio/video parsing, codec detection (incl. Enhanced RTMP), FLV writing |
 | Relay | `relay/*_test.go` | Destination management, reconnection, late-join |
 | Integration | `tests/integration/*_test.go` | End-to-end publish/subscribe through full stack |
 | E2E Scripts | `scripts/test-e2e.*` | Full pipeline: publish, capture, HLS hooks, auth, TLS |

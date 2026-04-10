@@ -58,13 +58,13 @@ The most common issue. The subscriber connected but doesn't see video.
 
 **Causes:**
 1. **Missing sequence headers** — the subscriber joined before the publisher sent SPS/PPS and AAC config. The server caches these, but if the publisher hasn't sent them yet, there's nothing to cache.
-2. **Codec mismatch** — the publisher is using H.265 (HEVC) but the player only supports H.264.
+2. **Codec mismatch** — the player doesn't support the publisher's codec. H.265 requires a player with HEVC support (ffplay, VLC 3.0+).
 
 **Fix:**
 1. Restart the publisher (this forces new sequence headers)
 2. Wait 2–3 seconds for the publisher to send keyframes
 3. Then start the subscriber
-4. Verify the publisher is using H.264, not H.265
+4. Verify the player supports the publisher's codec (H.264, H.265, AV1, or VP9)
 
 ### "mmco: unref short failure" Warning
 

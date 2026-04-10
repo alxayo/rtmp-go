@@ -108,7 +108,7 @@ When the timestamp or timestamp delta value is **≥ 0xFFFFFF** (16777215), the 
 | **5** | Window Ack Size | 2 | 0 | How many bytes before the peer must send an ACK |
 | **6** | Set Peer Bandwidth | 2 | 0 | Output bandwidth limit + limit type |
 | **8** | Audio | 3+ | 1+ | Audio data (AAC, MP3, etc.) |
-| **9** | Video | 3+ | 1+ | Video data (H.264, H.265, etc.) |
+| **9** | Video | 3+ | 1+ | Video data (H.264; Enhanced RTMP: H.265, AV1, VP9) |
 | **20** | Command (AMF0) | 3+ | 0/1+ | RPC commands encoded in AMF0 |
 
 Control messages (TypeID 1-6) always use **CSID 2** and **MSID 0**.
@@ -211,6 +211,8 @@ For AAC (SoundFormat=10), the second byte indicates the packet type:
 - **0x00** = AAC sequence header (AudioSpecificConfig) — must be sent first, cached for late-join
 - **0x01** = AAC raw data frame
 
+> **Note**: SoundFormat 9 signals an Enhanced RTMP audio header (E-RTMP v2), followed by a 4-byte FourCC identifying the codec (e.g., Opus, FLAC, AC-3, E-AC-3).
+
 ---
 
 ## Video Format
@@ -236,6 +238,30 @@ For H.264 (CodecID=7), the second byte indicates the packet type:
 - **0x00** = AVC sequence header (SPS/PPS) — must be sent first, cached for late-join
 - **0x01** = AVC NALU (actual video data)
 - **0x02** = AVC end of sequence
+
+### Enhanced RTMP (E-RTMP v2)
+
+When bit 7 (IsExHeader) of the first video byte is set, the format changes:
+
+```
+Bits 6-4: FrameType (1=keyframe, 2=inter)
+Bits 3-0: VideoPacketType
+  0 = SequenceStart (decoder config)
+  1 = CodedFrames (with composition time)
+  3 = CodedFramesX (no composition time)
+  5 = MPEG2TSSequenceStart
+```
+
+Followed by a 4-byte FourCC identifying the codec:
+
+| FourCC | Codec |
+|--------|-------|
+| `hvc1` | H.265/HEVC |
+| `av01` | AV1 |
+| `vp09` | VP9 |
+| `avc1` | H.264/AVC (enhanced mode) |
+
+This format is used by FFmpeg 6.1+, OBS 29.1+, and SRS 6.0+ for modern codecs.
 
 ---
 

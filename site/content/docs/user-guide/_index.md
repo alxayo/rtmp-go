@@ -10,7 +10,7 @@ The go-rtmp server is designed around a simple philosophy: **zero configuration 
 
 **Recording** lets you capture every published stream to FLV files on disk. Enable it with `-record-all true` and point it at a directory with `-record-dir`. Files are named with the stream key and timestamp, and can be converted to MP4 with a single FFmpeg command. Recording runs alongside live relay — subscribers see the stream in real-time while the server simultaneously writes to disk.
 
-**Live Relay** is the core of go-rtmp. When a publisher sends a stream to a key like `live/test`, any number of subscribers can play that same key and receive the media in real-time. The server caches H.264 and AAC sequence headers so that subscribers who join mid-stream get instant decoder initialization — no waiting for the next keyframe.
+**Live Relay** is the core of go-rtmp. When a publisher sends a stream to a key like `live/test`, any number of subscribers can play that same key and receive the media in real-time. The server caches sequence headers for all supported codecs (H.264, H.265/HEVC, AV1, VP9, AAC) so that subscribers who join mid-stream get instant decoder initialization — no waiting for the next keyframe.
 
 **Multi-Destination Relay** extends the server's reach by forwarding published streams to external RTMP servers. Use the `-relay-to` flag (repeatable) to simulcast to YouTube, Twitch, a CDN origin, or a backup recording server. Media messages are forwarded exactly as received — no transcoding, no quality loss.
 

@@ -28,9 +28,10 @@ go-rtmp is a lightweight, high-performance RTMP server built entirely on Go's st
 |---------|-------------|
 | **Zero Dependencies** | Built entirely on Go's standard library — no vendor lock-in |
 | **RTMP v3 Protocol** | Full handshake, chunk streaming, AMF0 commands |
+| **Enhanced RTMP** | H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling |
 | **Live Relay** | Transparent pub/sub forwarding to unlimited subscribers |
 | **FLV Recording** | Automatic recording with timestamped filenames |
-| **Late-Join Support** | H.264 SPS/PPS + AAC config caching for instant playback |
+| **Late-Join Support** | H.264/H.265/AV1/VP9 + AAC config caching for instant playback |
 | **Multi-Destination Relay** | Forward to external RTMP servers (`-relay-to`) |
 | **Authentication** | Static tokens, JSON file, or webhook callback |
 | **Event Hooks** | Webhooks, shell scripts, stdio for all lifecycle events |

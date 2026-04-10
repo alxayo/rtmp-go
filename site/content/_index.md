@@ -53,7 +53,8 @@ OBS / FFmpeg (Publisher)
 |---|---------|-------------|
 | 📡 | **Live Streaming** | Accept streams from OBS, FFmpeg, or any RTMP client |
 | 👥 | **Multi-Subscriber** | Unlimited concurrent viewers with independent connections |
-| 💾 | **FLV Recording** | Automatic recording with H.264 + AAC |
+| 🎬 | **Enhanced RTMP** | H.265, AV1, VP9 via E-RTMP v2 — works with FFmpeg 6.1+ and OBS 29.1+ |
+| 💾 | **FLV Recording** | Automatic recording of all codecs to FLV |
 | ⏩ | **Late-Join** | Sequence header caching — subscribers see video instantly |
 | 🔄 | **Multi-Relay** | Forward to YouTube, Twitch, or any RTMP server |
 | 🔐 | **Authentication** | Token-based auth with 4 pluggable backends |

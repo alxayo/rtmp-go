@@ -15,7 +15,8 @@ This guide demonstrates the complete RTMP server functionality:
 ### Key Features
 
 ✅ **Simultaneous Recording & Relay** - Record to file while streaming to live viewers  
-✅ **Late-Join Support** - Subscribers joining mid-stream receive H.264 SPS/PPS and AAC config  
+✅ **Late-Join Support** - Subscribers joining mid-stream receive H.264/H.265 SPS/PPS and AAC config  
+✅ **Enhanced RTMP** - H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling  
 ✅ **Multiple Subscribers** - Support unlimited concurrent viewers  
 ✅ **Thread-Safe** - Independent payload copies prevent corruption between connections
 

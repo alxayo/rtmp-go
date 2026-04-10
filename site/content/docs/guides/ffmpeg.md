@@ -35,6 +35,17 @@ ffmpeg -re \
 
 This creates a color bar pattern with a 440Hz tone — useful for verifying the server works without any source media.
 
+### H.265 via Enhanced RTMP
+
+Publish H.265/HEVC video using Enhanced RTMP (requires FFmpeg 6.1+ with libx265):
+
+```bash
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \
+       -f lavfi -i sine=frequency=440:sample_rate=44100 \
+       -c:v libx265 -preset ultrafast -c:a aac \
+       -f flv rtmp://localhost:1935/live/test
+```
+
 ### From Webcam
 
 **Windows:**

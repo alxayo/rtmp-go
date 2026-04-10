@@ -33,7 +33,7 @@ recordings/live_mystream_20240115_143022.flv
 
 ## FLV Format
 
-FLV files contain H.264 video and AAC audio in a standard Flash Video container. The server writes:
+FLV files contain video (H.264, H.265/HEVC, AV1, VP9) and audio (AAC) in a standard Flash Video container. Enhanced RTMP tags are preserved transparently. The server writes:
 
 - A 13-byte FLV header (signature `FLV`, version 1, audio+video flags)
 - FLV tags for each audio (type 0x08) and video (type 0x09) message
@@ -55,7 +55,7 @@ ffplay recordings/live_mystream_20240115_143022.flv
 
 ## Converting to MP4
 
-Since the FLV file already contains H.264 and AAC, you can remux to MP4 without re-encoding:
+Since the FLV file already contains the original codec data, you can remux to MP4 without re-encoding:
 
 ```bash
 ffmpeg -i recordings/live_mystream_20240115_143022.flv -c copy output.mp4

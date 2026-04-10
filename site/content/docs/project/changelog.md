@@ -9,6 +9,25 @@ All notable changes to go-rtmp are documented here.
 
 ---
 
+## v0.1.4 (2026-04-10)
+
+### Added
+- **Enhanced RTMP (E-RTMP v2)**: H.265/HEVC, AV1, VP9 codec support via FourCC signaling
+  - Compatible with FFmpeg 6.1+, OBS 29.1+, SRS 6.0+
+  - Automatic codec detection — no configuration needed
+  - `connect` command negotiation with `fourCcList` echo
+  - Sequence header caching for all enhanced codecs (late-join support)
+- Enhanced audio signaling: Opus, FLAC, AC-3, E-AC-3 via E-RTMP FourCC
+- 27 new unit tests for enhanced video/audio parsing
+- E2E test scripts: `scripts/test-enhanced-rtmp.sh` and `.ps1`
+
+### Changed
+- Extracted shared `fourCC()` helper to `media/codec.go`
+- Simplified video diagnostic logging in registry
+- Fixed doc comment in `connect_response.go`
+
+---
+
 ## v0.1.3 (2026-04-09)
 
 ### Added

@@ -5,7 +5,8 @@ A production-ready RTMP server in pure Go. Zero external dependencies.
 Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording + multi-destination relay.
 
 > **Status:** ✅ Core features operational  
-> **Recording:** ✅ Automatic FLV (H.264 + AAC)  
+> **Codecs:** ✅ H.264, H.265 (HEVC), AV1, VP9 via Enhanced RTMP  
+> **Recording:** ✅ Automatic FLV recording  
 > **Relay:** ✅ Multi-subscriber with late-join support  
 > **Tested with:** OBS Studio, FFmpeg, ffplay, VLC
 
@@ -50,15 +51,16 @@ ffplay rtmps://localhost:443/live/test
 |---------|-------------|
 | **RTMPS (TLS)** | Encrypted RTMP via TLS termination (`-tls-listen`, `-tls-cert`, `-tls-key`) |
 | **RTMP v3 Handshake** | C0/C1/C2 ↔ S0/S1/S2 with 5s timeouts |
+| **Enhanced RTMP** | H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling |
 | **Chunk Streaming** | FMT 0-3 header compression, extended timestamps |
 | **Control Messages** | Set Chunk Size, Window Ack, Peer Bandwidth, User Control |
 | **AMF0 Codec** | Number, Boolean, String, Object, Null, Strict Array |
 | **Command Flow** | connect → createStream → publish / play |
 | **Live Relay** | Transparent forwarding to unlimited subscribers |
 | **FLV Recording** | Automatic recording of all streams to FLV files |
-| **Late-Join** | Sequence header caching (H.264 SPS/PPS, AAC config) |
+| **Late-Join** | Sequence header caching (H.264/H.265/AV1/VP9 + AAC config) |
 | **Multi-Destination** | Relay to external RTMP servers (`-relay-to` flag) |
-| **Media Logging** | Per-connection codec detection and bitrate stats |
+| **Media Logging** | Per-connection codec detection (incl. Enhanced RTMP) and bitrate stats |
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
 | **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
 | **Metrics** | Expvar counters for connections, publishers, subscribers, media (HTTP `/debug/vars`) |
@@ -81,7 +83,7 @@ internal/rtmp/
 ├── server/       Listener, stream registry, pub/sub
 │   ├── auth/     Token-based authentication (validators)
 │   └── hooks/    Event hook system (webhooks, shell, stdio)
-├── media/        Audio/video parsing, codec detection, FLV recording
+├── media/        Audio/video parsing, codec detection (Enhanced RTMP), FLV recording
 ├── relay/        Multi-destination forwarding
 ├── metrics/      Expvar counters for live monitoring
 └── client/       Minimal test client
@@ -151,14 +153,17 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 
 ## Roadmap
 
-### v0.1.2 (current)
+### v0.1.4 (current)
+- **Enhanced RTMP (E-RTMP v2)**: H.265/HEVC, AV1, VP9 codec support via FourCC signaling
+- Compatible with FFmpeg 6.1+, OBS 29.1+, SRS 6.0+
+- Automatic codec detection — no configuration needed
+- Sequence header caching for all enhanced codecs (late-join support)
+
+### v0.1.2
 - Expvar metrics: live counters for connections, publishers, subscribers, media bytes (HTTP `/debug/vars`)
 - Enhanced error handling: disconnect handlers, TCP deadline enforcement (read 90s, write 30s), relay client cleanup
 - Performance optimizations: AMF0 decode allocations, chunk writer buffer reuse, RPC lazy-init
 - Dead code removal: unused bufpool package, unreachable error sentinels
-
-### In Progress
-- Fuzz testing for AMF0 and chunk parsing (bounds safety)
 
 ### Planned
 - **Configurable backpressure** — drop or disconnect policy for slow subscribers

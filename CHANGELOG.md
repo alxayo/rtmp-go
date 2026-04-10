@@ -5,6 +5,34 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.4] — 2026-04-10
+
+### Added
+- **Enhanced RTMP (E-RTMP v2) codec support**: Modern video codecs via FourCC signaling, compatible with FFmpeg 6.1+, OBS 29.1+, SRS 6.0+ ([`58005f8`](https://github.com/alxayo/rtmp-go/commit/58005f8))
+  - **H.265/HEVC** (`hvc1`): High Efficiency Video Coding — 50% better compression than H.264
+  - **AV1** (`av01`): AOMedia Video 1 — royalty-free next-gen codec
+  - **VP9** (`vp09`): Google's open video codec
+  - Automatic codec detection — no configuration or flags needed
+  - `connect` command negotiation with `fourCcList` echo
+  - Sequence header caching for all enhanced codecs (late-join support)
+  - Legacy HEVC CodecID 12 still supported alongside enhanced `hvc1`
+- **Enhanced RTMP audio signaling**: Enhanced audio tag header parsing for modern audio codecs ([`58005f8`](https://github.com/alxayo/rtmp-go/commit/58005f8))
+  - Opus, FLAC, AC-3, E-AC-3, `.mp3` via E-RTMP FourCC
+- **Enhanced RTMP E2E test scripts**: Paired Bash + PowerShell scripts validating H.265 end-to-end ([`1de8046`](https://github.com/alxayo/rtmp-go/commit/1de8046))
+  - Build server → publish H.265+AAC via FFmpeg → verify recorded FLV (codec, duration, decode)
+  - `scripts/test-enhanced-rtmp.sh` and `scripts/test-enhanced-rtmp.ps1`
+- **27 new unit tests** for enhanced video/audio parsing, FourCC detection, and packet type classification ([`58005f8`](https://github.com/alxayo/rtmp-go/commit/58005f8))
+
+### Changed
+- **Shared codec helper**: Extracted `fourCC()` helper to `media/codec.go` for O(1) FourCC-to-uint32 map lookup ([`f0f3aa7`](https://github.com/alxayo/rtmp-go/commit/f0f3aa7))
+- **Shared test helper**: Extracted `_tFatalf` to `media/helpers_test.go` ([`f0f3aa7`](https://github.com/alxayo/rtmp-go/commit/f0f3aa7))
+- **Simplified video diagnostic logging**: Registry now uses `ParseVideoMessage()` instead of duplicating byte-level parsing ([`7ce892c`](https://github.com/alxayo/rtmp-go/commit/7ce892c))
+
+### Fixed
+- Inaccurate doc comment in `connect_response.go` (CSID was set to 3, not zero) ([`7ce892c`](https://github.com/alxayo/rtmp-go/commit/7ce892c))
+
+---
+
 ## [v0.1.3] — 2026-04-09
 
 ### Added
@@ -182,6 +210,7 @@ First feature-complete release of the RTMP server. Supports end-to-end streaming
 | `003-multi-destination-relay` | [specs/003](specs/003-multi-destination-relay/) | Multi-destination relay to external RTMP servers |
 | `T001-init-go-module` | [specs/001](specs/001-rtmp-server-implementation/spec.md) | Core RTMP server implementation (handshake through media streaming) |
 
+[v0.1.4]: https://github.com/alxayo/rtmp-go/compare/v0.1.3...v0.1.4
 [v0.1.3]: https://github.com/alxayo/rtmp-go/compare/v0.1.2...v0.1.3
 [v0.1.2]: https://github.com/alxayo/rtmp-go/compare/v0.1.1...v0.1.2
 [v0.1.1]: https://github.com/alxayo/rtmp-go/compare/v0.1.0...v0.1.1

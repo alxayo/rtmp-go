@@ -190,6 +190,22 @@ Each test case uses unique ports to avoid conflicts when running in parallel:
 | RTMP + Auth (rejected) | 19361 | — |
 | RTMPS + Auth | 19363 | 19364 |
 
+## Enhanced RTMP (H.265) Test
+
+Validates H.265/HEVC streaming via Enhanced RTMP:
+
+**Linux/macOS:**
+```bash
+./scripts/test-enhanced-rtmp.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\test-enhanced-rtmp.ps1
+```
+
+Requires FFmpeg 6.1+ with libx265. Tests codec detection, FLV recording, and full frame decode.
+
 ## Troubleshooting
 
 | Problem | Solution |

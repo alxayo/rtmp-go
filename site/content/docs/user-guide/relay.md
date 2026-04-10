@@ -39,9 +39,12 @@ When a subscriber joins mid-stream, they need codec initialization data before t
 | Header Type | Detection | Contains |
 |-------------|-----------|----------|
 | **H.264 Sequence Header** | Video message (TypeID 9) with `avc_packet_type=0` | SPS/PPS parameters |
+| **Enhanced Video Sequence Header** | Video message (TypeID 9) with IsExHeader set + FourCC | H.265/AV1/VP9 decoder config |
 | **AAC Sequence Header** | Audio message (TypeID 8) with AAC format and `aac_packet_type=0` | AudioSpecificConfig |
 
 When a new subscriber joins, the server sends any cached sequence headers **before** forwarding live media. This means the subscriber's decoder initializes instantly — no waiting for the next keyframe.
+
+> **Enhanced RTMP**: Packets using enhanced codecs (H.265, AV1, VP9) are relayed transparently — no re-encoding or special configuration needed.
 
 ## Backpressure
 

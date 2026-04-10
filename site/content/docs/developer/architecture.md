@@ -74,7 +74,7 @@ TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recor
 | `internal/rtmp/server` | Listener, stream registry, pub/sub | `Server`, `Registry`, `Stream`, `Config` |
 | `internal/rtmp/server/auth` | Token-based authentication validators | `Validator`, `TokenValidator`, `FileValidator`, `CallbackValidator` |
 | `internal/rtmp/server/hooks` | Event notification | `HookManager`, `Event`, `Hook` |
-| `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector` |
+| `internal/rtmp/media` | Audio/video parsing, codec detection (Enhanced RTMP), FLV recording | `Recorder`, `CodecDetector` |
 | `internal/rtmp/relay` | Multi-destination relay | `DestinationManager`, `Destination` |
 | `internal/rtmp/metrics` | Expvar counters | `ConnectionsActive`, `BytesIngested` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
@@ -115,7 +115,7 @@ OBS sends a series of AMF0-encoded commands on TypeID 20:
 ### 5. Media Flow
 
 Once `publish` succeeds:
-- OBS sends **sequence headers** first — H.264 SPS/PPS (video) and AAC AudioSpecificConfig (audio). These are cached by the server for late-join support.
+- OBS sends **sequence headers** first — H.264 SPS/PPS, H.265 HEVCDecoderConfigurationRecord, or other codec config (video) and AAC AudioSpecificConfig (audio). These are cached by the server for late-join support.
 - OBS then sends continuous **audio (TypeID 8)** and **video (TypeID 9)** chunks.
 - The server's media dispatch fan-outs each message to all subscribers and optionally writes to disk (FLV recording) and forwards to relay destinations.
 
@@ -161,6 +161,8 @@ A stream key is derived from the RTMP URL: `rtmp://host:port/app/streamName`. Th
 ### Sequence Headers
 
 H.264 video requires SPS/PPS (Sequence Parameter Set / Picture Parameter Set) to initialize the decoder. AAC audio requires AudioSpecificConfig. These are sent as the first media messages after `publish` and are identified by a specific byte pattern (type byte 0x00 = sequence header).
+
+Enhanced RTMP codecs (H.265, AV1, VP9) use the same sequence header mechanism but are identified by a FourCC code instead of a CodecID byte.
 
 The server caches these so that late-joining subscribers receive them immediately, enabling instant video playback without waiting for the next keyframe cycle.
 

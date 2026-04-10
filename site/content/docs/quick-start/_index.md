@@ -106,7 +106,7 @@ RTMPS clients can now connect on port 1936 with `rtmps://localhost:1936/live/tes
 Here is what happened under the hood during the session above:
 
 1. **RTMP Handshake** — The server accepted the TCP connection and completed the RTMP v3 handshake (C0/C1/C2 ↔ S0/S1/S2), establishing a reliable bidirectional channel.
-2. **Sequence Header Caching** — The publisher's H.264 SPS/PPS (video decoder configuration) and AAC AudioSpecificConfig (audio decoder configuration) were cached as "sequence headers." These are essential for any new viewer to initialize their decoders.
+2. **Sequence Header Caching** — The publisher's H.264/H.265 SPS/PPS (video decoder configuration) and AAC AudioSpecificConfig (audio decoder configuration) were cached as "sequence headers." These are essential for any new viewer to initialize their decoders.
 3. **FLV Recording** — The recording subsystem wrote each incoming audio and video message as FLV tags to a file on disk, producing a standard `.flv` file playable by any media player.
 4. **Live Media Relay** — Each subscriber first received the cached sequence headers (so their player could initialize immediately), then received live audio/video messages relayed from the publisher in real time.
 5. **Zombie Detection** — TCP deadlines (read 90s, write 30s) are reset on every I/O operation. If a connection goes silent, the server automatically closes it — no zombie connections accumulate.

@@ -39,7 +39,7 @@ When a media message is broadcast to multiple subscribers, each subscriber recei
 
 ## Late-Join Support
 
-When a subscriber connects to an active stream, they need H.264 SPS/PPS and AAC AudioSpecificConfig to initialize their decoders. The server **caches sequence headers** from the publisher and replays them to every new subscriber immediately on join. This enables instant video playback without waiting for the next keyframe.
+When a subscriber connects to an active stream, they need codec initialization data (H.264 SPS/PPS, H.265 decoder config, AV1/VP9 config, AAC AudioSpecificConfig) to initialize their decoders. The server **caches sequence headers** from the publisher and replays them to every new subscriber immediately on join. This enables instant video playback without waiting for the next keyframe.
 
 ## Event Hooks Are Asynchronous
 
