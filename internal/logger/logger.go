@@ -41,6 +41,9 @@ func Init() {
 		lvl := detectLevel()
 		atomicLevel.set(lvl)
 		global = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: atomicLevel}))
+		// Set as slog default so any code using slog.Default() (e.g., the
+		// SRT listener) gets the same configured logger with the right level.
+		slog.SetDefault(global)
 	})
 }
 
