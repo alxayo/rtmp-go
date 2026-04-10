@@ -45,14 +45,15 @@ func Init() {
 }
 
 // detectLevel resolves the initial log level from (precedence high→low):
-//  1. command-line flag -log.level
+//  1. command-line flag -log-level or -log.level
 //  2. environment variable RTMP_LOG_LEVEL
 //  3. default (info)
 func detectLevel() slog.Level {
 	// Attempt to parse flag value (handles both parsed & unparsed states).
 	if *flagLevel == "" {
 		for _, arg := range os.Args[1:] {
-			if strings.HasPrefix(arg, "-log.level=") {
+			// Support both -log.level= and -log-level= for compatibility
+			if strings.HasPrefix(arg, "-log.level=") || strings.HasPrefix(arg, "-log-level=") {
 				parts := strings.SplitN(arg, "=", 2)
 				if len(parts) == 2 {
 					*flagLevel = parts[1]

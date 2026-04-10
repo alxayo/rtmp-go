@@ -16,6 +16,7 @@ package server
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
@@ -45,7 +46,25 @@ func (s *Server) startSRTListener() error {
 	s.srtListener = ln
 	s.mu.Unlock()
 
-	s.log.Info("SRT server listening", "addr", ln.Addr().String())
+	// Log SRT listener info directly (SRT listener has a different interface)
+	addr := ln.Addr().String()
+	netAddr := ln.Addr().(*net.UDPAddr)
+	if netAddr != nil && netAddr.IP.IsUnspecified() {
+		// IPv6 or IPv4 wildcard
+		isIPv6 := netAddr.IP.To4() == nil
+		var details []string
+		details = append(details, fmt.Sprintf("listen_addr=%s", addr))
+		if isIPv6 {
+			details = append(details, fmt.Sprintf("[::1]:%d (localhost)", netAddr.Port))
+		} else {
+			details = append(details, fmt.Sprintf("127.0.0.1:%d (localhost)", netAddr.Port))
+		}
+		s.log.Info("SRT server listening",
+			"addr", addr,
+			"accessible_at", strings.Join(details, ", "))
+	} else {
+		s.log.Info("SRT server listening", "addr", addr)
+	}
 
 	// Start the accept loop in a background goroutine.
 	// acceptingWg ensures the server waits for this goroutine during shutdown.

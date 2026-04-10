@@ -157,7 +157,8 @@ func (s *Server) Start() error {
 	s.l = ln
 	s.mu.Unlock()
 
-	s.log.Info("RTMP server listening", "addr", ln.Addr().String())
+	// Log the listening address and resolved IPs
+	s.logListenerInfo("RTMP", ln)
 	s.acceptingWg.Add(1)
 	go s.acceptLoop(ln)
 
@@ -175,7 +176,7 @@ func (s *Server) Start() error {
 		s.mu.Lock()
 		s.tlsListener = tlsLn
 		s.mu.Unlock()
-		s.log.Info("RTMPS server listening", "addr", tlsLn.Addr().String())
+		s.logListenerInfo("RTMPS", tlsLn)
 		s.acceptingWg.Add(1)
 		go s.acceptLoop(tlsLn)
 	}
@@ -206,6 +207,67 @@ func (s *Server) startTLSListener() (net.Listener, error) {
 		return nil, fmt.Errorf("listen %s: %w", s.cfg.TLSListenAddr, err)
 	}
 	return tls.NewListener(tcpLn, tlsCfg), nil
+}
+
+// logListenerInfo logs the listening address and resolves IPv4/IPv6 addresses.
+// Handles wildcard addresses like [:], [::], or :port by resolving to local IPs.
+func (s *Server) logListenerInfo(protocol string, listener net.Listener) {
+	addr := listener.Addr().String()
+	
+	// Try to resolve which IPs this listener is actually bound to
+	netAddr := listener.Addr().(*net.TCPAddr)
+	if netAddr == nil {
+		s.log.Info(protocol+" server listening", "addr", addr)
+		return
+	}
+	
+	// If listening on a wildcard address, resolve the actual IPs
+	if netAddr.IP.IsUnspecified() { // 0.0.0.0 or [::]
+		isIPv6Only := netAddr.IP.To4() == nil
+		
+		var ipv4Addrs []string
+		var ipv6Addrs []string
+		
+		// Get all local addresses
+		addrs, err := net.InterfaceAddrs()
+		if err == nil {
+			for _, ifaceAddr := range addrs {
+				ipNet, ok := ifaceAddr.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				ip := ipNet.IP
+				
+				// Collect IPv4 addresses
+				if ip.To4() != nil && !ip.IsLoopback() {
+					ipv4Addrs = append(ipv4Addrs, fmt.Sprintf("%s:%d", ip, netAddr.Port))
+				}
+				
+				// Collect IPv6 addresses (non-loopback, non-link-local)
+				if ip.To4() == nil && ip.To16() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+					ipv6Addrs = append(ipv6Addrs, fmt.Sprintf("[%s]:%d", ip, netAddr.Port))
+				}
+			}
+		}
+		
+		// Add localhost for convenience
+		ipv4Addrs = append(ipv4Addrs, fmt.Sprintf("127.0.0.1:%d", netAddr.Port))
+		ipv6Addrs = append(ipv6Addrs, fmt.Sprintf("[::1]:%d", netAddr.Port))
+		
+		var accessible []string
+		if !isIPv6Only && len(ipv4Addrs) > 0 {
+			accessible = append(accessible, "IPv4: "+strings.Join(ipv4Addrs, ", "))
+		}
+		if len(ipv6Addrs) > 0 {
+			accessible = append(accessible, "IPv6: "+strings.Join(ipv6Addrs, ", "))
+		}
+		
+		s.log.Info(protocol+" server listening",
+			"listen_addr", addr,
+			"accessible_at", strings.Join(accessible, " | "))
+	} else {
+		s.log.Info(protocol+" server listening", "addr", addr)
+	}
 }
 
 // acceptLoop runs until listener close. Each successful accept performs the
