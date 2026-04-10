@@ -139,11 +139,14 @@ func SplitH265AnnexB(data []byte) [][]byte {
 		}
 
 		// Extract this NALU (skip the start code, include the data up to next start code)
-		nalu := data[naluStart:naluEnd]
-
-		// Filter out empty NALUs
-		if len(nalu) > 0 {
-			nalus = append(nalus, nalu)
+		if naluStart < naluEnd {
+			nalu := data[naluStart:naluEnd]
+			// Trim trailing zero bytes that might be part of the next start code padding.
+			// This mirrors the H.264 SplitAnnexB behavior for consistency.
+			nalu = trimTrailingZeros(nalu)
+			if len(nalu) > 0 {
+				nalus = append(nalus, nalu)
+			}
 		}
 	}
 

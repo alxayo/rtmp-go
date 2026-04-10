@@ -261,52 +261,129 @@ func TestExtractH265VPSSPSPPS(t *testing.T) {
 
 // TestBuildHEVCSequenceHeader verifies sequence header structure.
 func TestBuildHEVCSequenceHeader(t *testing.T) {
-	// Mock VPS, SPS, PPS with minimal content
-	vps := []byte{0x40, 0x00, 0x00, 0x00}
-	sps := []byte{0x42, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00}
-	pps := []byte{0x44, 0x01, 0x01}
+	// Mock VPS (4 bytes): NAL header (2 bytes) + minimal data
+	vps := []byte{0x40, 0x01, 0xAA, 0xBB}
+
+	// Mock SPS (15+ bytes): NAL header (2 bytes) + vps_id/layers byte + profile_tier_level (12 bytes)
+	// SPS[0-1] = NAL header (type=33)
+	// SPS[2]   = sps_video_parameter_set_id (4b) | sps_max_sub_layers_minus1 (3b) | temporal_id_nesting (1b)
+	// SPS[3]   = general_profile_space (2b) | general_tier_flag (1b) | general_profile_idc (5b)
+	// SPS[4:8] = general_profile_compatibility_flags (32 bits)
+	// SPS[8:14] = general_constraint_indicator_flags (48 bits)
+	// SPS[14]  = general_level_idc
+	sps := []byte{
+		0x42, 0x01, // NAL header: type=33 (SPS)
+		0x01,       // vps_id=0, max_sub_layers=0, temporal_nesting=1
+		0x01,       // profile_space=0, tier=0, profile_idc=1 (Main)
+		0x60, 0x00, 0x00, 0x00, // profile_compatibility_flags
+		0xB0, 0x00, 0x00, 0x00, 0x00, 0x00, // constraint_indicator_flags
+		0x5D, // level_idc = 93 (Level 3.1)
+		0x00, 0x00, // extra bytes for safety
+	}
+	pps := []byte{0x44, 0x01, 0xC0}
 
 	got := BuildHEVCSequenceHeader(vps, sps, pps)
 
-	// Verify the tag header
+	// Verify Enhanced RTMP header (5 bytes: ExHeader + FourCC)
 	if len(got) < 5 {
 		t.Fatalf("BuildHEVCSequenceHeader() returned %d bytes, want at least 5", len(got))
 	}
 
-	// Check frame type and codec ID (byte 0)
-	// Should be 0x1C: keyframe (1) << 4 | HEVC (12)
-	if got[0] != 0x1C {
-		t.Errorf("BuildHEVCSequenceHeader() byte[0] = 0x%02X, want 0x1C", got[0])
+	// Byte 0: Enhanced RTMP header = 0x90
+	// [IsExHeader=1][FrameType=001 (key)][PacketType=0000 (SequenceStart)]
+	if got[0] != 0x90 {
+		t.Errorf("byte[0] = 0x%02X, want 0x90 (Enhanced RTMP SequenceStart)", got[0])
 	}
 
-	// Check packet type (byte 1)
-	// Should be 0x00 for sequence header
-	if got[1] != 0x00 {
-		t.Errorf("BuildHEVCSequenceHeader() byte[1] = 0x%02X, want 0x00", got[1])
+	// Bytes 1-4: FourCC = "hvc1"
+	if string(got[1:5]) != "hvc1" {
+		t.Errorf("FourCC = %q, want \"hvc1\"", string(got[1:5]))
 	}
 
-	// Check composition time offset (bytes 2-4)
-	// Should be 0x000000 for sequence header
-	if got[2] != 0x00 || got[3] != 0x00 || got[4] != 0x00 {
-		t.Errorf("BuildHEVCSequenceHeader() bytes[2:5] = [0x%02X, 0x%02X, 0x%02X], want [0x00, 0x00, 0x00]",
-			got[2], got[3], got[4])
-	}
-
-	// Check configuration version (byte 5)
-	// Should be 0x01
+	// Byte 5: ConfigurationVersion = 1
 	if got[5] != 0x01 {
-		t.Errorf("BuildHEVCSequenceHeader() byte[5] = 0x%02X, want 0x01", got[5])
+		t.Errorf("configurationVersion = 0x%02X, want 0x01", got[5])
 	}
 
-	// Check number of arrays (should be 3: VPS, SPS, PPS)
-	// This is at offset 5 + 23 bytes
-	arrayCountOffset := 5 + 23
-	if arrayCountOffset < len(got) {
-		if got[arrayCountOffset] != 3 {
-			t.Errorf("BuildHEVCSequenceHeader() num_arrays = %d, want 3", got[arrayCountOffset])
-		}
-	} else {
-		t.Errorf("BuildHEVCSequenceHeader() returned %d bytes, not enough for array count", len(got))
+	// Byte 6: Profile from SPS[3] = 0x01 (Main profile)
+	if got[6] != 0x01 {
+		t.Errorf("general_profile_idc = 0x%02X, want 0x01", got[6])
+	}
+
+	// Bytes 7-10: Profile compatibility from SPS[4:8]
+	if got[7] != 0x60 || got[8] != 0x00 || got[9] != 0x00 || got[10] != 0x00 {
+		t.Errorf("profile_compat = [0x%02X,0x%02X,0x%02X,0x%02X], want [0x60,0x00,0x00,0x00]",
+			got[7], got[8], got[9], got[10])
+	}
+
+	// Byte 17: general_level_idc from SPS[14] = 0x5D (Level 3.1)
+	if got[17] != 0x5D {
+		t.Errorf("general_level_idc = 0x%02X, want 0x5D", got[17])
+	}
+
+	// Check reserved bits fields (after the 12-byte profile/tier/level section)
+	// Offset 18-19: min_spatial_segmentation = 0xF000 (4 reserved 1-bits + 12-bit value=0)
+	if got[18] != 0xF0 || got[19] != 0x00 {
+		t.Errorf("min_spatial_seg = [0x%02X,0x%02X], want [0xF0,0x00]", got[18], got[19])
+	}
+
+	// Offset 20: parallelismType = 0xFC (6 reserved 1-bits + 2-bit value=0)
+	if got[20] != 0xFC {
+		t.Errorf("parallelismType = 0x%02X, want 0xFC", got[20])
+	}
+
+	// Offset 21: chromaFormatIdc = 0xFD (6 reserved 1-bits + 2-bit value=1 for 4:2:0)
+	if got[21] != 0xFD {
+		t.Errorf("chromaFormatIdc = 0x%02X, want 0xFD", got[21])
+	}
+
+	// Offset 22: bitDepthLumaMinus8 = 0xF8 (5 reserved 1-bits + 3-bit value=0)
+	if got[22] != 0xF8 {
+		t.Errorf("bitDepthLuma = 0x%02X, want 0xF8", got[22])
+	}
+
+	// Offset 23: bitDepthChromaMinus8 = 0xF8
+	if got[23] != 0xF8 {
+		t.Errorf("bitDepthChroma = 0x%02X, want 0xF8", got[23])
+	}
+
+	// Offset 27: numOfArrays = 3 (VPS, SPS, PPS)
+	// 5 bytes Enhanced RTMP header + 22 bytes fixed hvcC fields = offset 27
+	numArraysOffset := 5 + 22
+	if numArraysOffset >= len(got) {
+		t.Fatalf("output too short (%d bytes) to contain numOfArrays at offset %d", len(got), numArraysOffset)
+	}
+	if got[numArraysOffset] != 3 {
+		t.Errorf("numOfArrays = %d, want 3", got[numArraysOffset])
+	}
+
+	// Verify VPS array header (offset 28): type byte = 0xA0 (completeness=1, type=32)
+	if got[numArraysOffset+1] != 0xA0 {
+		t.Errorf("VPS array type = 0x%02X, want 0xA0", got[numArraysOffset+1])
+	}
+}
+
+// TestBuildHEVCSequenceHeader_ShortSPS verifies fallback for SPS < 15 bytes.
+func TestBuildHEVCSequenceHeader_ShortSPS(t *testing.T) {
+	vps := []byte{0x40, 0x01, 0x02, 0x03}
+	sps := []byte{0x42, 0x01, 0x01, 0x01} // Only 4 bytes, too short for profile extraction
+	pps := []byte{0x44, 0x01}
+
+	got := BuildHEVCSequenceHeader(vps, sps, pps)
+
+	// Should still produce valid output with fallback defaults
+	if len(got) < 5 {
+		t.Fatalf("returned %d bytes, want at least 5", len(got))
+	}
+	if got[0] != 0x90 {
+		t.Errorf("byte[0] = 0x%02X, want 0x90", got[0])
+	}
+	if string(got[1:5]) != "hvc1" {
+		t.Errorf("FourCC = %q, want \"hvc1\"", string(got[1:5]))
+	}
+	// Fallback profile byte: 0x01 (Main profile)
+	if got[6] != 0x01 {
+		t.Errorf("fallback profile = 0x%02X, want 0x01", got[6])
 	}
 }
 
@@ -324,14 +401,14 @@ func TestBuildHEVCVideoFrame(t *testing.T) {
 			[][]byte{{0x26, 0xAB, 0xCD}},
 			true,
 			0,
-			0x1C,  // keyframe (1) << 4 | HEVC (12)
+			0x91, // Enhanced RTMP: IsExHeader=1, Keyframe=1, CodedFrames=1
 		},
 		{
 			"inter_frame",
 			[][]byte{{0x02, 0xEF, 0x01}},
 			false,
 			100,
-			0x2C,  // inter (2) << 4 | HEVC (12)
+			0xA1, // Enhanced RTMP: IsExHeader=1, Inter=2, CodedFrames=1
 		},
 	}
 
@@ -339,24 +416,25 @@ func TestBuildHEVCVideoFrame(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := BuildHEVCVideoFrame(tc.nalus, tc.isKeyframe, tc.cts)
 
-			if len(got) < 5 {
-				t.Fatalf("BuildHEVCVideoFrame() returned %d bytes, want at least 5", len(got))
+			// Enhanced RTMP: 1 byte header + 4 bytes FourCC + 3 bytes CTS + AVCC data = 8+ bytes
+			if len(got) < 8 {
+				t.Fatalf("BuildHEVCVideoFrame() returned %d bytes, want at least 8", len(got))
 			}
 
-			// Check frame type and codec ID
+			// Check Enhanced RTMP header byte
 			if got[0] != tc.wantByte0 {
-				t.Errorf("BuildHEVCVideoFrame() byte[0] = 0x%02X, want 0x%02X", got[0], tc.wantByte0)
+				t.Errorf("byte[0] = 0x%02X, want 0x%02X", got[0], tc.wantByte0)
 			}
 
-			// Check packet type (should be 0x01 for NALU data)
-			if got[1] != 0x01 {
-				t.Errorf("BuildHEVCVideoFrame() byte[1] = 0x%02X, want 0x01", got[1])
+			// Check FourCC = "hvc1"
+			if string(got[1:5]) != "hvc1" {
+				t.Errorf("FourCC = %q, want \"hvc1\"", string(got[1:5]))
 			}
 
-			// Check composition time offset
-			gotCTS := (int32(got[2]) << 16) | (int32(got[3]) << 8) | int32(got[4])
+			// Check composition time offset (bytes 5-7)
+			gotCTS := (int32(got[5]) << 16) | (int32(got[6]) << 8) | int32(got[7])
 			if gotCTS != tc.cts {
-				t.Errorf("BuildHEVCVideoFrame() CTS = %d, want %d", gotCTS, tc.cts)
+				t.Errorf("CTS = %d, want %d", gotCTS, tc.cts)
 			}
 		})
 	}

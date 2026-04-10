@@ -62,113 +62,139 @@ import "encoding/binary"
 // This matches how ffmpeg encodes H.265 for RTMP output.
 func BuildHEVCSequenceHeader(vps, sps, pps []byte) []byte {
 	// Calculate sizes:
-	// RTMP tag header: 5 bytes
-	// HEVCDecoderConfigurationRecord: 23 bytes minimum + 3 NAL arrays
+	// Enhanced RTMP header: 5 bytes (1 byte ExHeader + 4 bytes FourCC "hvc1")
+	// HEVCDecoderConfigurationRecord: 23 bytes fixed header + 3 NAL arrays
 	//   Each array: 1 byte type + 2 bytes count + (2 bytes length + data) per NALU
-	recordLen := 23 + // Fixed header through LengthSizeMinusOne
-		1 + // NumOfArrays
+	recordLen := 23 + // Fixed header (configVersion through numOfArrays)
 		(1 + 2 + 2 + len(vps)) + // VPS array: type byte, count, VPS length, VPS data
 		(1 + 2 + 2 + len(sps)) + // SPS array
 		(1 + 2 + 2 + len(pps))   // PPS array
 
+	// Enhanced RTMP header is 5 bytes (no CTS for SequenceStart)
 	buf := make([]byte, 5+recordLen)
 
-	// -- RTMP video tag header (5 bytes) --
-	// Byte 0: FrameType=1 (keyframe) << 4 | CodecID=12 (HEVC legacy) or use Enhanced RTMP
-	// For Enhanced RTMP (E-RTMP), we use CodecID=0xF with IsExHeader=1 and FourCC="hvc1"
-	// Here we use the legacy CodecID=12 approach for compatibility:
-	buf[0] = 0x1C // FrameType=1 (keyframe) << 4 | CodecID=12 (HEVC)
-	// Byte 1: PacketType=0 (sequence header)
-	buf[1] = 0x00
-	// Bytes 2-4: CompositionTimeOffset = 0 for sequence headers
-	buf[2] = 0x00
-	buf[3] = 0x00
-	buf[4] = 0x00
+	// -- Enhanced RTMP video tag header (5 bytes) --
+	// Byte 0: [IsExHeader:1][FrameType:3][PacketType:4]
+	//   IsExHeader = 1 (bit 7) — signals Enhanced RTMP format
+	//   FrameType  = 1 (bits 6-4) — keyframe (sequence headers are always keyframes)
+	//   PacketType = 0 (bits 3-0) — SequenceStart (codec configuration record)
+	// = 0b1_001_0000 = 0x90
+	buf[0] = 0x90
 
-	// -- HEVCDecoderConfigurationRecord --
+	// Bytes 1-4: FourCC = "hvc1" (identifies H.265/HEVC codec)
+	// This is the standard Enhanced RTMP signaling for HEVC, replacing the
+	// non-standard legacy CodecID=12 approach.
+	buf[1] = 'h'
+	buf[2] = 'v'
+	buf[3] = 'c'
+	buf[4] = '1'
+
+	// -- HEVCDecoderConfigurationRecord (ISO/IEC 14496-15 §8.3.3.1) --
+	// This record describes the H.265 decoder configuration and embeds the
+	// three parameter sets (VPS, SPS, PPS) needed to initialize the decoder.
 	off := 5
 
-	// ConfigurationVersion = 1
+	// ConfigurationVersion = 1 (always 1 for current spec)
 	buf[off] = 1
 	off++
 
-	// General profile/tier/level (from SPS bytes 1-7)
-	// For simplicity, extract what we can from SPS if available
-	if len(sps) >= 13 {
-		// Byte 1: profile_space (2 bits) | tier_flag (1 bit) | profile_idc (5 bits)
-		buf[off] = sps[1]
+	// Profile/tier/level information extracted from the SPS NALU.
+	//
+	// H.265 SPS NALU structure (after start code removal):
+	//   Bytes 0-1: NAL unit header (2 bytes: type=33 in bits [6:1] of byte 0)
+	//   Byte 2:    sps_video_parameter_set_id (4 bits) |
+	//              sps_max_sub_layers_minus1 (3 bits) |
+	//              sps_temporal_id_nesting_flag (1 bit)
+	//   Byte 3:    profile_tier_level starts here:
+	//              general_profile_space (2 bits) |
+	//              general_tier_flag (1 bit) |
+	//              general_profile_idc (5 bits)
+	//   Bytes 4-7: general_profile_compatibility_flags (32 bits)
+	//   Bytes 8-13: general_constraint_indicator_flags (48 bits)
+	//   Byte 14:   general_level_idc (8 bits)
+	//
+	// We need at least 15 bytes of SPS to read all profile/tier/level fields.
+	if len(sps) >= 15 {
+		// general_profile_space (2) | general_tier_flag (1) | general_profile_idc (5)
+		buf[off] = sps[3]
 		off++
 
-		// Bytes 2-5: General profile compatibility flags (4 bytes, from SPS)
-		copy(buf[off:off+4], sps[2:6])
+		// general_profile_compatibility_flags (32 bits)
+		copy(buf[off:off+4], sps[4:8])
 		off += 4
 
-		// Bytes 6-11: General constraint indicator flags (6 bytes, from SPS)
-		copy(buf[off:off+6], sps[6:12])
+		// general_constraint_indicator_flags (48 bits)
+		copy(buf[off:off+6], sps[8:14])
 		off += 6
 
-		// Byte 12: General level Idc (from SPS byte 12)
-		buf[off] = sps[12]
+		// general_level_idc
+		buf[off] = sps[14]
 		off++
 	} else {
-		// Fallback: use minimal defaults if SPS is too short
-		// Write dummy profile/tier/level
-		buf[off] = 0x00 // profile
+		// Fallback: SPS too short to extract profile/tier/level.
+		// Write Main profile defaults so decoders have something to work with.
+		buf[off] = 0x01 // Main profile (profile_idc=1)
 		off++
-		for i := 0; i < 4; i++ {
-			buf[off] = 0x00 // profile compatibility
-			off++
-		}
+		// Profile compatibility: set bit for Main profile
+		buf[off] = 0x60 // bits for Main profile compatibility
+		off++
+		buf[off] = 0x00
+		off++
+		buf[off] = 0x00
+		off++
+		buf[off] = 0x00
+		off++
+		// Constraint indicator flags (6 bytes, all zero = no constraints)
 		for i := 0; i < 6; i++ {
-			buf[off] = 0x00 // constraint flags
+			buf[off] = 0x00
 			off++
 		}
-		buf[off] = 0x00 // level
+		// Level 3.1 (93) as a safe default
+		buf[off] = 93
 		off++
 	}
 
-	// Min spatial segmentation Idc (12 bits) + reserved (4 bits)
-	// Typically 0; encode as 0xF000 in 16-bit big-endian
+	// min_spatial_segmentation_idc: 4 reserved bits (1111) + 12-bit value
+	// Per spec, reserved bits MUST be 1111. Value 0 = no segmentation info.
+	// Layout: [1111][12-bit value] → 0xF000 when value=0
 	binary.BigEndian.PutUint16(buf[off:], 0xF000)
 	off += 2
 
-	// Parallelism type (2 bits) + reserved (6 bits)
-	// Typically 0; encode as 0x00
-	buf[off] = 0x00
+	// parallelismType: 6 reserved bits (111111) + 2-bit value
+	// Per spec, reserved bits MUST be 111111. Value 0 = unknown.
+	// Layout: [111111][2-bit value] → 0xFC when value=0
+	buf[off] = 0xFC
 	off++
 
-	// Chroma format Idc (2 bits) + reserved (6 bits)
-	// Typically 1 (4:2:0); encode as 0x01
-	buf[off] = 0x01
+	// chromaFormatIdc: 6 reserved bits (111111) + 2-bit value
+	// Per spec, reserved bits MUST be 111111. Value 1 = 4:2:0 (most common).
+	// Layout: [111111][2-bit value] → 0xFC | 0x01 = 0xFD for 4:2:0
+	buf[off] = 0xFD
 	off++
 
-	// Bit depth luma minus 8 (3 bits) + reserved (5 bits)
-	// For 8-bit video: 0; encode as 0x00
-	// For 10-bit video: 2; encode as 0x02
-	// Default to 8-bit (0)
-	buf[off] = 0x00
+	// bitDepthLumaMinus8: 5 reserved bits (11111) + 3-bit value
+	// Per spec, reserved bits MUST be 11111. Value 0 = 8-bit luma.
+	// Layout: [11111][3-bit value] → 0xF8 when value=0 (8-bit)
+	buf[off] = 0xF8
 	off++
 
-	// Bit depth chroma minus 8 (3 bits) + reserved (5 bits)
-	// Same as luma; default to 0
-	buf[off] = 0x00
+	// bitDepthChromaMinus8: 5 reserved bits (11111) + 3-bit value
+	// Same as luma. Value 0 = 8-bit chroma.
+	// Layout: [11111][3-bit value] → 0xF8 when value=0 (8-bit)
+	buf[off] = 0xF8
 	off++
 
-	// Average frame rate (16 bits, big-endian)
-	// 0 = unspecified; commonly used value
+	// avgFrameRate (16 bits, big-endian): 0 = unspecified
 	binary.BigEndian.PutUint16(buf[off:], 0)
 	off += 2
 
-	// Constant frame rate (2 bits) | reserved (4 bits) | num temporal layers (3 bits) | temporal ID nested (1 bit)
-	// Encode as: constant_frame_rate=0 (2 bits) | reserved=0xF (4 bits) | num_temporal_layers=1 (3 bits) | temporal_id_nested=1 (1 bit)
-	// = 0b00_1111_001_1 = 0x3C
-	buf[off] = 0x3C
-	off++
-
-	// Length size minus one (2 bits) + reserved (6 bits)
-	// LengthSize = 4 bytes, so LengthSizeM1 = 3
-	// Encode as 0xFC | 0x03 = 0xFF
-	buf[off] = 0xFF
+	// Combined flags byte:
+	//   constantFrameRate (2 bits) | numTemporalLayers (3 bits) |
+	//   temporalIdNested (1 bit) | lengthSizeMinusOne (2 bits)
+	// Values: constantFrameRate=0, numTemporalLayers=1, temporalIdNested=1,
+	//         lengthSizeMinusOne=3 (4-byte NALU lengths)
+	// = 0b00_001_1_11 = 0x0F
+	buf[off] = 0x0F
 	off++
 
 	// Number of NAL unit arrays (8 bits)
@@ -237,30 +263,38 @@ func BuildHEVCVideoFrame(nalus [][]byte, isKeyframe bool, cts int32) []byte {
 	// H.265 uses the same AVCC format as H.264
 	avccData := ToAVCC(nalus)
 
-	// Allocate: 5 bytes RTMP header + AVCC data
-	buf := make([]byte, 5+len(avccData))
+	// Allocate: 8 bytes Enhanced RTMP header + AVCC data
+	// Header: 1 byte ExHeader + 4 bytes FourCC + 3 bytes CTS
+	buf := make([]byte, 8+len(avccData))
 
-	// -- RTMP video tag header (5 bytes) --
-	// Byte 0: [FrameType:4][CodecID:4]
-	// For legacy H.265: CodecID = 12
+	// -- Enhanced RTMP video tag header (8 bytes for CodedFrames) --
+	// Byte 0: [IsExHeader:1][FrameType:3][PacketType:4]
+	//   IsExHeader = 1 (bit 7) — Enhanced RTMP format
+	//   FrameType  = 1 (keyframe) or 2 (inter-frame), in bits 6-4
+	//   PacketType = 1 (CodedFrames), in bits 3-0
 	if isKeyframe {
-		buf[0] = 0x1C // Keyframe (1) + HEVC (12)
+		// 0b1_001_0001 = 0x91 (IsExHeader=1, Keyframe=1, CodedFrames=1)
+		buf[0] = 0x91
 	} else {
-		buf[0] = 0x2C // Inter-frame (2) + HEVC (12)
+		// 0b1_010_0001 = 0xA1 (IsExHeader=1, Inter=2, CodedFrames=1)
+		buf[0] = 0xA1
 	}
 
-	// Byte 1: HEVCPacketType = 1 (NALU data)
-	// (Similar to AVC packet type, value 1 means "data")
-	buf[1] = 0x01
+	// Bytes 1-4: FourCC = "hvc1" (H.265/HEVC codec identifier)
+	buf[1] = 'h'
+	buf[2] = 'v'
+	buf[3] = 'c'
+	buf[4] = '1'
 
-	// Bytes 2-4: CompositionTimeOffset (signed 24-bit, big-endian)
-	// CTS = PTS - DTS, in milliseconds
-	buf[2] = byte(cts >> 16)
-	buf[3] = byte(cts >> 8)
-	buf[4] = byte(cts)
+	// Bytes 5-7: CompositionTimeOffset (signed 24-bit, big-endian)
+	// CTS = PTS - DTS, in milliseconds. Tells the player how to reorder
+	// frames for display when B-frames are present.
+	buf[5] = byte(cts >> 16)
+	buf[6] = byte(cts >> 8)
+	buf[7] = byte(cts)
 
-	// Copy the AVCC data after the header
-	copy(buf[5:], avccData)
+	// Copy the AVCC-formatted NAL units after the header
+	copy(buf[8:], avccData)
 
 	return buf
 }
