@@ -127,3 +127,52 @@ func TestHandlePublishNilArgs(t *testing.T) {
 		t.Fatal("expected error for nil message")
 	}
 }
+
+// TestHandlePublishAfterEviction verifies the full eviction flow:
+// 1. First publisher registers successfully
+// 2. Second publisher gets ErrPublisherExists
+// 3. After eviction (via EvictPublisher), the new publisher owns the stream
+// 4. The old publisher's disconnect cleanup does not disturb the new publisher
+func TestHandlePublishAfterEviction(t *testing.T) {
+	reg := NewRegistry()
+	oldConn := &stubConn{}
+	newConn := &stubConn{}
+	msg := buildPublishMessage("evictable")
+
+	// First publish succeeds.
+	if _, err := HandlePublish(reg, oldConn, "app", msg); err != nil {
+		t.Fatalf("first publish failed: %v", err)
+	}
+
+	// Second publish returns ErrPublisherExists (this is what the
+	// command_integration handler catches to trigger eviction).
+	_, err := HandlePublish(reg, newConn, "app", msg)
+	if err != ErrPublisherExists {
+		t.Fatalf("expected ErrPublisherExists, got %v", err)
+	}
+
+	// Evict the old publisher (simulates what command_integration does).
+	stream := reg.GetStream("app/evictable")
+	if stream == nil {
+		t.Fatal("stream should exist")
+	}
+	oldPub := stream.EvictPublisher(newConn)
+	if oldPub != oldConn {
+		t.Fatalf("expected old publisher to be oldConn")
+	}
+
+	// The new publisher is now the owner.
+	stream.mu.RLock()
+	if stream.Publisher != newConn {
+		t.Fatal("expected newConn to be the publisher")
+	}
+	stream.mu.RUnlock()
+
+	// Old publisher's disconnect handler fires — must NOT clear new publisher.
+	PublisherDisconnected(reg, "app/evictable", oldConn)
+	stream.mu.RLock()
+	if stream.Publisher != newConn {
+		t.Fatal("new publisher should survive old disconnect cleanup")
+	}
+	stream.mu.RUnlock()
+}

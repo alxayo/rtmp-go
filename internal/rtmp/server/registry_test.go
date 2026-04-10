@@ -232,3 +232,94 @@ func TestBroadcastMessage_CachesAudioSequenceHeader(t *testing.T) {
 		t.Fatalf("expected 4-byte payload, got %d", len(s.AudioSequenceHeader.Payload))
 	}
 }
+
+// TestEvictPublisher_ReplacesExisting verifies that EvictPublisher swaps the
+// current publisher with a new one and returns the old publisher. This is
+// the core mechanism that allows a reconnecting streamer to take over a
+// stream key that is still occupied by a stale/zombie connection.
+func TestEvictPublisher_ReplacesExisting(t *testing.T) {
+	r := NewRegistry()
+	s, _ := r.CreateStream("app/evict_test")
+
+	// Set up an initial publisher.
+	oldPub := "old_publisher"
+	if err := s.SetPublisher(oldPub); err != nil {
+		t.Fatalf("unexpected error setting publisher: %v", err)
+	}
+
+	// Evict the old publisher with a new one.
+	newPub := "new_publisher"
+	gotOld := s.EvictPublisher(newPub)
+
+	// The returned value should be the old publisher.
+	if gotOld != oldPub {
+		t.Fatalf("expected old publisher %q, got %v", oldPub, gotOld)
+	}
+	// The stream's publisher should now be the new one.
+	s.mu.RLock()
+	if s.Publisher != newPub {
+		t.Fatalf("expected publisher to be %q, got %v", newPub, s.Publisher)
+	}
+	s.mu.RUnlock()
+}
+
+// TestEvictPublisher_WhenEmpty verifies that EvictPublisher works correctly
+// when no publisher is currently set — it should set the new publisher and
+// return nil (no old publisher to evict).
+func TestEvictPublisher_WhenEmpty(t *testing.T) {
+	r := NewRegistry()
+	s, _ := r.CreateStream("app/evict_empty")
+
+	newPub := "fresh_publisher"
+	gotOld := s.EvictPublisher(newPub)
+
+	if gotOld != nil {
+		t.Fatalf("expected nil old publisher, got %v", gotOld)
+	}
+	s.mu.RLock()
+	if s.Publisher != newPub {
+		t.Fatalf("expected publisher to be %q, got %v", newPub, s.Publisher)
+	}
+	s.mu.RUnlock()
+}
+
+// TestEvictPublisher_NilStream verifies that calling EvictPublisher on a nil
+// stream does not panic — it should return nil safely.
+func TestEvictPublisher_NilStream(t *testing.T) {
+	var s *Stream
+	// Should not panic.
+	gotOld := s.EvictPublisher("pub")
+	if gotOld != nil {
+		t.Fatalf("expected nil from nil stream, got %v", gotOld)
+	}
+}
+
+// TestEvictPublisher_ThenOldDisconnectIsNoOp verifies the critical safety
+// property: after eviction, calling PublisherDisconnected with the OLD
+// publisher does NOT clear the new publisher. This simulates what happens
+// when the evicted connection's disconnect handler fires.
+func TestEvictPublisher_ThenOldDisconnectIsNoOp(t *testing.T) {
+	reg := NewRegistry()
+	s, _ := reg.CreateStream("app/evict_identity")
+
+	oldConn := &stubConn{}
+	newConn := &stubConn{}
+
+	if err := s.SetPublisher(oldConn); err != nil {
+		t.Fatalf("set publisher: %v", err)
+	}
+
+	// Evict old with new.
+	s.EvictPublisher(newConn)
+
+	// Simulate the old connection's disconnect handler firing.
+	// This should NOT clear the new publisher because the identity
+	// check (s.Publisher == pub) will fail.
+	PublisherDisconnected(reg, "app/evict_identity", oldConn)
+
+	s.mu.RLock()
+	if s.Publisher != newConn {
+		t.Fatalf("new publisher should still be set after old disconnect cleanup")
+	}
+	s.mu.RUnlock()
+}
