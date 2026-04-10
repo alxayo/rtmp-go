@@ -18,6 +18,8 @@ import (
 	"net"
 	"strings"
 
+	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/media"
 	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 	"github.com/alxayo/go-rtmp/internal/srt"
@@ -240,6 +242,12 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		return
 	}
 
+	// Start the SRT reliability loop immediately after accepting.
+	// This spawns a goroutine that sends ACK, NAK, and keepalive packets
+	// back to the sender at regular intervals. Without this, the sender
+	// will timeout after ~5 seconds because it never receives any ACKs.
+	conn.StartReliability()
+
 	// Generate a unique connection ID for logging and tracking.
 	connID := fmt.Sprintf("srt-%d", conn.LocalSocketID())
 
@@ -298,11 +306,72 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		return
 	}
 
-	// Wire the media handler: when the bridge pushes a chunk.Message,
-	// it goes through the session's MediaHandler to the stream registry
-	// and out to all subscribers.
-	// TODO: Wire session.MediaHandler to the RTMP stream registry
-	// session.MediaHandler = func(msg *chunk.Message) { s.reg.Broadcast(info.StreamKey(), msg) }
+	// Create or get the stream in the registry. This is the same structure
+	// used by RTMP publishers — it holds subscribers, codec info, sequence
+	// headers, and the recorder. Creating it here makes SRT streams visible
+	// to RTMP play clients and the recording system.
+	stream, _ := s.reg.CreateStream(info.StreamKey())
+	if stream == nil {
+		s.log.Error("SRT failed to create stream in registry",
+			"stream_key", info.StreamKey(),
+			"conn_id", connID,
+		)
+		session.EndPublish()
+		conn.Close()
+		metrics.SRTConnectionsActive.Add(-1)
+		return
+	}
+
+	// Register this SRT connection as the stream's publisher.
+	// This enforces single-publisher-per-stream and allows RTMP play
+	// clients to detect that a publisher is active.
+	if err := stream.SetPublisher(pub); err != nil {
+		s.log.Error("SRT publish rejected: stream already has publisher",
+			"error", err,
+			"stream_key", info.StreamKey(),
+			"conn_id", connID,
+			"stage", "publish-rejected",
+		)
+		session.EndPublish()
+		conn.Close()
+		metrics.SRTConnectionsActive.Add(-1)
+		return
+	}
+
+	// Initialize recording if -record-all is enabled.
+	// This creates an FLV file in the record directory and attaches
+	// the recorder to the stream so media dispatch writes to it.
+	if s.cfg.RecordAll {
+		if err := initRecorder(stream, s.cfg.RecordDir, s.log); err != nil {
+			s.log.Error("failed to create recorder for SRT stream",
+				"error", err,
+				"stream_key", info.StreamKey(),
+				"conn_id", connID,
+			)
+		} else {
+			s.log.Info("recording started",
+				"stream_key", info.StreamKey(),
+				"record_dir", s.cfg.RecordDir,
+				"conn_id", connID,
+			)
+		}
+	}
+
+	// Wire the media handler: when the bridge pushes a chunk.Message
+	// (audio TypeID=8 or video TypeID=9), it flows through this callback
+	// to the recording system and subscriber broadcast — exactly the same
+	// path as native RTMP media dispatch.
+	detector := &media.CodecDetector{}
+	connLog := s.log.With("conn_id", connID)
+	session.MediaHandler = func(msg *chunk.Message) {
+		// Write to FLV recorder if recording is active.
+		if stream.Recorder != nil {
+			stream.Recorder.WriteMessage(msg)
+		}
+		// Broadcast to all local subscribers (RTMP play clients)
+		// and perform one-shot codec detection.
+		stream.BroadcastMessage(detector, msg, connLog)
+	}
 
 	// Start the bridge — this blocks until the SRT connection closes.
 	// The bridge reads MPEG-TS from SRT, converts to RTMP, and pushes
@@ -329,7 +398,38 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		)
 	}
 
-	// Clean up: end the publish session and close the connection.
+	// Clean up: close recorder, clear publisher, end session, close connection.
+	// This mirrors the RTMP publisher disconnect cleanup in command_integration.go.
+
+	// Close the FLV recorder (if active) under lock to avoid races
+	// with the media handler callback that writes to it.
+	if stream != nil {
+		stream.mu.Lock()
+		if stream.Recorder != nil {
+			if err := stream.Recorder.Close(); err != nil {
+				s.log.Error("recorder close error on SRT disconnect",
+					"error", err,
+					"stream_key", info.StreamKey(),
+					"conn_id", connID,
+				)
+			} else {
+				s.log.Info("recording stopped",
+					"stream_key", info.StreamKey(),
+					"conn_id", connID,
+				)
+			}
+			stream.Recorder = nil
+		}
+		stream.mu.Unlock()
+
+		// Clear the publisher so another client can publish to this key.
+		stream.mu.Lock()
+		if stream.Publisher == pub {
+			stream.Publisher = nil
+		}
+		stream.mu.Unlock()
+	}
+
 	session.EndPublish()
 	conn.Close()
 	metrics.SRTConnectionsActive.Add(-1)
