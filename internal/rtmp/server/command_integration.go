@@ -169,7 +169,69 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		}
 
 		// Delegate to existing publish handler (sends onStatus internally).
-		if _, err := HandlePublish(reg, c, st.app, msg); err != nil {
+		_, err := HandlePublish(reg, c, st.app, msg)
+
+		// If publish failed because another publisher already occupies this
+		// stream key, evict the stale publisher and retry. This handles the
+		// common scenario where a streamer's app crashes or loses network,
+		// then reconnects on a new TCP connection while the old zombie
+		// connection hasn't timed out yet. Without eviction, the new
+		// connection would be rejected with "publisher already registered".
+		if err == ErrPublisherExists {
+			log.Warn("evicting stale publisher",
+				"stream_key", pc.StreamKey,
+				"new_conn_id", c.ID())
+
+			stream := reg.GetStream(pc.StreamKey)
+			if stream != nil {
+				// EvictPublisher atomically swaps the publisher and returns
+				// the old one. The old publisher's disconnect handler will
+				// fire when we close it below, but the identity check in
+				// PublisherDisconnected (s.Publisher == pub) will see the
+				// publisher has changed and safely skip cleanup.
+				oldPub := stream.EvictPublisher(c)
+
+				// Close the old connection to free resources. This runs in a
+				// goroutine so we don't block the new publisher's setup.
+				// The old connection's disconnect handler will fire and
+				// handle its own cleanup (media logger stop, hook events,
+				// server tracking removal).
+				if closer, ok := oldPub.(interface{ Close() error }); ok {
+					go func() {
+						if err := closer.Close(); err != nil {
+							log.Debug("error closing evicted publisher", "error", err)
+						}
+					}()
+				}
+
+				// Send onStatus to the new publisher since HandlePublish
+				// didn't get to send it (it failed with ErrPublisherExists).
+				onStatus, buildErr := buildOnStatus(
+					msg.MessageStreamID,
+					pc.StreamKey,
+					"NetStream.Publish.Start",
+					fmt.Sprintf("Publishing %s.", pc.StreamKey),
+				)
+				if buildErr == nil {
+					_ = c.SendMessage(onStatus)
+				}
+
+				// Reset stream codec/header state so the new publisher's
+				// sequence headers are properly cached (the old publisher's
+				// codec config is stale and must not be sent to subscribers).
+				stream.mu.Lock()
+				stream.AudioSequenceHeader = nil
+				stream.VideoSequenceHeader = nil
+				stream.AudioCodec = ""
+				stream.VideoCodec = ""
+				stream.mu.Unlock()
+
+				// Clear the error so we proceed with normal publish setup below.
+				err = nil
+			}
+		}
+
+		if err != nil {
 			log.Error("publish handle", "error", err)
 			return nil
 		}

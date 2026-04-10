@@ -123,6 +123,34 @@ func (s *Stream) SetPublisher(pub interface{}) error {
 	return nil
 }
 
+// EvictPublisher forcibly replaces the current publisher with a new one and
+// returns the old publisher (if any). This is used when a new client tries
+// to publish on a stream key that is still occupied by a stale/zombie
+// connection. The caller is responsible for closing the old connection.
+//
+// Unlike SetPublisher (which rejects duplicates), EvictPublisher always
+// succeeds. The old publisher's disconnect handler will fire when its
+// connection is closed, but the identity check in PublisherDisconnected
+// (s.Publisher == pub) will correctly see that the publisher has changed
+// and skip cleanup — so there is no double-free risk.
+func (s *Stream) EvictPublisher(newPub interface{}) (oldPub interface{}) {
+	if s == nil || newPub == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldPub = s.Publisher
+	s.Publisher = newPub
+	if oldPub == nil {
+		// No previous publisher — this is equivalent to a fresh SetPublisher.
+		metrics.PublishersActive.Add(1)
+	}
+	// If oldPub != nil, the active count stays the same (one out, one in).
+	// PublishersTotal tracks every successful publish attempt.
+	metrics.PublishersTotal.Add(1)
+	return oldPub
+}
+
 // AddSubscriber adds a subscriber (ignoring nil) in a thread‑safe manner.
 func (s *Stream) AddSubscriber(sub media.Subscriber) {
 	if s == nil || sub == nil {
