@@ -79,7 +79,7 @@ echo -e "${YELLOW}Starting RTMP server...${NC}"
     -srt-listen "localhost:$SRT_PORT" \
     -record-all true \
     -record-dir "$RECORDINGS_DIR" \
-    -log-level info &
+    -log-level debug &
 
 SERVER_PID=$!
 echo -e "${GREEN}✓ Server started (PID: $SERVER_PID)${NC}"

@@ -40,7 +40,7 @@ type Bridge struct {
 	// Media messages are pushed here for distribution to RTMP subscribers.
 	session *ingress.PublishSession
 
-	// --- Video state ---
+	// --- Video state (H.264) ---
 
 	// sps and pps cache the most recent H.264 Sequence Parameter Set
 	// and Picture Parameter Set. These are needed to build the RTMP
@@ -48,9 +48,28 @@ type Bridge struct {
 	sps []byte
 	pps []byte
 
-	// seqHeaderSent is true once we've sent the video sequence header.
+	// h264SeqHeaderSent is true once we've sent the H.264 video sequence header.
 	// We delay sending it until we see an SPS+PPS pair in the stream.
-	seqHeaderSent bool
+	h264SeqHeaderSent bool
+
+	// --- Video state (H.265) ---
+
+	// vps, sps265, and pps265 cache the most recent H.265 Video Parameter Set,
+	// Sequence Parameter Set, and Picture Parameter Set. H.265 requires all three.
+	// These are needed to build the RTMP sequence header for H.265 streams.
+	vps []byte
+	sps265 []byte
+	pps265 []byte
+
+	// h265SeqHeaderSent is true once we've sent the H.265 video sequence header.
+	// We delay sending it until we see all three parameter sets (VPS, SPS, PPS).
+	h265SeqHeaderSent bool
+
+	// videoCodec tracks which codec is in use: "H264" or "H265"
+	// This tells us which parameter sets and sequence header builder to use.
+	videoCodec string
+
+	// --- Common video state ---
 
 	// videoTSBase is the DTS of the first video frame (in 90kHz units).
 	// All subsequent video timestamps are relative to this base.
@@ -131,12 +150,16 @@ func (b *Bridge) Run() error {
 func (b *Bridge) onFrame(frame *ts.MediaFrame) {
 	switch frame.Stream.StreamType {
 	case ts.StreamTypeH264:
+		b.videoCodec = "H264"
 		b.handleH264Frame(frame)
+	case ts.StreamTypeH265:
+		b.videoCodec = "H265"
+		b.handleH265Frame(frame)
 	case ts.StreamTypeAAC_ADTS:
 		b.handleAACFrame(frame)
 	default:
-		// We only support H.264 and AAC for now.
-		// Other codecs (H.265, MPEG-2, etc.) are silently ignored.
+		// We support H.264, H.265, and AAC for now.
+		// Other codecs (MPEG-2, MP3, etc.) are silently ignored.
 	}
 }
 
@@ -155,14 +178,14 @@ func (b *Bridge) handleH264Frame(frame *ts.MediaFrame) {
 	sps, pps, found := codec.ExtractSPSPPS(nalus)
 	if found {
 		// Check if the SPS/PPS changed (e.g., mid-stream resolution change)
-		if !b.seqHeaderSent || !bytesEqual(b.sps, sps) || !bytesEqual(b.pps, pps) {
+		if !b.h264SeqHeaderSent || !bytesEqual(b.sps, sps) || !bytesEqual(b.pps, pps) {
 			b.sps = copyBytes(sps)
 			b.pps = copyBytes(pps)
 
 			// Build and send the RTMP video sequence header
 			seqHeader := codec.BuildAVCSequenceHeader(b.sps, b.pps)
 			b.pushVideo(seqHeader, 0)
-			b.seqHeaderSent = true
+			b.h264SeqHeaderSent = true
 
 			b.log.Info("sent H.264 sequence header",
 				"sps_len", len(sps),
@@ -173,7 +196,7 @@ func (b *Bridge) handleH264Frame(frame *ts.MediaFrame) {
 
 	// If we haven't seen SPS/PPS yet, we can't send video frames
 	// because the decoder wouldn't know how to decode them.
-	if !b.seqHeaderSent {
+	if !b.h264SeqHeaderSent {
 		return
 	}
 
@@ -227,6 +250,109 @@ func (b *Bridge) handleH264Frame(frame *ts.MediaFrame) {
 
 	// Build the RTMP video frame payload (AVCC format)
 	payload := codec.BuildAVCVideoFrame(frameNalus, isKey, cts)
+	b.pushVideo(payload, rtmpTS)
+}
+
+// handleH265Frame converts an H.265 access unit from Annex B format
+// (as carried in MPEG-TS) to RTMP's AVCC format and pushes it.
+// H.265 requires three parameter sets (VPS, SPS, PPS) vs. H.264's two (SPS, PPS).
+func (b *Bridge) handleH265Frame(frame *ts.MediaFrame) {
+	// Split the raw data into individual H.265 NAL units.
+	// Annex B format uses start codes (0x00000001) to separate NALUs.
+	// H.265 uses the same Annex B format as H.264.
+	nalus := codec.SplitH265AnnexB(frame.Data)
+	if len(nalus) == 0 {
+		return
+	}
+
+	// Look for VPS, SPS, and PPS NALUs — these are the "decoder configuration"
+	// and must be sent as a sequence header before any H.265 video frames.
+	// H.265 uniquely requires the VPS (Video Parameter Set) in addition to SPS/PPS.
+	vps, sps, pps, found := codec.ExtractH265VPSSPSPPS(nalus)
+	if found {
+		// Check if the parameter sets changed (e.g., mid-stream profile change)
+		// This is important because H.265 allows switching profiles on-the-fly.
+		if !b.h265SeqHeaderSent ||
+			!bytesEqual(b.vps, vps) ||
+			!bytesEqual(b.sps265, sps) ||
+			!bytesEqual(b.pps265, pps) {
+
+			b.vps = copyBytes(vps)
+			b.sps265 = copyBytes(sps)
+			b.pps265 = copyBytes(pps)
+
+			// Build and send the RTMP video sequence header for H.265
+			// The HEVCDecoderConfigurationRecord includes all three parameter sets.
+			seqHeader := codec.BuildHEVCSequenceHeader(b.vps, b.sps265, b.pps265)
+			b.pushVideo(seqHeader, 0)
+			b.h265SeqHeaderSent = true
+
+			b.log.Info("sent H.265 sequence header",
+				"vps_len", len(vps),
+				"sps_len", len(sps),
+				"pps_len", len(pps),
+			)
+		}
+	}
+
+	// If we haven't seen all three parameter sets yet, we can't send video frames
+	// because the decoder wouldn't know how to decode them.
+	if !b.h265SeqHeaderSent {
+		return
+	}
+
+	// Convert timestamps from MPEG-TS (90kHz) to RTMP (1kHz/milliseconds).
+	// We use DTS (Decode Timestamp) as the base RTMP timestamp because
+	// RTMP timestamps represent decode order, not display order.
+	dts := frame.DTS
+	if dts < 0 {
+		dts = frame.PTS // Fallback if DTS not present
+	}
+	if dts < 0 {
+		return // No valid timestamp — skip this frame
+	}
+
+	// Record the first timestamp as our base (so timestamps start at 0)
+	if !b.videoTSSet {
+		b.videoTSBase = dts
+		b.videoTSSet = true
+	}
+
+	// Convert 90kHz → milliseconds
+	rtmpTS := uint32((dts - b.videoTSBase) / 90)
+
+	// Calculate Composition Time Offset (CTS) for B-frame support.
+	// CTS = PTS - DTS, telling the player how to reorder frames for display.
+	// For live streams without B-frames, this is always 0.
+	cts := int32(0)
+	if frame.PTS >= 0 && frame.DTS >= 0 {
+		cts = int32((frame.PTS - frame.DTS) / 90)
+	}
+
+	// Filter out non-VCL (Video Coding Layer) NALUs from the frame data.
+	// VPS, SPS, PPS, and AUD are sent separately or not needed in RTMP.
+	var frameNalus [][]byte
+	for _, nalu := range nalus {
+		naluType := codec.H265NALUType(nalu)
+		// In H.265, parameter set types are: VPS=32, SPS=33, PPS=34, AUD=35
+		if naluType == 32 || naluType == 33 || naluType == 34 || naluType == 35 {
+			// Skip parameter sets and access unit delimiters
+			continue
+		}
+		frameNalus = append(frameNalus, nalu)
+	}
+
+	if len(frameNalus) == 0 {
+		return
+	}
+
+	// Determine if this is a keyframe by checking the first VCL NALU type.
+	// In H.265, keyframes (IDR) have NAL types 16-21.
+	isKey := codec.IsH265KeyframeNALU(frameNalus[0])
+
+	// Build the RTMP video frame payload (AVCC format).
+	// H.265 uses the same AVCC format as H.264 for frame data in RTMP.
+	payload := codec.BuildHEVCVideoFrame(frameNalus, isKey, cts)
 	b.pushVideo(payload, rtmpTS)
 }
 
