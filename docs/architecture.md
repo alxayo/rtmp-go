@@ -100,10 +100,10 @@ Each command is a chunk message with TypeID 20 containing AMF0-encoded values.
 
 ### 5. Media Streaming (`internal/rtmp/media`)
 After the publish command succeeds, OBS begins sending:
-- **Audio messages** (TypeID 8): AAC/MP3 audio frames
-- **Video messages** (TypeID 9): H.264/H.265 video frames
+- **Audio messages** (TypeID 8): AAC/MP3 audio frames, plus Opus and FLAC via Enhanced RTMP
+- **Video messages** (TypeID 9): H.264/H.265 video frames, plus AV1 and VP9 via Enhanced RTMP
 
-The first audio and video messages are typically *sequence headers* — codec configuration data needed by decoders. The server caches these for late-joining subscribers.
+The first audio and video messages are typically *sequence headers* — codec configuration data needed by decoders. The server caches these for late-joining subscribers, including sequence headers for Enhanced RTMP codecs (H.265, AV1, VP9, Opus, FLAC).
 
 ### 6. Media Dispatch (`internal/rtmp/server/media_dispatch.go`)
 Each incoming media message is routed through three paths:
@@ -124,7 +124,7 @@ Each incoming media message is routed through three paths:
 | `internal/rtmp/server` | Listener, stream registry, pub/sub | `Server`, `Registry`, `Stream`, `Config` |
 | `internal/rtmp/server/auth` | Token-based authentication validators | `Validator`, `TokenValidator`, `FileValidator`, `CallbackValidator` |
 | `internal/rtmp/server/hooks` | Event notification (webhooks, shell, stdio) | `HookManager`, `Event`, `Hook` |
-| `internal/rtmp/media` | Audio/video parsing, codec detection, FLV recording | `Recorder`, `CodecDetector`, `Stream` |
+| `internal/rtmp/media` | Audio/video parsing, codec detection (legacy + Enhanced RTMP), FLV recording | `Recorder`, `CodecDetector`, `Stream` |
 | `internal/rtmp/relay` | Multi-destination relay to external servers | `DestinationManager`, `Destination` |
 | `internal/rtmp/metrics` | Expvar counters for live monitoring | `ConnectionsActive`, `ConnectionsTotal`, `BytesIngested` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
@@ -146,7 +146,7 @@ A higher-level concept than CSID. Stream ID 0 is used for control and command me
 The combination of app name and stream name (e.g., `live/mystream`). This is how publishers and subscribers find each other in the registry.
 
 ### Sequence Headers
-The first audio and video messages from a publisher usually contain codec configuration ("sequence headers"). The server caches these so that when a new subscriber joins mid-stream, it can immediately send the cached headers — otherwise the subscriber's decoder wouldn't know how to interpret the media data.
+The first audio and video messages from a publisher usually contain codec configuration ("sequence headers"). The server caches these so that when a new subscriber joins mid-stream, it can immediately send the cached headers — otherwise the subscriber's decoder wouldn't know how to interpret the media data. This applies to both legacy codecs (H.264, AAC) and Enhanced RTMP codecs (H.265, AV1, VP9, Opus, FLAC).
 
 ## Reading Order for New Contributors
 

@@ -46,7 +46,7 @@ DEBUG Media packet (type=audio, csid=4, timestamp=23, length=256)
 |----------------|--------------------------------------------|
 | `conn_id`      | Connection identifier (e.g., c000001)      |
 | `type`         | Media type: "audio" or "video"             |
-| `codec`        | Detected codec: AAC, MP3, H264, H265       |
+| `codec`        | Detected codec: AAC, MP3, H264, H265, AV1, VP9, Opus, FLAC |
 | `audio_packets`| Total audio packets received               |
 | `video_packets`| Total video packets received               |
 | `total_bytes`  | Total media bytes received                 |
@@ -89,10 +89,14 @@ Get-Content server.log | ConvertFrom-Json | Where-Object { $_.msg -eq "Media sta
 - ✅ **AAC** (Advanced Audio Coding) - Most common
 - ✅ **MP3** (MPEG-1 Audio Layer 3)
 - ✅ **Speex** (Speech codec)
+- ✅ **Opus** (Low-latency audio) — via Enhanced RTMP
+- ✅ **FLAC** (Lossless audio) — via Enhanced RTMP
 
 ### Video
 - ✅ **H.264 (AVC)** - Most common
-- ✅ **H.265 (HEVC)** - High efficiency
+- ✅ **H.265 (HEVC)** - High efficiency (legacy CodecID or Enhanced RTMP `hvc1`)
+- ✅ **AV1** (AOMedia Video 1) — via Enhanced RTMP `av01`
+- ✅ **VP9** (Google VP9) — via Enhanced RTMP `vp09`
 
 ## FFmpeg Test Commands
 
@@ -116,6 +120,11 @@ ffmpeg -f lavfi -i testsrc -c:v libx264 -an -f flv rtmp://localhost:1935/live/vi
 ffmpeg -f lavfi -i sine=frequency=1000 -c:a aac -vn -f flv rtmp://localhost:1935/live/audioonly
 ```
 
+### H.265 via Enhanced RTMP (requires FFmpeg 6.1+)
+```powershell
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 -f lavfi -i sine=frequency=440:sample_rate=44100 -c:v libx265 -preset ultrafast -c:a aac -f flv rtmp://localhost:1935/live/hevctest
+```
+
 ### Webcam (Windows)
 ```powershell
 ffmpeg -f dshow -i video="Integrated Camera" -c:v libx264 -f flv rtmp://localhost:1935/live/webcam
@@ -126,7 +135,7 @@ ffmpeg -f dshow -i video="Integrated Camera" -c:v libx264 -f flv rtmp://localhos
 | Problem                      | Solution                                    |
 |------------------------------|---------------------------------------------|
 | No logs appear               | Check FFmpeg is running, try `-log-level debug` |
-| Codec not detected           | Verify codec is supported (AAC/H264)        |
+| Codec not detected           | Verify codec is supported (AAC/H264/H265/AV1/VP9/Opus/FLAC). Enhanced RTMP codecs require FFmpeg 6.1+/OBS 29.1+ |
 | Too many logs                | Switch to `-log-level info`                 |
 | Bitrate shows 0              | Wait for at least one media packet          |
 | Stats not appearing          | Wait 30 seconds after first packet          |

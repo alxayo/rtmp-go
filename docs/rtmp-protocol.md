@@ -92,8 +92,8 @@ The 4-byte Message Stream ID in FMT 0 headers is encoded in **little-endian** �
 | 4 | User Control | Stream lifecycle events (Begin, Ping) |
 | 5 | Window Ack Size | Set acknowledgement window |
 | 6 | Set Peer Bandwidth | Limit output rate |
-| 8 | Audio | Audio data (AAC, MP3, Speex) |
-| 9 | Video | Video data (H.264, H.265) |
+| 8 | Audio | Audio data (AAC, MP3, Speex; Opus, FLAC via Enhanced RTMP) |
+| 9 | Video | Video data (H.264, H.265; AV1, VP9 via Enhanced RTMP) |
 | 20 | Command (AMF0) | Application commands (connect, publish, play) |
 
 ## Control Burst
@@ -184,14 +184,74 @@ For H.264, byte 2 distinguishes:
 - `0x00` = Sequence Header (SPS/PPS — decoder initialization)
 - `0x01` = NALU (actual video data)
 
+## Enhanced RTMP (E-RTMP v2)
+
+Enhanced RTMP extends the legacy audio/video tag format to support modern codecs using FourCC-based signaling, while remaining backward compatible with legacy H.264/AAC streams.
+
+### Video ExHeader Detection
+
+The **IsExHeader** bit (bit 7) of the first video tag byte signals an enhanced packet:
+
+```
+Legacy:     [0FFFC CCC] → bits[7:4]=FrameType, bits[3:0]=CodecID
+Enhanced:   [1FFF PPPP] → bit 7=IsExHeader, bits[6:4]=FrameType, bits[3:0]=VideoPacketType
+                          followed by 4-byte FourCC (codec identifier)
+```
+
+When IsExHeader is set, the next 4 bytes contain a FourCC code identifying the codec:
+
+| FourCC | Codec | Description |
+|--------|-------|-------------|
+| `hvc1` | H.265/HEVC | High Efficiency Video Coding |
+| `av01` | AV1 | AOMedia Video 1 |
+| `vp09` | VP9 | Google VP9 |
+| `avc1` | H.264/AVC | Advanced Video Coding (enhanced path) |
+
+### Audio ExHeader Detection
+
+When SoundFormat (bits 7-4 of first audio byte) equals **9**, the audio message uses the enhanced format:
+
+```
+Enhanced audio: bits[3:0]=AudioPacketType, followed by 4-byte FourCC
+```
+
+| FourCC | Codec | Description |
+|--------|-------|-------------|
+| `Opus` | Opus | Low-latency audio codec |
+| `fLaC` | FLAC | Free Lossless Audio Codec |
+| `ac-3` | AC-3 | Dolby Digital |
+| `ec-3` | E-AC-3 | Dolby Digital Plus |
+| `.mp3` | MP3 | MPEG-1 Audio Layer 3 (enhanced path) |
+
+Note: FourCC values are **case-sensitive** (e.g., `fLaC` not `flac`).
+
+### Connect Negotiation
+
+Clients advertise Enhanced RTMP support by including a `fourCcList` array in the `connect` command's command object:
+
+```
+Client → Server: ["connect", 1.0, {..., "fourCcList":["hvc1","av01","vp09"]}]
+Server → Client: ["_result", 1.0, {...}, {..., "fourCcList":["hvc1","av01","vp09"]}]
+```
+
+The server echoes the supported FourCC codes in its `_result` response.
+
+### Backward Compatibility
+
+Enhanced RTMP is fully backward compatible:
+- Legacy H.264/AAC streams (IsExHeader=0) continue to work unchanged
+- The server auto-detects enhanced packets — no configuration needed
+- Compatible with FFmpeg 6.1+, OBS 29.1+, and SRS 6.0+
+
 ## Sequence Headers
 
 The first audio and video messages from a publisher are typically **sequence headers** — they contain codec configuration data that decoders need before processing any media frames:
 
 - **H.264 Video Sequence Header**: Contains SPS (Sequence Parameter Set) and PPS (Picture Parameter Set) — resolution, profile, frame rate parameters
 - **AAC Audio Sequence Header**: Contains AudioSpecificConfig — sample rate, channel count, codec profile
+- **Enhanced RTMP Sequence Headers**: H.265 (HEVCDecoderConfigurationRecord), AV1 (AV1CodecConfigurationRecord), VP9, Opus, and FLAC each carry their own codec-specific configuration via the enhanced tag format
 
-The server caches these so late-joining subscribers can immediately initialize their decoders.
+The server caches these so late-joining subscribers can immediately initialize their decoders. Caching works for all codecs — both legacy and Enhanced RTMP.
 
 ## Stream Keys
 

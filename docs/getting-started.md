@@ -169,6 +169,12 @@ ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
        -f lavfi -i sine=frequency=440:sample_rate=44100 \
        -c:v libx264 -preset ultrafast -tune zerolatency \
        -c:a aac -f flv rtmp://localhost:1935/live/test
+
+# H.265 via Enhanced RTMP (requires FFmpeg 6.1+ with libx265)
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+       -f lavfi -i sine=frequency=440:sample_rate=44100 \
+       -c:v libx265 -preset ultrafast \
+       -c:a aac -f flv rtmp://localhost:1935/live/test
 ```
 
 ### Subscribe (Watch the Stream)

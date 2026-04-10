@@ -8,7 +8,7 @@ October 11, 2025
 
 ## Overview
 
-Implemented automatic FLV recording functionality for the RTMP server. When enabled via command-line flag, the server now records all incoming streams to disk in FLV format with timestamped filenames.
+Implemented automatic FLV recording functionality for the RTMP server. When enabled via command-line flag, the server now records all incoming streams to disk in FLV format with timestamped filenames. Supports all codecs including Enhanced RTMP (H.265, AV1, VP9, Opus, FLAC) — the recorder writes raw RTMP payloads, preserving enhanced tags transparently.
 
 ---
 

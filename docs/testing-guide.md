@@ -83,6 +83,24 @@ ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
 ffplay rtmp://localhost:1935/live/test
 ```
 
+### H.265 (Enhanced RTMP) Publish + Play
+
+```bash
+# Terminal 1: Start server
+./rtmp-server -listen localhost:1935 -log-level debug
+
+# Terminal 2: Publish H.265 test stream (requires FFmpeg 6.1+ with libx265)
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+       -f lavfi -i sine=frequency=440:sample_rate=44100 \
+       -c:v libx265 -preset ultrafast -c:a aac \
+       -f flv rtmp://localhost:1935/live/test
+
+# Terminal 3: Subscribe
+ffplay rtmp://localhost:1935/live/test
+```
+
+The server auto-detects the Enhanced RTMP H.265 stream via the IsExHeader bit and `hvc1` FourCC — no configuration needed.
+
 ### Recording Verification
 
 ```bash
@@ -113,7 +131,7 @@ All three should display the same stream independently.
 2. Wait 10 seconds (ensure keyframes have been sent)
 3. Start `ffplay` — it should display video immediately (no black screen)
 
-This works because the server caches the H.264 sequence header and sends it to late-joining subscribers.
+This works because the server caches the sequence header (H.264 SPS/PPS, or Enhanced RTMP equivalents for H.265/AV1/VP9) and sends it to late-joining subscribers.
 
 ### Relay Test
 
@@ -159,6 +177,7 @@ See [wireshark_rtmp_capture_guide.md](wireshark_rtmp_capture_guide.md) for detai
 | Publish handler | `server/publish_handler_test.go` | onStatus response, single publisher enforcement |
 | Play handler | `server/play_handler_test.go` | Subscriber addition, sequence header delivery |
 | Media logging | `server/media_logger_test.go` | Packet counting, codec detection, stats |
-| Audio/video parsing | `media/*_test.go` | Codec detection, frame type classification |
+| Audio/video parsing | `media/*_test.go` | Codec detection (legacy + Enhanced RTMP FourCC), frame type classification |
 | Event hooks | `server/hooks/hooks_test.go` | Hook registration, execution, concurrency pool, cleanup |
+| Enhanced RTMP | `media/*_test.go` | IsExHeader detection, FourCC parsing, enhanced sequence headers |
 | Integration | `tests/integration/*_test.go` | Full publish→play flow, multi-subscriber relay |

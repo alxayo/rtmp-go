@@ -18,7 +18,7 @@ internal/
     ├── server/       Listener, stream registry, pub/sub coordination
     │   ├── auth/     Token-based authentication (Validator interface + backends)
     │   └── hooks/    Event hooks (webhooks, shell scripts, stdio output)
-    ├── media/        Audio/video parsing, codec detection, FLV recording
+    ├── media/        Audio/video parsing, codec detection (legacy + Enhanced RTMP), FLV recording
     ├── relay/        Multi-destination forwarding to external RTMP servers
     ├── metrics/      Expvar counters for connections, publishers, subscribers
     └── client/       Minimal RTMP client for testing
@@ -61,12 +61,12 @@ Each command is:
 
 ### 3. Media Flow (`server/media_dispatch.go: dispatchMedia()`)
 
-Once publishing starts, audio (TypeID 8) and video (TypeID 9) messages arrive:
+Once publishing starts, audio (TypeID 8) and video (TypeID 9) messages arrive. The server auto-detects both legacy (H.264/AAC) and Enhanced RTMP (H.265, AV1, VP9, Opus, FLAC) codecs:
 
 ```
 readLoop receives message
   └─ TypeID == 8 or 9?
-      └─ mediaLogger.ProcessMessage()     // count packets, detect codec
+      └─ mediaLogger.ProcessMessage()     // count packets, detect codec (legacy + Enhanced RTMP)
       └─ stream.Recorder.WriteMessage()   // write to FLV file (if recording)
       └─ stream.BroadcastMessage()        // send to all subscribers
       └─ destMgr.RelayMessage()           // forward to external RTMP servers
@@ -126,8 +126,8 @@ type Stream struct {
     Key                 string          // "app/streamName"
     Publisher           interface{}     // The publishing connection
     Subscribers         []Subscriber    // All play clients
-    AudioSequenceHeader *chunk.Message  // Cached AAC config
-    VideoSequenceHeader *chunk.Message  // Cached H.264 SPS/PPS
+    AudioSequenceHeader *chunk.Message  // Cached AAC config (or Enhanced RTMP: Opus, FLAC, etc.)
+    VideoSequenceHeader *chunk.Message  // Cached H.264 SPS/PPS (or Enhanced RTMP: H.265, AV1, VP9)
     Recorder            *media.Recorder // FLV file writer (optional)
 }
 ```

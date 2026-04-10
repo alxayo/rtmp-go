@@ -60,7 +60,16 @@ When broadcasting media to multiple subscribers, each subscriber receives an ind
 
 ### Sequence Header Caching
 
-The first audio and video messages from a publisher typically contain "sequence headers" — codec initialization data (H.264 SPS/PPS, AAC AudioSpecificConfig). The server caches these so that when a new subscriber joins mid-stream, it immediately receives the cached headers. Without this, the subscriber's decoder wouldn't know how to interpret the media data, resulting in a black screen until the next keyframe.
+The first audio and video messages from a publisher typically contain "sequence headers" — codec initialization data (H.264 SPS/PPS, AAC AudioSpecificConfig, or Enhanced RTMP equivalents like H.265 HEVCDecoderConfigurationRecord, AV1 AV1CodecConfigurationRecord, etc.). The server caches these so that when a new subscriber joins mid-stream, it immediately receives the cached headers. Without this, the subscriber's decoder wouldn't know how to interpret the media data, resulting in a black screen until the next keyframe.
+
+### Enhanced RTMP (E-RTMP v2) Support
+
+The server supports Enhanced RTMP for modern codecs (H.265/HEVC, AV1, VP9, Opus, FLAC) alongside legacy H.264/AAC. Key design decisions:
+
+- **Codec-agnostic relay**: Enhanced packets are forwarded transparently as raw bytes — the relay never decodes or re-encodes media payloads. This means any codec supported by Enhanced RTMP works automatically.
+- **O(1) FourCC detection**: Codec identification reads a 4-byte FourCC after the IsExHeader bit check, then looks it up in a `uint32` map. This adds negligible overhead to the media hot path.
+- **Legacy compatibility**: The IsExHeader bit (bit 7 of the first video byte) cleanly separates enhanced packets from legacy. Legacy H.264/AAC streams are unaffected.
+- **No configuration needed**: The server auto-detects enhanced packets at the wire level. There are no flags, config files, or codec whitelists to manage.
 
 ### Event Hooks
 

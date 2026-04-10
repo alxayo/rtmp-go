@@ -46,6 +46,8 @@ This document explains how the rtmp-server implements a **transparent media rela
 Publisher (FFmpeg) → [Raw AAC/H.264 bytes] → Server → [Same bytes] → Subscriber (ffplay)
 ```
 
+**Enhanced RTMP codec transparency**: Enhanced RTMP packets (H.265, AV1, VP9, Opus, FLAC) are forwarded as-is without re-encoding or re-parsing. The relay treats them as opaque byte payloads, so any codec supported by the client and subscriber works automatically through the relay.
+
 ---
 
 ## How ffplay Replays RTMP Streams
