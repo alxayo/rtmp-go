@@ -230,6 +230,107 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		return nil
 	}
 
+	// handleStreamTeardown is a shared helper used by both the deleteStream and
+	// closeStream handlers below. When an RTMP client ends a session, it sends
+	// one of these commands to tell the server to release the stream. Without
+	// this cleanup, the publisher stays registered in the registry even after
+	// the client disconnects, which blocks any new publisher from reusing the
+	// same stream key (they get "publisher already registered" errors).
+	//
+	// This function performs three things:
+	//   1. Clears the publisher or subscriber from the stream registry
+	//   2. Closes any active FLV recorder for the stream
+	//   3. Resets the connection's role and stream key so the disconnect handler
+	//      (which fires later when the TCP connection closes) doesn't try to
+	//      clean up the same state a second time
+	handleStreamTeardown := func(commandName string) {
+		// If no stream was ever published or played on this connection, there
+		// is nothing to clean up. This can happen if the client sends
+		// deleteStream before completing a publish or play handshake.
+		if st.streamKey == "" {
+			log.Debug("stream teardown: no active stream", "command", commandName, "conn_id", c.ID())
+			return
+		}
+
+		log.Info("stream teardown", "command", commandName, "conn_id", c.ID(),
+			"stream_key", st.streamKey, "role", st.role)
+
+		if st.role == "publisher" {
+			// Publisher cleanup: close the recorder and unregister from the
+			// registry so another client can publish to the same stream key.
+			stream := reg.GetStream(st.streamKey)
+			if stream != nil {
+				// Close the FLV recorder (if active) under lock to avoid races
+				// with the media dispatch goroutine that writes to it.
+				stream.mu.Lock()
+				if stream.Recorder != nil {
+					if err := stream.Recorder.Close(); err != nil {
+						log.Error("recorder close error on stream teardown",
+							"error", err, "stream_key", st.streamKey)
+					}
+					stream.Recorder = nil
+				}
+				stream.mu.Unlock()
+			}
+
+			// Remove this connection as the publisher. After this call, a new
+			// client can successfully publish to the same stream key.
+			PublisherDisconnected(reg, st.streamKey, c)
+
+			// Fire the publish-stop hook so external systems (webhooks, scripts)
+			// know the stream has ended.
+			audioPkts, videoPkts, totalBytes, audioCodec, videoCodec := st.mediaLogger.GetStats()
+			durationSec := time.Since(c.AcceptedAt()).Seconds()
+			srv.triggerHookEvent(hooks.EventPublishStop, c.ID(), st.streamKey, map[string]interface{}{
+				"audio_packets": audioPkts,
+				"video_packets": videoPkts,
+				"total_bytes":   totalBytes,
+				"audio_codec":   audioCodec,
+				"video_codec":   videoCodec,
+				"duration_sec":  durationSec,
+			})
+		} else if st.role == "subscriber" {
+			// Subscriber cleanup: remove from the stream's subscriber list.
+			SubscriberDisconnected(reg, st.streamKey, c)
+
+			durationSec := time.Since(c.AcceptedAt()).Seconds()
+			srv.triggerHookEvent(hooks.EventPlayStop, c.ID(), st.streamKey, map[string]interface{}{
+				"duration_sec": durationSec,
+			})
+			// Notify external systems about the updated subscriber count.
+			stream := reg.GetStream(st.streamKey)
+			if stream != nil {
+				srv.triggerHookEvent(hooks.EventSubscriberCount, c.ID(), st.streamKey, map[string]interface{}{
+					"count": stream.SubscriberCount(),
+				})
+			}
+		}
+
+		// Clear the role and stream key so the disconnect handler (which fires
+		// when the TCP connection finally closes) knows there is nothing left
+		// to clean up. Without this, we would double-free the publisher or
+		// subscriber slot.
+		st.role = ""
+		st.streamKey = ""
+	}
+
+	// deleteStream handler: called when the client sends the standard RTMP
+	// "deleteStream" command to release a previously created stream. This is
+	// the primary teardown command defined in the RTMP specification.
+	d.OnDeleteStream = func(values []interface{}, msg *chunk.Message) error {
+		handleStreamTeardown("deleteStream")
+		return nil
+	}
+
+	// closeStream handler: called when the client sends "closeStream" instead
+	// of (or in addition to) "deleteStream". Some RTMP clients like OBS and
+	// certain mobile streaming apps use this non-standard command. It serves
+	// the same purpose as deleteStream so we perform identical cleanup.
+	d.OnCloseStream = func(values []interface{}, msg *chunk.Message) error {
+		handleStreamTeardown("closeStream")
+		return nil
+	}
+
 	c.SetMessageHandler(func(m *chunk.Message) {
 		if m == nil {
 			return

@@ -32,6 +32,11 @@ type (
 	PublishHandler      func(*PublishCommand, *chunk.Message) error
 	PlayHandler         func(*PlayCommand, *chunk.Message) error
 	DeleteStreamHandler func(values []interface{}, msg *chunk.Message) error
+	// CloseStreamHandler handles the "closeStream" command that some RTMP clients
+	// (e.g. OBS, mobile apps) send instead of or in addition to "deleteStream"
+	// when ending a publishing/playback session. The raw AMF0 values are passed
+	// because closeStream has no formally standardized payload structure.
+	CloseStreamHandler func(values []interface{}, msg *chunk.Message) error
 )
 
 // Dispatcher routes AMF0 command messages to registered handlers.
@@ -43,6 +48,7 @@ type Dispatcher struct {
 	OnPublish      PublishHandler
 	OnPlay         PlayHandler
 	OnDeleteStream DeleteStreamHandler
+	OnCloseStream  CloseStreamHandler
 
 	log *slog.Logger
 }
@@ -135,6 +141,16 @@ func (d *Dispatcher) Dispatch(msg *chunk.Message) error {
 			return d.noHandlerErr(name)
 		}
 		return d.OnDeleteStream(vals, msg)
+	case "closeStream":
+		// closeStream is sent by some clients (OBS, mobile apps) when ending
+		// a stream. It serves the same purpose as deleteStream — we route it
+		// to the registered handler so the server can clean up the publisher
+		// or subscriber state and free the stream key for reuse.
+		if d.OnCloseStream == nil {
+			d.log.Debug("ignoring closeStream (no handler registered)")
+			return nil
+		}
+		return d.OnCloseStream(vals, msg)
 	case "releaseStream", "FCPublish", "FCUnpublish":
 		// OBS/FFmpeg pre-publish commands - treat as no-ops for now
 		// These are optional Flash Media Server extensions
