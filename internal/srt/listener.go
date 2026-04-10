@@ -1,9 +1,12 @@
 package srt
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
+
+	srtconn "github.com/alxayo/go-rtmp/internal/srt/conn"
 )
 
 // --- UDP Multiplexing Concept ---
@@ -50,6 +53,10 @@ type ConnRequest struct {
 	// socketID is the SRT socket ID assigned to this connection.
 	socketID uint32
 
+	// conn is the established SRT connection. Set when the handshake
+	// completes and the connection transitions to the connected state.
+	conn *srtconn.Conn
+
 	// accepted is signaled (closed) when the server accepts this connection.
 	accepted chan struct{}
 
@@ -65,6 +72,48 @@ func (r *ConnRequest) StreamID() string { return r.streamID }
 
 // PeerAddr returns the remote UDP address of the connecting client.
 func (r *ConnRequest) PeerAddr() *net.UDPAddr { return r.peerAddr }
+
+// Accept accepts the SRT connection and returns the established Conn.
+// The connection is ready for reading data immediately after Accept returns.
+func (r *ConnRequest) Accept() (*srtconn.Conn, error) {
+	// Signal the handshake FSM that the application accepted
+	close(r.accepted)
+
+	// Return the established connection
+	if r.conn == nil {
+		return nil, fmt.Errorf("SRT connection not established for socket %d", r.socketID)
+	}
+	return r.conn, nil
+}
+
+// Reject rejects the SRT connection with the given reason code.
+// The reason code is sent back to the peer in the handshake rejection.
+func (r *ConnRequest) Reject(reason uint32) {
+	select {
+	case r.rejected <- reason:
+	default:
+	}
+}
+
+// SRT rejection reason codes. These are sent back to the peer to explain
+// why their connection was refused.
+const (
+	// RejectBadRequest indicates the connection was rejected because the
+	// request was malformed (e.g., invalid stream ID format).
+	RejectBadRequest uint32 = 1400
+
+	// RejectUnauthorized indicates authentication failed.
+	RejectUnauthorized uint32 = 1401
+
+	// RejectForbidden indicates the stream key is not allowed.
+	RejectForbidden uint32 = 1403
+
+	// RejectNotFound indicates the requested resource doesn't exist.
+	RejectNotFound uint32 = 1404
+
+	// RejectConflict indicates the stream key is already in use.
+	RejectConflict uint32 = 1409
+)
 
 // srtHeaderMinBytes is the minimum size of an SRT packet header.
 // Every SRT packet (both data and control) has at least a 16-byte header.

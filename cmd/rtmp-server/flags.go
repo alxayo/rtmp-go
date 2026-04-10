@@ -45,6 +45,12 @@ type cliConfig struct {
 	authFile            string   // path to JSON token file (for mode=file)
 	authCallbackURL     string   // webhook URL (for mode=callback)
 	authCallbackTimeout string   // callback HTTP timeout (default "5s")
+
+	// SRT configuration
+	srtListenAddr string // SRT UDP listen address (e.g. ":10080"). Empty = disabled
+	srtLatency    int    // SRT buffer latency in milliseconds (default 120)
+	srtPassphrase string // SRT encryption passphrase (empty = no encryption)
+	srtPbKeyLen   int    // AES key length: 16, 24, or 32 (default 16)
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -85,6 +91,12 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.authFile, "auth-file", "", "Path to JSON token file (for -auth-mode=file)")
 	fs.StringVar(&cfg.authCallbackURL, "auth-callback", "", "Webhook URL for auth validation (for -auth-mode=callback)")
 	fs.StringVar(&cfg.authCallbackTimeout, "auth-callback-timeout", "5s", "Auth callback HTTP timeout")
+
+	// SRT flags
+	fs.StringVar(&cfg.srtListenAddr, "srt-listen", "", "SRT UDP listen address (e.g. :10080). Empty = disabled")
+	fs.IntVar(&cfg.srtLatency, "srt-latency", 120, "SRT buffer latency in milliseconds")
+	fs.StringVar(&cfg.srtPassphrase, "srt-passphrase", "", "SRT encryption passphrase (empty = no encryption)")
+	fs.IntVar(&cfg.srtPbKeyLen, "srt-pbkeylen", 16, "SRT AES key length: 16, 24, or 32")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -145,6 +157,11 @@ func parseFlags(args []string) (*cliConfig, error) {
 		}
 	default:
 		return nil, fmt.Errorf("invalid -auth-mode %q (expected none|token|file|callback)", cfg.authMode)
+	}
+
+	// Validate SRT configuration
+	if cfg.srtPbKeyLen != 0 && cfg.srtPbKeyLen != 16 && cfg.srtPbKeyLen != 24 && cfg.srtPbKeyLen != 32 {
+		return nil, fmt.Errorf("-srt-pbkeylen must be 16, 24, or 32, got %d", cfg.srtPbKeyLen)
 	}
 
 	return cfg, nil

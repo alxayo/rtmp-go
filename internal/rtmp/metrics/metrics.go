@@ -66,6 +66,28 @@ var (
 	RelayBytesSent       = expvar.NewInt("rtmp_relay_bytes_sent")
 )
 
+// ── SRT metrics ─────────────────────────────────────────────────────
+
+var (
+	// SRTConnectionsActive tracks currently connected SRT publishers (gauge).
+	SRTConnectionsActive = expvar.NewInt("srt_connections_active")
+
+	// SRTConnectionsTotal counts all SRT connections ever accepted (counter).
+	SRTConnectionsTotal = expvar.NewInt("srt_connections_total")
+
+	// SRTBytesReceived counts total bytes received over SRT (counter).
+	SRTBytesReceived = expvar.NewInt("srt_bytes_received")
+
+	// SRTPacketsReceived counts total data packets received over SRT (counter).
+	SRTPacketsReceived = expvar.NewInt("srt_packets_received")
+
+	// SRTPacketsRetransmit counts retransmitted packets over SRT (counter).
+	SRTPacketsRetransmit = expvar.NewInt("srt_packets_retransmit")
+
+	// SRTPacketsDropped counts packets dropped due to too-late delivery (counter).
+	SRTPacketsDropped = expvar.NewInt("srt_packets_dropped")
+)
+
 func init() {
 	expvar.Publish("rtmp_uptime_seconds", expvar.Func(func() interface{} {
 		return int64(time.Since(startTime).Seconds())

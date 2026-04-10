@@ -59,6 +59,10 @@ func main() {
 		TLSListenAddr:     cfg.tlsListenAddr,
 		TLSCertFile:       cfg.tlsCertFile,
 		TLSKeyFile:        cfg.tlsKeyFile,
+		SRTListenAddr:     cfg.srtListenAddr,
+		SRTLatency:        cfg.srtLatency,
+		SRTPassphrase:     cfg.srtPassphrase,
+		SRTPbKeyLen:       cfg.srtPbKeyLen,
 	})
 
 	if err := server.Start(); err != nil {
@@ -69,6 +73,9 @@ func main() {
 	log.Info("server started", "addr", server.Addr().String(), "version", version, "auth_mode", cfg.authMode)
 	if server.TLSAddr() != nil {
 		log.Info("RTMPS enabled", "tls_addr", server.TLSAddr().String())
+	}
+	if server.SRTAddr() != nil {
+		log.Info("SRT ingest enabled", "srt_addr", server.SRTAddr().String())
 	}
 
 	// Start HTTP metrics server if configured

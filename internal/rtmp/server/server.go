@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alxayo/go-rtmp/internal/ingress"
 	"github.com/alxayo/go-rtmp/internal/logger"
 	"github.com/alxayo/go-rtmp/internal/rtmp/client"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
@@ -23,6 +24,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
+	"github.com/alxayo/go-rtmp/internal/srt"
 )
 
 // Config holds all settings for the RTMP server.
@@ -51,6 +53,13 @@ type Config struct {
 	// Authentication (optional). When nil, all publish/play requests are allowed.
 	// Set to an auth.Validator implementation to enforce token-based access control.
 	AuthValidator auth.Validator
+
+	// SRT configuration (all optional). When SRTListenAddr is non-empty,
+	// the server starts a UDP listener for SRT ingest alongside RTMP.
+	SRTListenAddr string // SRT UDP listen address (e.g. ":10080"). Empty = disabled
+	SRTLatency    int    // SRT buffer latency in milliseconds (default 120)
+	SRTPassphrase string // SRT encryption passphrase (empty = plaintext)
+	SRTPbKeyLen   int    // AES key length: 16, 24, or 32 (default 16)
 }
 
 // applyDefaults fills zero values with sensible defaults.
@@ -70,6 +79,12 @@ func (c *Config) applyDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if c.SRTLatency == 0 {
+		c.SRTLatency = 120
+	}
+	if c.SRTPbKeyLen == 0 {
+		c.SRTPbKeyLen = 16
+	}
 }
 
 // Server encapsulates listener + active connection tracking.
@@ -77,10 +92,12 @@ type Server struct {
 	cfg                Config
 	l                  net.Listener
 	tlsListener        net.Listener // optional RTMPS listener (nil when TLS disabled)
+	srtListener        *srt.Listener // optional SRT listener (nil when SRT disabled)
 	log                *slog.Logger
 	reg                *Registry
 	destinationManager *relay.DestinationManager
 	hookManager        *hooks.HookManager
+	ingressManager     *ingress.Manager // protocol-agnostic publish manager
 
 	mu          sync.RWMutex
 	conns       map[string]*iconn.Connection
@@ -117,6 +134,7 @@ func New(cfg Config) *Server {
 		log:                logger.Logger().With("component", "rtmp_server"),
 		destinationManager: destMgr,
 		hookManager:        hookMgr,
+		ingressManager:     ingress.NewManager(logger.Logger()),
 	}
 }
 
@@ -160,6 +178,14 @@ func (s *Server) Start() error {
 		s.log.Info("RTMPS server listening", "addr", tlsLn.Addr().String())
 		s.acceptingWg.Add(1)
 		go s.acceptLoop(tlsLn)
+	}
+
+	// Start optional SRT (UDP) listener for SRT ingest
+	if s.cfg.SRTListenAddr != "" {
+		if err := s.startSRTListener(); err != nil {
+			// SRT listener failure is not fatal — RTMP still works
+			s.log.Error("SRT listener failed to start", "error", err)
+		}
 	}
 
 	return nil
@@ -251,10 +277,15 @@ func (s *Server) Stop() error {
 	s.l = nil
 	tlsLn := s.tlsListener
 	s.tlsListener = nil
+	srtLn := s.srtListener
+	s.srtListener = nil
 	s.mu.Unlock()
 	_ = l.Close()
 	if tlsLn != nil {
 		_ = tlsLn.Close()
+	}
+	if srtLn != nil {
+		_ = srtLn.Close()
 	}
 
 	// Close all connections and clean up recorders.
@@ -312,6 +343,16 @@ func (s *Server) TLSAddr() net.Addr {
 		return nil
 	}
 	return s.tlsListener.Addr()
+}
+
+// SRTAddr returns the bound SRT listener address (nil if SRT not enabled).
+func (s *Server) SRTAddr() net.Addr {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.srtListener == nil {
+		return nil
+	}
+	return s.srtListener.Addr()
 }
 
 // ConnectionCount returns current number of tracked active connections.
