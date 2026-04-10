@@ -131,6 +131,39 @@ func IsProtocolError(err error) bool {
 	return stdErrors.As(err, &pm)
 }
 
+// SRTError indicates a failure in the SRT protocol layer (packet parsing,
+// connection management, congestion control, etc.).
+type SRTError struct {
+	Op  string
+	Err error
+}
+
+func (e *SRTError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("srt error: %s", e.Op)
+	}
+	return fmt.Sprintf("srt error: %s: %v", e.Op, e.Err)
+}
+func (e *SRTError) Unwrap() error { return e.Err }
+func (e *SRTError) isProtocol()   {}
+
+// TSError indicates a failure in MPEG-TS demuxing or processing.
+// MPEG-TS (Transport Stream) is the container format carried inside SRT
+// data packets for live video/audio delivery.
+type TSError struct {
+	Op  string
+	Err error
+}
+
+func (e *TSError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("ts error: %s", e.Op)
+	}
+	return fmt.Sprintf("ts error: %s: %v", e.Op, e.Err)
+}
+func (e *TSError) Unwrap() error { return e.Err }
+func (e *TSError) isProtocol()   {}
+
 // Constructors — these create new error instances wrapping an underlying cause.
 // The 'op' parameter describes what operation failed (e.g. "read C0+C1").
 // The 'cause' parameter is the original error that triggered this failure.
@@ -138,6 +171,8 @@ func NewProtocolError(op string, cause error) error  { return &ProtocolError{Op:
 func NewHandshakeError(op string, cause error) error { return &HandshakeError{Op: op, Err: cause} }
 func NewChunkError(op string, cause error) error     { return &ChunkError{Op: op, Err: cause} }
 func NewAMFError(op string, cause error) error       { return &AMFError{Op: op, Err: cause} }
+func NewSRTError(op string, cause error) error       { return &SRTError{Op: op, Err: cause} }
+func NewTSError(op string, cause error) error        { return &TSError{Op: op, Err: cause} }
 func NewTimeoutError(op string, d time.Duration, cause error) error {
 	return &TimeoutError{Op: op, Duration: d, Err: cause}
 }
