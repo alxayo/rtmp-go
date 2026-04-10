@@ -5,8 +5,11 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	srtconn "github.com/alxayo/go-rtmp/internal/srt/conn"
+	"github.com/alxayo/go-rtmp/internal/srt/handshake"
+	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
 
 // --- UDP Multiplexing Concept ---
@@ -33,6 +36,25 @@ import (
 type connKey struct {
 	addr     string // Remote IP:port as a string (e.g., "192.168.1.5:12345")
 	socketID uint32 // Peer's SRT socket ID (0 during initial handshake)
+}
+
+// pendingHandshake tracks a connection that is in the middle of the two-phase
+// SRT handshake. After we send the Induction response (Phase 1), we store
+// the state here. When the Conclusion arrives (Phase 2), we look it up to
+// finish the handshake and create the connection.
+type pendingHandshake struct {
+	// hsListener is the per-connection handshake FSM. Each connection gets
+	// its own instance because each has a unique local socket ID.
+	hsListener *handshake.Listener
+
+	// localSID is the unique local socket ID assigned to this connection.
+	// The peer uses this as DestSocketID in all packets sent to us.
+	localSID uint32
+
+	// remoteAddr is the string form of the peer's UDP address (e.g.,
+	// "192.168.1.5:12345"). Used as a map key for retransmitted Inductions
+	// where DestSocketID is still 0.
+	remoteAddr string
 }
 
 // ConnRequest represents a pending SRT connection that has completed
@@ -150,6 +172,37 @@ type Listener struct {
 	// log is the structured logger for this listener, tagged with
 	// component="srt_listener" for easy filtering in logs.
 	log *slog.Logger
+
+	// --- Connection Tracking ---
+	//
+	// These maps track SRT connections through their lifecycle:
+	//   Induction → pendingByAddr + pendingBySID → Conclusion → conns
+	//
+	// All maps are protected by connsMu. The readLoop goroutine is the
+	// primary writer (during handshakes), but Close() also modifies them.
+
+	// connsMu protects conns, pendingByAddr, and pendingBySID maps.
+	connsMu sync.RWMutex
+
+	// conns maps our local socket ID → established SRT connection.
+	// Once a handshake completes, the connection is stored here so
+	// incoming data/control packets can be routed to it.
+	conns map[uint32]*srtconn.Conn
+
+	// pendingByAddr maps remote address string → pending handshake.
+	// Used when we receive an Induction (DestSocketID is 0), so we can
+	// only identify the connection by the sender's IP:port.
+	pendingByAddr map[string]*pendingHandshake
+
+	// pendingBySID maps our local socket ID → pending handshake.
+	// Used when we receive a Conclusion (DestSocketID is the local SID
+	// we assigned during Induction).
+	pendingBySID map[uint32]*pendingHandshake
+
+	// nextSocketID generates unique local socket IDs for new connections.
+	// Each new handshake gets the next value. Starts at 1 because 0 is
+	// reserved for handshake packets (DestSocketID=0 means "new connection").
+	nextSocketID atomic.Uint32
 }
 
 // Listen creates and starts an SRT listener on the given UDP address.
@@ -191,11 +244,18 @@ func Listen(addr string, cfg Config) (*Listener, error) {
 	)
 
 	l := &Listener{
-		udpConn:    udpConn,
-		config:     cfg,
-		acceptChan: make(chan *ConnRequest, 16),
-		log:        log,
+		udpConn:       udpConn,
+		config:        cfg,
+		acceptChan:    make(chan *ConnRequest, 16),
+		log:           log,
+		conns:         make(map[uint32]*srtconn.Conn),
+		pendingByAddr: make(map[string]*pendingHandshake),
+		pendingBySID:  make(map[uint32]*pendingHandshake),
 	}
+
+	// Socket IDs start at 1. Zero is reserved for handshake packets
+	// (DestSocketID=0 means "this is a new connection, not yet assigned").
+	l.nextSocketID.Store(1)
 
 	// Start the read loop in a background goroutine. This goroutine
 	// runs for the lifetime of the listener, reading UDP packets and
@@ -242,6 +302,7 @@ func (l *Listener) readLoop() {
 		l.log.Debug("SRT UDP packet received",
 			"remote", remoteAddr.String(),
 			"bytes", n,
+			"hex", fmt.Sprintf("%x", buf[:n]),
 		)
 
 		// Make a copy of the received data. We must copy because the
@@ -255,19 +316,18 @@ func (l *Listener) readLoop() {
 	}
 }
 
-// dispatch routes an incoming UDP packet to the correct SRT connection.
+// dispatch routes an incoming UDP packet to the correct SRT connection
+// or handshake handler.
 //
-// Currently (Phase 4), this is a placeholder that just validates the
-// minimum packet size. The full dispatch logic — looking up connections
-// by (remoteAddr, socketID), handling handshake packets, and forwarding
-// data packets — will be wired in Phase 5 when the handshake FSM is added.
+// The routing logic works as follows:
 //
-// The general approach will be:
-//  1. Parse the SRT header to extract the destination socket ID
-//  2. If socketID == 0, it's a handshake → look up by remoteAddr only
-//  3. Otherwise, look up by (remoteAddr, socketID)
-//  4. If found, forward to that connection's packet handler
-//  5. If not found and it's a handshake, start a new handshake FSM
+//  1. Parse the 16-byte SRT header to get DestSocketID and the control flag.
+//  2. If DestSocketID == 0, this is a new connection starting a handshake
+//     (Induction phase). Route to handleInduction().
+//  3. If DestSocketID != 0, look up the connection:
+//     a. First check established connections (conns map) → forward the packet
+//     b. Then check pending handshakes (pendingBySID map) → handle Conclusion
+//     c. If neither found, discard the packet (stale or misrouted)
 func (l *Listener) dispatch(data []byte, from *net.UDPAddr) {
 	// Every valid SRT packet has at least a 16-byte header.
 	// Discard anything smaller — it's either corrupted or not SRT.
@@ -280,16 +340,466 @@ func (l *Listener) dispatch(data []byte, from *net.UDPAddr) {
 		return
 	}
 
-	l.log.Debug("SRT packet dispatching",
+	// Step 1: Parse the common 16-byte SRT header.
+	// This tells us whether it's a control or data packet, and gives us
+	// the DestSocketID which is how we route it to the right connection.
+	hdr, err := packet.ParseHeader(data)
+	if err != nil {
+		l.log.Debug("SRT header parse failed",
+			"remote", from.String(),
+			"error", err,
+		)
+		return
+	}
+
+	// Step 2: Route based on DestSocketID.
+	if hdr.DestSocketID == 0 {
+		// DestSocketID == 0 means this is either:
+		//   a) An Induction packet from a new client (first contact)
+		//   b) A Conclusion packet from a client that just completed Induction
+		//
+		// In the SRT v5 handshake, the Induction response echoes the caller's
+		// CIF SocketID back (not the listener's SID). So the caller doesn't
+		// know our local SID yet and sends the Conclusion with DestSocketID=0.
+		// We route based on the CIF handshake type to distinguish the two.
+		l.handleHandshakePacket(data, from)
+		return
+	}
+
+	// Step 3a: Check if this belongs to an established connection.
+	// This is the hot path for media data — just a map lookup and forward.
+	l.connsMu.RLock()
+	conn, found := l.conns[hdr.DestSocketID]
+	l.connsMu.RUnlock()
+
+	if found {
+		// Forward the raw packet to the connection's receive handler.
+		// It will parse the full packet internally and handle data vs
+		// control (ACK, NAK, keepalive, etc.) appropriately.
+		conn.RecvPacket(data)
+		return
+	}
+
+	// Step 3b: Check if this is a Conclusion for a pending handshake.
+	// After Induction, the peer sends its Conclusion with DestSocketID
+	// set to the local SID we assigned. We need to look it up in the
+	// pending handshakes map.
+	l.connsMu.RLock()
+	pending, found := l.pendingBySID[hdr.DestSocketID]
+	l.connsMu.RUnlock()
+
+	if found {
+		l.handleConclusion(data, from, pending)
+		return
+	}
+
+	// Neither an established connection nor a pending handshake.
+	// This could be a stale packet from a connection that was already
+	// closed, or a misrouted packet. Just discard it.
+	l.log.Debug("SRT packet for unknown socket ID (discarded)",
 		"remote", from.String(),
-		"bytes", len(data),
+		"dest_socket_id", hdr.DestSocketID,
+		"is_control", hdr.IsControl,
+	)
+}
+
+// handleHandshakePacket routes a handshake packet (DestSocketID=0) to the
+// correct handler based on its CIF type: Induction or Conclusion.
+//
+// In SRT v5, both Induction AND Conclusion can arrive with DestSocketID=0
+// because the Induction response echoes the caller's CIF SocketID (not the
+// listener's SID). The caller doesn't learn our SID until the Conclusion
+// response. So we need to parse the CIF to tell them apart.
+func (l *Listener) handleHandshakePacket(data []byte, from *net.UDPAddr) {
+	remoteAddr := from.String()
+
+	// Parse the raw bytes as an SRT control packet.
+	ctrl, err := packet.UnmarshalControlPacket(data)
+	if err != nil {
+		l.log.Debug("SRT failed to parse control packet",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		return
+	}
+
+	// Verify it's a Handshake control packet (type 0x0000).
+	if ctrl.Type != packet.CtrlHandshake {
+		l.log.Debug("SRT expected Handshake control packet, got different type",
+			"remote", remoteAddr,
+			"control_type", ctrl.Type,
+		)
+		return
+	}
+
+	// Parse the Handshake CIF to determine the handshake phase.
+	hs, err := packet.UnmarshalHandshakeCIF(ctrl.CIF)
+	if err != nil {
+		l.log.Debug("SRT failed to parse Handshake CIF",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		return
+	}
+
+	// Route based on the handshake type in the CIF.
+	switch hs.Type {
+	case packet.HSTypeInduction:
+		// First contact from a new client. Process the Induction.
+		l.handleInduction(hs, ctrl, from)
+
+	case packet.HSTypeConclusion:
+		// Second phase — the client is responding to our Induction with
+		// a Conclusion. Look up the pending handshake by source address.
+		l.connsMu.RLock()
+		pending, found := l.pendingByAddr[remoteAddr]
+		l.connsMu.RUnlock()
+
+		if !found {
+			l.log.Debug("SRT Conclusion from unknown address (no pending handshake)",
+				"remote", remoteAddr,
+			)
+			return
+		}
+		l.handleConclusion(data, from, pending)
+
+	default:
+		l.log.Debug("SRT unexpected handshake type with DestSocketID=0",
+			"remote", remoteAddr,
+			"handshake_type", hs.Type,
+		)
+	}
+}
+
+// handleInduction processes the first phase of the SRT handshake.
+//
+// When a new client wants to connect, it sends an Induction packet with
+// DestSocketID=0. We:
+//  1. Assign a unique local socket ID for this new connection
+//  2. Create a per-connection handshake FSM
+//  3. Process the Induction and generate a response with a SYN cookie
+//  4. Send the response back to the client
+//  5. Store the pending handshake so we can handle the Conclusion later
+//
+// The CIF and control packet are already parsed by handleHandshakePacket.
+func (l *Listener) handleInduction(hs *packet.HandshakeCIF, _ *packet.ControlPacket, from *net.UDPAddr) {
+	remoteAddr := from.String()
+
+	// Check if we already have a pending handshake from this address.
+	// If so, this is a retransmitted Induction (the client didn't receive
+	// our response and is trying again). We reuse the existing state.
+	l.connsMu.RLock()
+	existing, isRetransmit := l.pendingByAddr[remoteAddr]
+	l.connsMu.RUnlock()
+
+	l.log.Debug("SRT Induction received",
+		"remote", remoteAddr,
+		"peer_socket_id", hs.SocketID,
+		"version", hs.Version,
+		"is_retransmit", isRetransmit,
 	)
 
-	// Phase 5 will add:
-	// - SRT header parsing to extract socketID and packet type
-	// - Connection lookup in a map keyed by connKey{addr, socketID}
-	// - Handshake initiation for new connections
-	// - Packet forwarding for established connections
+	// Determine the handshake FSM to use. Reuse if retransmit, create new otherwise.
+	var ph *pendingHandshake
+	if isRetransmit {
+		ph = existing
+	} else {
+		// Assign a new unique local socket ID for this connection.
+		// This ID is what the peer will use as DestSocketID in future packets.
+		localSID := l.nextSocketID.Add(1)
+
+		// Create a per-connection handshake FSM with our assigned socket ID.
+		hsListener := handshake.NewListener(
+			localSID,
+			uint16(l.config.Latency),
+			uint32(l.config.MTU),
+			uint32(l.config.FlowWindow),
+			l.log,
+		)
+
+		ph = &pendingHandshake{
+			hsListener: hsListener,
+			localSID:   localSID,
+			remoteAddr: remoteAddr,
+		}
+
+		// Store in both lookup maps:
+		// - pendingByAddr: for retransmitted Inductions (DestSocketID still 0)
+		// - pendingBySID: for the Conclusion (DestSocketID = our local SID)
+		l.connsMu.Lock()
+		l.pendingByAddr[remoteAddr] = ph
+		l.pendingBySID[localSID] = ph
+		l.connsMu.Unlock()
+	}
+
+	// Process the Induction through the handshake FSM.
+	// This generates a SYN cookie and builds the Induction response CIF.
+	respCIF, err := ph.hsListener.HandleInduction(hs, from)
+	if err != nil {
+		l.log.Warn("SRT Induction handling failed",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		// Clean up the pending handshake on failure
+		l.connsMu.Lock()
+		delete(l.pendingByAddr, remoteAddr)
+		delete(l.pendingBySID, ph.localSID)
+		l.connsMu.Unlock()
+		return
+	}
+
+	// Send the Induction response back to the client.
+	// DestSocketID in the response header MUST be the caller's socket ID
+	// (from the CIF, not the header — during Induction the header DestSID
+	// is 0). The caller uses the header DestSocketID to route the response
+	// back to the correct socket in its internal multiplexer.
+	if err := l.sendHandshakeResponse(respCIF, hs.SocketID, from); err != nil {
+		l.log.Warn("SRT failed to send Induction response",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		return
+	}
+
+	l.log.Debug("SRT Induction response sent",
+		"remote", remoteAddr,
+		"local_socket_id", ph.localSID,
+		"cookie", respCIF.SYNCookie,
+	)
+}
+
+// handleConclusion processes the second phase of the SRT handshake.
+//
+// After receiving our Induction response (with a SYN cookie), the client
+// sends a Conclusion that echoes the cookie and includes extensions
+// (HSREQ for capabilities, SID for stream ID). We:
+//  1. Parse the handshake CIF from the packet
+//  2. Validate the cookie and negotiate parameters via the handshake FSM
+//  3. Create an SRT connection with the negotiated settings
+//  4. Send the Conclusion response back to the client
+//  5. Push a ConnRequest to the accept channel for the server to handle
+func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingHandshake) {
+	remoteAddr := from.String()
+
+	// Parse the control packet and handshake CIF.
+	ctrl, err := packet.UnmarshalControlPacket(data)
+	if err != nil {
+		l.log.Debug("SRT failed to parse control packet during Conclusion",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		return
+	}
+
+	if ctrl.Type != packet.CtrlHandshake {
+		l.log.Debug("SRT expected Handshake during Conclusion, got different type",
+			"remote", remoteAddr,
+			"control_type", ctrl.Type,
+		)
+		return
+	}
+
+	hs, err := packet.UnmarshalHandshakeCIF(ctrl.CIF)
+	if err != nil {
+		l.log.Debug("SRT failed to parse Conclusion CIF",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		return
+	}
+
+	// The Conclusion should have Type=HSTypeConclusion, but we also
+	// handle retransmitted Inductions (which arrive at the same SID).
+	if hs.Type == packet.HSTypeInduction {
+		l.log.Debug("SRT received retransmitted Induction on pending SID, re-handling",
+			"remote", remoteAddr,
+			"local_sid", ph.localSID,
+		)
+		l.handleInduction(hs, ctrl, from)
+		return
+	}
+
+	if hs.Type != packet.HSTypeConclusion {
+		l.log.Debug("SRT expected Conclusion handshake, got different type",
+			"remote", remoteAddr,
+			"handshake_type", hs.Type,
+		)
+		return
+	}
+
+	l.log.Debug("SRT Conclusion received",
+		"remote", remoteAddr,
+		"peer_socket_id", hs.SocketID,
+		"local_socket_id", ph.localSID,
+		"cookie", hs.SYNCookie,
+		"num_extensions", len(hs.Extensions),
+	)
+
+	// Process the Conclusion through the handshake FSM.
+	// This validates the SYN cookie, parses extensions (HSREQ, SID),
+	// negotiates parameters (TSBPD, MTU, flags), and builds the response.
+	respCIF, result, err := ph.hsListener.HandleConclusion(hs, from)
+	if err != nil {
+		l.log.Warn("SRT Conclusion handling failed",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		// Clean up the pending handshake
+		l.connsMu.Lock()
+		delete(l.pendingByAddr, ph.remoteAddr)
+		delete(l.pendingBySID, ph.localSID)
+		l.connsMu.Unlock()
+		return
+	}
+
+	// Build the connection configuration from the negotiated handshake result.
+	connCfg := srtconn.ConnConfig{
+		MTU:            result.MTU,
+		FlowWindow:     result.FlowWindow,
+		TSBPDDelay:     uint32(result.LocalTSBPD),
+		PeerTSBPDDelay: uint32(result.PeerTSBPD),
+		InitialSeqNum:  result.InitialSeqNum,
+		PayloadSize:    result.MTU - 16, // SRT header is 16 bytes
+	}
+
+	// Create the SRT connection. It shares the listener's UDP socket
+	// for sending packets back to the peer.
+	conn := srtconn.New(
+		ph.localSID,
+		result.PeerSocketID,
+		from,
+		l.udpConn,
+		result.StreamID,
+		connCfg,
+		l.log,
+	)
+
+	// Move from pending → established in the connection maps.
+	l.connsMu.Lock()
+	delete(l.pendingByAddr, ph.remoteAddr)
+	delete(l.pendingBySID, ph.localSID)
+	l.conns[ph.localSID] = conn
+	l.connsMu.Unlock()
+
+	// Send the Conclusion response back to the client.
+	// DestSocketID is the peer's socket ID (they told us in the CIF).
+	if err := l.sendHandshakeResponse(respCIF, result.PeerSocketID, from); err != nil {
+		l.log.Warn("SRT failed to send Conclusion response",
+			"remote", remoteAddr,
+			"error", err,
+		)
+		// Remove the connection we just added since handshake didn't complete
+		l.connsMu.Lock()
+		delete(l.conns, ph.localSID)
+		l.connsMu.Unlock()
+		conn.Close()
+		return
+	}
+
+	l.log.Info("SRT handshake completed",
+		"remote", remoteAddr,
+		"local_socket_id", ph.localSID,
+		"peer_socket_id", result.PeerSocketID,
+		"stream_id", result.StreamID,
+		"mtu", result.MTU,
+		"flow_window", result.FlowWindow,
+	)
+
+	// Create a ConnRequest and push it to the accept channel.
+	// The server's accept loop will pick it up and wire the connection
+	// into the media pipeline (SRT→RTMP bridge, recording, relay, etc.).
+	req := &ConnRequest{
+		streamID: result.StreamID,
+		peerAddr: from,
+		socketID: ph.localSID,
+		conn:     conn,
+		accepted: make(chan struct{}),
+		rejected: make(chan uint32, 1),
+	}
+
+	// Use a non-blocking send to avoid stalling the readLoop if the
+	// accept channel is full (which would block ALL SRT packet processing).
+	select {
+	case l.acceptChan <- req:
+		l.log.Debug("SRT ConnRequest queued for accept",
+			"remote", remoteAddr,
+			"stream_id", result.StreamID,
+		)
+	default:
+		l.log.Warn("SRT accept channel full, dropping connection",
+			"remote", remoteAddr,
+			"stream_id", result.StreamID,
+		)
+		l.connsMu.Lock()
+		delete(l.conns, ph.localSID)
+		l.connsMu.Unlock()
+		conn.Close()
+	}
+}
+
+// sendHandshakeResponse wraps a handshake CIF in an SRT control packet
+// and sends it back to the peer via the shared UDP socket.
+//
+// Parameters:
+//   - cif: The handshake CIF to send (built by the handshake FSM)
+//   - destSocketID: The DestSocketID for the control packet header.
+//     For Induction: the caller's CIF SocketID (so libsrt can route the reply).
+//     For Conclusion: the peer's socket ID.
+//   - to: The peer's UDP address to send to
+func (l *Listener) sendHandshakeResponse(cif *packet.HandshakeCIF, destSocketID uint32, to *net.UDPAddr) error {
+	// Step 1: Serialize the handshake CIF to binary.
+	cifBytes, err := cif.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshal handshake CIF: %w", err)
+	}
+
+	// Step 2: Wrap the CIF in an SRT control packet.
+	// Control packets have the F bit set to 1, with Type=Handshake (0x0000).
+	ctrl := &packet.ControlPacket{
+		Header: packet.Header{
+			IsControl:    true,
+			Timestamp:    0, // Handshake packets use timestamp 0
+			DestSocketID: destSocketID,
+		},
+		Type: packet.CtrlHandshake,
+		CIF:  cifBytes,
+	}
+
+	// Step 3: Serialize the complete control packet to wire format.
+	ctrlBytes, err := ctrl.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("marshal control packet: %w", err)
+	}
+
+	// Log the hex bytes for debugging handshake wire format
+	l.log.Debug("SRT sending handshake response (hex)",
+		"dest_socket_id", destSocketID,
+		"total_bytes", len(ctrlBytes),
+		"cif_bytes", len(cifBytes),
+		"hex", fmt.Sprintf("%x", ctrlBytes),
+		"cif_version", cif.Version,
+		"cif_ext_field", fmt.Sprintf("0x%04x", cif.ExtensionField),
+		"cif_type", fmt.Sprintf("0x%08x", uint32(cif.Type)),
+		"cif_socket_id", cif.SocketID,
+		"cif_cookie", cif.SYNCookie,
+	)
+
+	// Step 4: Send the packet via the shared UDP socket.
+	_, err = l.udpConn.WriteToUDP(ctrlBytes, to)
+	if err != nil {
+		return fmt.Errorf("send handshake response to %s: %w", to.String(), err)
+	}
+
+	return nil
+}
+
+// RemoveConn removes an established connection from the listener's
+// connection registry. Call this after a connection has been closed
+// to free the map entry and allow the socket ID to be reused.
+func (l *Listener) RemoveConn(localSID uint32) {
+	l.connsMu.Lock()
+	delete(l.conns, localSID)
+	l.connsMu.Unlock()
 }
 
 // Accept blocks until a new SRT connection completes its handshake,
@@ -329,6 +839,21 @@ func (l *Listener) Close() error {
 	l.mu.Lock()
 	l.closing = true
 	l.mu.Unlock()
+
+	// Close all established connections gracefully.
+	l.connsMu.Lock()
+	for sid, conn := range l.conns {
+		conn.Close()
+		delete(l.conns, sid)
+	}
+	// Clear pending handshakes (they'll never complete).
+	for addr := range l.pendingByAddr {
+		delete(l.pendingByAddr, addr)
+	}
+	for sid := range l.pendingBySID {
+		delete(l.pendingBySID, sid)
+	}
+	l.connsMu.Unlock()
 
 	// Close the accept channel so any goroutine blocked on Accept()
 	// will get net.ErrClosed.

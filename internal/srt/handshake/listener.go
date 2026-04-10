@@ -130,9 +130,13 @@ func NewListener(localSocketID uint32, latency uint16, mtu, flowWindow uint32, l
 // The caller sends a v4-format (or v5) handshake with cookie=0 and
 // Type=HSTypeInduction. We respond with:
 //   - Version 5 (telling the caller we speak SRT v5)
-//   - Our socket ID
+//   - The caller's fields echoed back (ISN, MTU, FlowWindow, SocketID, PeerIP)
 //   - A SYN cookie derived from the caller's address
 //   - The SRT magic value (0x4A17) in the ExtensionField
+//
+// The Induction response echoes most of the caller's CIF fields back.
+// This is how libsrt validates that the response belongs to its request.
+// Only Version, ExtensionField, and Cookie are changed by the listener.
 //
 // Returns the Induction response CIF to send back to the caller.
 func (l *Listener) HandleInduction(hs *packet.HandshakeCIF, from *net.UDPAddr) (*packet.HandshakeCIF, error) {
@@ -153,14 +157,12 @@ func (l *Listener) HandleInduction(hs *packet.HandshakeCIF, from *net.UDPAddr) (
 	// The caller must echo this cookie back in the Conclusion phase.
 	cookie := l.cookie.Generate(from)
 
-	// Step 3: Generate a random initial sequence number (31-bit).
-	// This will be used as the starting sequence number for data packets.
-	initialSeq, err := generateInitialSeqNum()
-	if err != nil {
-		return nil, fmt.Errorf("generate initial sequence number: %w", err)
-	}
-
-	// Step 4: Build the Induction response CIF.
+	// Step 3: Build the Induction response CIF.
+	// Per the SRT reference implementation (libsrt), the Induction response
+	// ECHOES most of the caller's CIF fields. This allows the caller to
+	// verify the response corresponds to its Induction request. The fields
+	// we change are: Version (upgraded to 5), ExtensionField (SRT magic),
+	// EncryptionField (cleared), and SYNCookie (our generated cookie).
 	resp := &packet.HandshakeCIF{
 		// Version 5 tells the caller we support SRT v5 handshake.
 		Version: 5,
@@ -173,29 +175,34 @@ func (l *Listener) HandleInduction(hs *packet.HandshakeCIF, from *net.UDPAddr) (
 		// is an SRT v5 listener, not a legacy UDT server.
 		ExtensionField: srtMagic,
 
-		// Our random initial sequence number.
-		InitialSeqNumber: initialSeq,
+		// Echo back the caller's initial sequence number. The real SRT
+		// server echoes this rather than generating a new random one.
+		InitialSeqNumber: hs.InitialSeqNumber,
 
-		// Our MTU and flow window — the caller uses these to set up its
-		// send buffer. The final negotiated values will be the minimum
-		// of both sides' values.
-		MTU:        l.mtu,
-		FlowWindow: l.flowWindow,
+		// Echo the caller's MTU and flow window values. Final negotiation
+		// of these happens in the Conclusion phase.
+		MTU:        hs.MTU,
+		FlowWindow: hs.FlowWindow,
 
 		// This is our Induction response.
 		Type: packet.HSTypeInduction,
 
-		// Our socket ID — the caller will use this as DestSocketID in
-		// future packets sent to us.
-		SocketID: l.localSID,
+		// Echo the caller's socket ID back. This is critical — libsrt
+		// uses this to match the response to the pending request. The
+		// listener's own socket ID is sent later in the Conclusion.
+		SocketID: hs.SocketID,
 
-		// The SYN cookie the caller must echo back.
+		// The SYN cookie the caller must echo back in the Conclusion.
 		SYNCookie: cookie,
+
+		// Echo the caller's PeerIP back. The reference SRT implementation
+		// echoes the caller's IP as seen in the Induction request.
+		PeerIP: hs.PeerIP,
 	}
 
 	l.log.Debug("induction response ready",
 		"cookie", cookie,
-		"initial_seq", initialSeq,
+		"peer_socket_id", hs.SocketID,
 	)
 
 	return resp, nil

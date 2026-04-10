@@ -38,14 +38,17 @@ func TestHandleInductionValid(t *testing.T) {
 	}
 
 	// Verify response fields.
+	// The Induction response echoes most of the caller's CIF fields back,
+	// per the SRT v5 spec (matching libsrt behavior).
 	if resp.Version != 5 {
 		t.Errorf("Version: got %d, want 5", resp.Version)
 	}
 	if resp.Type != packet.HSTypeInduction {
 		t.Errorf("Type: got %d, want HSTypeInduction (%d)", resp.Type, packet.HSTypeInduction)
 	}
-	if resp.SocketID != 42 {
-		t.Errorf("SocketID: got %d, want 42 (our local SID)", resp.SocketID)
+	// SocketID is echoed back from the caller (99), NOT our local SID (42).
+	if resp.SocketID != 99 {
+		t.Errorf("SocketID: got %d, want 99 (caller's SID echoed)", resp.SocketID)
 	}
 	if resp.SYNCookie == 0 {
 		t.Error("SYNCookie: got 0, expected non-zero cookie")
@@ -53,11 +56,15 @@ func TestHandleInductionValid(t *testing.T) {
 	if resp.ExtensionField != 0x4A17 {
 		t.Errorf("ExtensionField: got 0x%04X, want 0x4A17 (SRT magic)", resp.ExtensionField)
 	}
+	// MTU, FlowWindow, and ISN are echoed from the caller's request.
 	if resp.MTU != 1500 {
 		t.Errorf("MTU: got %d, want 1500", resp.MTU)
 	}
 	if resp.FlowWindow != 8192 {
 		t.Errorf("FlowWindow: got %d, want 8192", resp.FlowWindow)
+	}
+	if resp.InitialSeqNumber != 1000 {
+		t.Errorf("InitialSeqNumber: got %d, want 1000 (caller's ISN echoed)", resp.InitialSeqNumber)
 	}
 }
 
