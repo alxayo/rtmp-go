@@ -65,7 +65,7 @@ func parseFlags(args []string) (*cliConfig, error) {
 
 	fs.StringVar(&cfg.listenAddr, "listen", ":1935", "TCP listen address (e.g. :1935 or 0.0.0.0:1935)")
 	fs.StringVar(&cfg.logLevel, "log-level", "info", "Log level: debug|info|warn|error")
-	fs.BoolVar(&cfg.recordAll, "record-all", false, "Enable recording of all streams to -record-dir")
+	fs.Var(&explicitBool{&cfg.recordAll}, "record-all", "Enable recording of all streams to -record-dir (true/false)")
 	fs.StringVar(&cfg.recordDir, "record-dir", "recordings", "Directory to write FLV recordings")
 	fs.UintVar(&cfg.chunkSize, "chunk-size", 4096, "Initial outbound chunk size")
 	fs.BoolVar(&cfg.showVersion, "version", false, "Print version and exit")
@@ -165,6 +165,41 @@ func parseFlags(args []string) (*cliConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// explicitBool implements flag.Value for boolean flags that require an explicit
+// value argument (e.g. "-record-all true" or "-record-all=false").
+//
+// Why: Go's flag package treats built-in bool flags specially — writing
+// "-record-all true" does NOT consume "true" as the flag's value. Instead,
+// "true" becomes a positional argument, which stops all further flag parsing.
+// This means any flags AFTER -record-all (like -log-level) silently keep
+// their default values. By using a custom Value type without IsBoolFlag(),
+// we force the flag package to consume the next argument as the value.
+type explicitBool struct {
+	val *bool
+}
+
+func (b *explicitBool) String() string {
+	if b.val == nil {
+		return "false"
+	}
+	if *b.val {
+		return "true"
+	}
+	return "false"
+}
+
+func (b *explicitBool) Set(s string) error {
+	switch strings.ToLower(s) {
+	case "true", "1", "yes":
+		*b.val = true
+	case "false", "0", "no":
+		*b.val = false
+	default:
+		return fmt.Errorf("invalid boolean value %q (use true/false)", s)
+	}
+	return nil
 }
 
 // stringSliceFlag implements flag.Value for multiple string values
