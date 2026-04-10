@@ -121,3 +121,81 @@ func TestDispatcher_NoHandlerRegistered(t *testing.T) {
 		t.Fatalf("expected error for missing publish handler")
 	}
 }
+
+// TestDispatcher_DeleteStream verifies that the deleteStream command is
+// dispatched to the registered handler with the raw AMF0 values.
+func TestDispatcher_DeleteStream(t *testing.T) {
+	var called bool
+	d := NewDispatcher(nil)
+	d.OnDeleteStream = func(vals []interface{}, msg *chunk.Message) error {
+		called = true
+		// The first value in the decoded AMF0 payload should be the command
+		// name string "deleteStream".
+		if len(vals) < 1 {
+			t.Fatal("expected at least 1 value")
+		}
+		name, ok := vals[0].(string)
+		if !ok || name != "deleteStream" {
+			t.Fatalf("expected command name 'deleteStream', got %v", vals[0])
+		}
+		return nil
+	}
+	// deleteStream payload: name="deleteStream", txnID=0, null, streamID=1
+	if err := d.Dispatch(buildCmd(t, "deleteStream", 0.0, nil, 1.0)); err != nil {
+		t.Fatalf("dispatch deleteStream: %v", err)
+	}
+	if !called {
+		t.Fatal("deleteStream handler was not invoked")
+	}
+}
+
+// TestDispatcher_DeleteStream_NoHandler verifies that dispatching deleteStream
+// without a registered handler returns a protocol error (so the caller can
+// log it) rather than silently swallowing it.
+func TestDispatcher_DeleteStream_NoHandler(t *testing.T) {
+	d := NewDispatcher(nil)
+	// No OnDeleteStream handler set — should return a protocol error.
+	err := d.Dispatch(buildCmd(t, "deleteStream", 0.0, nil, 1.0))
+	if err == nil {
+		t.Fatal("expected error when no deleteStream handler is registered")
+	}
+}
+
+// TestDispatcher_CloseStream verifies that the closeStream command is correctly
+// routed to the registered CloseStream handler. Some RTMP clients (e.g. OBS)
+// send closeStream instead of deleteStream when ending a session.
+func TestDispatcher_CloseStream(t *testing.T) {
+	var called bool
+	d := NewDispatcher(nil)
+	d.OnCloseStream = func(vals []interface{}, msg *chunk.Message) error {
+		called = true
+		if len(vals) < 1 {
+			t.Fatal("expected at least 1 value")
+		}
+		name, ok := vals[0].(string)
+		if !ok || name != "closeStream" {
+			t.Fatalf("expected command name 'closeStream', got %v", vals[0])
+		}
+		return nil
+	}
+	// closeStream payload: name="closeStream", txnID=6, null
+	if err := d.Dispatch(buildCmd(t, "closeStream", 6.0, nil)); err != nil {
+		t.Fatalf("dispatch closeStream: %v", err)
+	}
+	if !called {
+		t.Fatal("closeStream handler was not invoked")
+	}
+}
+
+// TestDispatcher_CloseStream_NoHandler verifies that dispatching closeStream
+// without a handler does NOT return an error — it is gracefully ignored. This
+// differs from deleteStream because closeStream is a non-standard extension
+// and some servers intentionally choose not to handle it.
+func TestDispatcher_CloseStream_NoHandler(t *testing.T) {
+	d := NewDispatcher(nil)
+	// No OnCloseStream handler set — should be silently ignored (no error).
+	err := d.Dispatch(buildCmd(t, "closeStream", 6.0, nil))
+	if err != nil {
+		t.Fatalf("closeStream without handler should not error, got: %v", err)
+	}
+}
