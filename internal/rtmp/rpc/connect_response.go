@@ -28,9 +28,8 @@ import (
 // When fourCcList is non-nil/non-empty, the info object includes the fourCcList
 // to signal Enhanced RTMP support back to the client.
 //
-// The returned message uses MessageStreamID=0 (connection level). CSID is left
-// as zero here; actual assignment (typically 3 for command) is handled by the
-// chunk writer layer when serialising for the wire.
+// The returned message uses MessageStreamID=0 (connection level) and CSID=3
+// (the conventional chunk stream for command messages).
 func BuildConnectResponse(transactionID float64, description string, fourCcList ...[]string) (*chunk.Message, error) {
 	props := map[string]interface{}{
 		"fmsVer":       "FMS/3,0,1,123",

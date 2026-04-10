@@ -266,32 +266,15 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		logger.Info("Cached audio sequence header", "stream_key", s.Key, "size", len(msg.Payload))
 	}
 
-	// DIAGNOSTIC: Log video packet structure to verify FLV format integrity
-	if msg.TypeID == 9 && len(msg.Payload) >= 1 {
-		b0 := msg.Payload[0]
-		isEnhanced := (b0 >> 7) & 1
-
-		if isEnhanced == 1 {
-			frameType := (b0 >> 4) & 0x07
-			pktType := b0 & 0x0F
-			fourCC := ""
-			if len(msg.Payload) >= 5 {
-				fourCC = string(msg.Payload[1:5])
-			}
-			logger.Debug("Enhanced video packet",
-				"frame_type", frameType,
-				"packet_type", pktType,
-				"fourcc", fourCC,
-				"payload_len", len(msg.Payload))
-		} else if len(msg.Payload) >= 5 {
-			frameType := (b0 >> 4) & 0x0F
-			codecID := b0 & 0x0F
-			avcPacketType := msg.Payload[1]
-
-			logger.Debug("Legacy video packet",
-				"frame_type", frameType,
-				"codec_id", codecID,
-				"avc_packet_type", avcPacketType,
+	// DIAGNOSTIC: Log parsed video packet details for debugging.
+	if msg.TypeID == 9 && len(msg.Payload) > 0 {
+		if vm, err := media.ParseVideoMessage(msg.Payload); err == nil {
+			logger.Debug("Video packet",
+				"enhanced", vm.Enhanced,
+				"codec", vm.Codec,
+				"frame_type", vm.FrameType,
+				"packet_type", vm.PacketType,
+				"fourcc", vm.FourCC,
 				"payload_len", len(msg.Payload))
 		}
 	}
