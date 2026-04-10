@@ -7,8 +7,8 @@ Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording +
 
 > **Status:** ✅ Core features operational  
 > **Protocols:** ✅ RTMP, RTMPS (TLS), SRT (UDP ingest)  
-> **Codecs:** ✅ H.264, H.265 (HEVC), AV1, VP9 via Enhanced RTMP  
-> **Recording:** ✅ Automatic FLV recording  
+> **Codecs:** ✅ H.264, H.265/HEVC (SRT + RTMP), AV1, VP9 via Enhanced RTMP  
+> **Recording:** ✅ Automatic FLV recording with codec preservation  
 > **Relay:** ✅ Multi-subscriber with late-join support  
 > **Tested with:** OBS Studio, FFmpeg, ffplay, VLC
 
@@ -34,14 +34,19 @@ ffplay rtmp://localhost:1935/live/test
 # Run with both RTMP and SRT enabled
 ./rtmp-server -listen :1935 -srt-listen :10080
 
-# Publish via SRT (MPEG-TS)
+# Publish via SRT (MPEG-TS with H.264)
 ffmpeg -re -i test.mp4 -c copy -f mpegts srt://localhost:10080?streamid=publish:live/test
+
+# Publish via SRT (MPEG-TS with H.265/HEVC)
+ffmpeg -re -i test.mp4 -c:v libx265 -f mpegts srt://localhost:10080?streamid=publish:live/h265test
 
 # Watch via RTMP (SRT streams are transparently converted)
 ffplay rtmp://localhost:1935/live/test
 ```
 
-SRT streams carry MPEG-TS, which is automatically demuxed and converted to RTMP format (H.264 Annex B→AVCC, AAC ADTS→raw). SRT publishers appear identical to RTMP publishers from the subscriber's perspective.
+SRT streams carry MPEG-TS, which is automatically demuxed and converted to RTMP format (H.264/H.265 Annex B→AVCC, AAC ADTS→raw). SRT publishers appear identical to RTMP publishers from the subscriber's perspective.
+
+**H.265 Testing**: Use `./scripts/test-srt-h265.sh` to validate H.265 ingest with your camera. See [docs/H265_SUPPORT.md](docs/H265_SUPPORT.md) for details.
 
 See [docs/getting-started.md](docs/getting-started.md) for the full guide with CLI flags, OBS setup, and troubleshooting.
 
