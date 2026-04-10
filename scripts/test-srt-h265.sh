@@ -38,7 +38,6 @@ NC='\033[0m'  # No Color
 DURATION="${1:-10}"  # Default 10 seconds
 STREAM_KEY="live/h265-test"
 RECORD_DIR="./recordings"
-FFMPEG_TIMEOUT=$((DURATION + 10))
 
 # Detect platform
 UNAME=$(uname -s)
@@ -148,8 +147,8 @@ echo ""
 # Platform-specific ffmpeg input options
 case "$PLATFORM" in
     "macOS")
-        # Use AVFoundation on macOS
-        ffmpeg_input="-f avfoundation -i $CAMERA_DEVICE"
+        # Use AVFoundation on macOS (camera + microphone)
+        ffmpeg_input="-f avfoundation -video_size 1280x720 -framerate 30 -i $CAMERA_DEVICE"
         ;;
     "Linux")
         # Use v4l2 on Linux
@@ -161,21 +160,22 @@ case "$PLATFORM" in
         ;;
 esac
 
-# Run ffmpeg stream (with timeout to prevent hanging)
-timeout $FFMPEG_TIMEOUT ffmpeg \
-    -re \
+# Run ffmpeg stream in background, then stop after DURATION seconds.
+# We avoid GNU coreutils `timeout` which is not available on macOS.
+ffmpeg \
     $ffmpeg_input \
     $CODEC_OPTS \
+    -c:a aac -b:a 128k \
     -f mpegts \
     "srt://localhost:10080?streamid=publish:${STREAM_KEY}" \
-    2>&1 || {
-    FFMPEG_EXIT=$?
-    if [ $FFMPEG_EXIT -eq 124 ]; then
-        log_info "Stream stopped (timeout after ${DURATION}s)"
-    elif [ $FFMPEG_EXIT -ne 0 ]; then
-        log_warn "ffmpeg exited with code $FFMPEG_EXIT"
-    fi
-}
+    2>&1 &
+FFMPEG_PID=$!
+
+# Wait for the requested duration, then stop ffmpeg
+sleep "$DURATION"
+kill $FFMPEG_PID 2>/dev/null || true
+wait $FFMPEG_PID 2>/dev/null || true
+log_info "Stream stopped after ${DURATION}s"
 
 echo ""
 log_step "Waiting for recordings to be flushed..."
