@@ -82,22 +82,36 @@ H.265 is identified in MPEG-TS by:
 - **Elementary Streams**: H.265 bitstream in Annex B format
 
 ### RTMP Format
-H.265 in RTMP uses:
-- **Video Tag Codec ID**: 12 (legacy, also used for H.264 CodecID 12 extension)
-- **Enhanced RTMP (E-RTMP) FourCC**: "hvc1" (recommended for new clients)
+H.265 in RTMP uses **Enhanced RTMP (E-RTMP v2)** format:
+- **FourCC**: `"hvc1"` — identifies HEVC codec in the Enhanced RTMP video tag
+- **IsExHeader**: bit 7 = 1, signaling Enhanced RTMP format
 - **Decoder Configuration**: HEVCDecoderConfigurationRecord (ISO/IEC 14496-15)
+
+The Enhanced RTMP video tag header is:
+```
+Byte 0: [IsExHeader:1][FrameType:3][PacketType:4]
+  SequenceStart (seq header): 0x90 (IsEx=1, Keyframe=1, PktType=0)
+  CodedFrames (keyframe):     0x91 (IsEx=1, Keyframe=1, PktType=1)
+  CodedFrames (inter):        0xA1 (IsEx=1, Inter=2, PktType=1)
+Bytes 1-4: FourCC "hvc1"
+```
+
+> **Note:** Some older implementations use legacy CodecID=12 (0x1C/0x2C). This server
+> uses the standard Enhanced RTMP format which is supported by ffmpeg, ffplay, and VLC.
 
 ### Sequence Header Structure
 
-The HEVCDecoderConfigurationRecord contains:
-- Configuration version (1 byte)
-- General profile/tier/level information (11 bytes)
-- Min spatial segmentation info (2 bytes)
-- Parallelism type (1 byte)
-- Chroma format (1 byte)
-- Bit depth information (2 bytes)
+The HEVCDecoderConfigurationRecord (ISO/IEC 14496-15 §8.3.3.1) contains:
+- Configuration version (1 byte, always 1)
+- General profile/tier/level information (12 bytes, extracted from SPS[3:15])
+- Min spatial segmentation info (2 bytes, 4 reserved bits + 12-bit value)
+- Parallelism type (1 byte, 6 reserved bits + 2-bit value)
+- Chroma format (1 byte, 6 reserved bits + 2-bit value)
+- Bit depth information (2 bytes, 5 reserved bits + 3-bit value each)
 - Frame rate info (2 bytes)
 - Constant frame rate flags (1 byte)
+
+> **Important:** All reserved bits in the record MUST be set to 1 per the spec.
 - NAL unit length size minus one (1 byte)
 - Array of VPS/SPS/PPS parameter sets
 
