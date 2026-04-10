@@ -39,7 +39,8 @@ const (
 // SoundFormat value that signals Enhanced RTMP audio (ExAudioTagHeader).
 const soundFormatExHeader uint8 = 9
 
-// Well-known audio FourCC values as uint32 (big-endian encoded 4-byte ASCII).
+// audioFourCCMap maps well-known audio FourCC values (as big-endian uint32)
+// to their canonical codec constant. See fourCC() in codec.go.
 var audioFourCCMap = map[uint32]string{
 	fourCC("mp4a"): AudioCodecAAC,
 	fourCC("Opus"): AudioCodecOpus,

@@ -232,11 +232,4 @@ func TestIsAudioSequenceHeader(t *testing.T) {
 	}
 }
 
-// _tFatalf is a test helper that marks itself with t.Helper() so failure
-// line numbers point to the caller, not this function.
-func _tFatalf(t *testing.T, format string, args ...interface{}) {
-	// Mark as helper for cleaner failure line numbers.
-	// The project uses table-driven style; this is consistent.
-	t.Helper()
-	t.Fatalf(format, args...)
-}
+

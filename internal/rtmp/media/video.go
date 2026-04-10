@@ -46,18 +46,14 @@ const (
 	videoPacketTypeMetadata      uint8 = 4
 )
 
-// Well-known video FourCC values as uint32 (big-endian encoded 4-byte ASCII).
+// videoFourCCMap maps well-known video FourCC values (as big-endian uint32)
+// to their canonical codec constant. See fourCC() in codec.go.
 var videoFourCCMap = map[uint32]string{
 	fourCC("avc1"): VideoCodecAVC,
 	fourCC("hvc1"): VideoCodecHEVC,
 	fourCC("av01"): VideoCodecAV1,
 	fourCC("vp09"): VideoCodecVP9,
 	fourCC("vvc1"): VideoCodecVVC,
-}
-
-// fourCC converts a 4-byte ASCII string to a big-endian uint32.
-func fourCC(s string) uint32 {
-	return binary.BigEndian.Uint32([]byte(s))
 }
 
 // VideoMessage is a lightweight parsed representation of an RTMP video (message type 9) tag.
