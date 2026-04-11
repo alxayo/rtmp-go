@@ -36,9 +36,9 @@ type MediaWriter interface {
 	Disabled() bool
 }
 
-// selectContainerFormat returns the recommended container format for the given video codec.
+// SelectContainerFormat returns the recommended container format for the given video codec.
 // Defaults to FLV for backward compatibility when codec is empty or unknown.
-func selectContainerFormat(codec string) string {
+func SelectContainerFormat(codec string) string {
 	switch codec {
 	case "H265", "AV1", "VP9", "VVC": // Modern codecs that FLV doesn't support
 		return "mp4"
@@ -49,9 +49,9 @@ func selectContainerFormat(codec string) string {
 	}
 }
 
-// updateRecordingPath modifies the file extension based on the selected container format.
+// UpdateRecordingPath modifies the file extension based on the selected container format.
 // E.g., "recordings/stream_20260411_103406.flv" → "recordings/stream_20260411_103406.mp4" for H.265
-func updateRecordingPath(path string, format string) string {
+func UpdateRecordingPath(path string, format string) string {
 	if format == "mp4" {
 		ext := filepath.Ext(path)
 		if ext == ".flv" {
@@ -69,8 +69,8 @@ func NewRecorder(path, codec string, logger *slog.Logger) (MediaWriter, error) {
 		logger = slog.Default()
 	}
 
-	format := selectContainerFormat(codec)
-	finalPath := updateRecordingPath(path, format)
+	format := SelectContainerFormat(codec)
+	finalPath := UpdateRecordingPath(path, format)
 
 	if format == "mp4" {
 		return NewMP4Recorder(finalPath, logger)
