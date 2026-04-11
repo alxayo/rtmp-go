@@ -44,3 +44,37 @@ assert_log_not_contains "$SERVER_LOG" "panic\|FATAL\|fatal error" "No server pan
 
 teardown
 report_result "$TEST_NAME"
+
+# ============================================================================
+# MANUAL TESTING
+# ============================================================================
+# To run this test manually without the automation:
+#
+# Terminal 1 - Start Server:
+#   ./rtmp-server -listen localhost:1935 -log-level debug
+#
+# Terminal 2 - Publish:
+#   ffmpeg -hide_banner -loglevel error -re \
+#     -f lavfi -i "testsrc=duration=5:size=320x240:rate=25" \
+#     -f lavfi -i "sine=frequency=440:duration=5" \
+#     -c:v libx264 -preset ultrafast -tune zerolatency \
+#     -c:a aac -b:a 64k \
+#     -f flv "rtmp://localhost:1935/live/test"
+#
+# Verify: Check server log (Terminal 1) for "connection registered" message.
+# See MANUAL_TESTING.md for complete manual testing guide.
+# ============================================================================
+
+# ============================================================================
+# MANUAL TESTING
+# ============================================================================
+# For manual testing without the automation framework, see MANUAL_TESTING.md
+# which provides exact commands for:
+#   - Starting the server
+#   - Publishing streams
+#   - Capturing/subscribing
+#   - Verifying output with ffprobe
+#
+# Each test group in MANUAL_TESTING.md includes step-by-step instructions
+# with real commands you can copy and paste into your terminal.
+# ============================================================================

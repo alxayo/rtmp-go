@@ -79,3 +79,17 @@ assert_video_codec "$CAP2" "h264"
 
 teardown
 report_result "$TEST_NAME"
+
+# ============================================================================
+# MANUAL TESTING
+# ============================================================================
+# For manual testing without the automation framework, see MANUAL_TESTING.md
+# which provides exact commands for:
+#   - Starting the server
+#   - Publishing streams
+#   - Capturing/subscribing
+#   - Verifying output with ffprobe
+#
+# Each test group in MANUAL_TESTING.md includes step-by-step instructions
+# with real commands you can copy and paste into your terminal.
+# ============================================================================
