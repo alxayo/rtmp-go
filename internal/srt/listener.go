@@ -1,3 +1,34 @@
+// File: listener.go
+// Purpose: Implements the UDP listener for SRT ingest. Unlike RTMP (TCP),
+// SRT uses UDP and multiplexes multiple connections over a single socket.
+// This file handles connection acceptance, handshake negotiation, packet routing,
+// and stateful connection tracking.
+//
+// Key Types:
+//   - Listener: UDP socket + connection tracker
+//   - connKey: Unique identifier for connection (remote addr + socket ID)
+//   - pendingHandshake: In-progress handshake state
+//   - Connection: Established SRT flow with packet/ACK/NAK timers
+//
+// Key Functions:
+//   - NewListener(addr, config): Create UDP listener
+//   - (l *Listener) Accept(ctx): Accept one connection (blocks until handshake complete)
+//   - (l *Listener) Close(): Gracefully shutdown listener and all connections
+//   - handlePacket(): Route incoming packet to correct connection or handshake handler
+//
+// Dependencies:
+//   - internal/srt/conn: SRT connection state machine
+//   - internal/srt/handshake: INDUCTION/CONCLUSION exchange
+//   - internal/srt/packet: Packet parsing
+//   - internal/ingress: Publisher interface for media dispatch
+//   - log/slog: Structured logging
+//   - net: UDP socket operations
+//   - sync: Mutex for connection tracking
+//
+// Design Note: UDP multiplexing requires custom connection tracking.
+// During handshake (socket ID = 0), connections are identified by remote address.
+// After handshake, connections are identified by (remote address, socket ID) pair.
+// This allows the same peer to initiate multiple SRT flows on different socket IDs.
 package srt
 
 import (

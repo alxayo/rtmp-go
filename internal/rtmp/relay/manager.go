@@ -1,3 +1,28 @@
+// File: manager.go
+// Purpose: Manages multiple RTMP relay destinations. When a stream is published,
+// the relay manager optionally forwards media to external RTMP servers for
+// cross-organization delivery or backup archival.
+//
+// Key Types:
+//   - DestinationManager: Tracks relay destinations, creates/manages relay clients
+//   - Destination: Single relay target (URL, connection state, metrics)
+//
+// Key Functions:
+//   - NewDestinationManager(urls, logger): Create manager with initial destinations
+//   - (dm *DestinationManager) AddDestination(url): Add new relay target
+//   - (dm *DestinationManager) RemoveDestination(url): Remove relay target
+//   - (dm *DestinationManager) RelayMessage(msg): Fan-out message to all destinations
+//   - (dm *DestinationManager) Close(): Gracefully close all relay connections
+//
+// Dependencies:
+//   - internal/rtmp/client: RTMP client for connecting to relay destinations
+//   - internal/rtmp/chunk: Message type for media frames
+//   - sync: RWMutex for concurrent destination access
+//   - log/slog: Structured logging
+//
+// Design: Each destination runs independently. If one relay fails, others continue.
+// Messages are buffered (bounded channel) to provide backpressure on slow relays.
+// Relay is optional — if no destinations are configured, RelayMessage is a no-op.
 package relay
 
 import (
