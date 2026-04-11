@@ -49,6 +49,14 @@ scripts/.test-tmp/
 scripts/.server.pid
 hls-output/
 
+# E2E test artifacts (generated, not committed)
+e2e-tests/.certs/
+e2e-tests/logs/
+e2e-tests/.test-tmp/
+e2e-tests/.server.pid
+e2e-tests/recordings/
+e2e-tests/*.flv
+
 # Debug and profiling files
 *.prof
 *.pprof
