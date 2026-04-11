@@ -19,11 +19,13 @@ $markerFile = Join-Path $script:TmpDir "hook-fired.txt"
 $hookScript = Join-Path $script:TmpDir "hook.ps1"
 
 # Create hook script that writes marker
+# Note: Server passes RTMP_* env vars to hooks but does NOT inherit parent env.
+# We embed the marker path directly in the script.
 @"
-`$input | Out-File -FilePath "$markerFile" -Encoding UTF8
+Get-ChildItem Env:RTMP_* | Out-File -FilePath "$markerFile" -Encoding UTF8
 "@ | Set-Content -Path $hookScript
 
-if (-not (Start-TestServer -Port $Port -ExtraArgs @("-log-level", "debug", "-hook-script", "powershell.exe -File $hookScript"))) { exit 1 }
+if (-not (Start-TestServer -Port $Port -ExtraArgs @("-log-level", "debug", "-hook-script", "publish_start=$hookScript"))) { exit 1 }
 
 Write-Host "$(Get-Date -Format 'HH:mm:ss') -> Publishing to trigger hook (3s)..." -ForegroundColor Blue
 Publish-TestPattern -Url "rtmp://localhost:${Port}/live/hook-test" -Duration 3

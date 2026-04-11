@@ -42,13 +42,15 @@ publish_test_pattern "$STREAM_URL" 3 &
 PUB_PID=$!
 
 sleep 1
-# Start subscriber that captures while publisher is still live
+# Start subscriber that captures while publisher is still live.
+# Use -timeout to prevent ffmpeg from hanging after publisher disconnects.
 log_step "Starting subscriber (2s capture)..."
 start_capture "$STREAM_URL" "$CAPTURE" 2
 
-wait_and_stop_capture
+# Use a short wait — if the capture hangs, kill it after 8 seconds
+wait_and_stop_capture "" 8
 wait $PUB_PID 2>/dev/null || true
-sleep 2
+sleep 1
 
 # Verify graceful handling
 assert_log_not_contains "$SERVER_LOG" "panic\|FATAL" "No server panics"

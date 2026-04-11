@@ -33,18 +33,17 @@ setup "$TEST_NAME"
 MARKER_FILE="$TMPDIR/hook-fired.txt"
 HOOK_SCRIPT="$TMPDIR/hook.sh"
 
-# Create a simple hook script that writes a marker file
-cat > "$HOOK_SCRIPT" << 'HOOKEOF'
+# Create a simple hook script that writes event data to marker file
+# Note: The server passes RTMP_* environment variables to hooks, but does NOT
+# inherit the parent shell's environment. We embed the marker path directly.
+cat > "$HOOK_SCRIPT" << HOOKEOF
 #!/usr/bin/env bash
-# Hook script: reads event JSON from stdin and writes to marker file
-cat > "$HOOK_MARKER_FILE"
+# Hook script: writes event env vars to marker file to prove it fired
+env | grep RTMP_ > "${MARKER_FILE}"
 HOOKEOF
 chmod +x "$HOOK_SCRIPT"
 
-# Export marker file path so hook can access it
-export HOOK_MARKER_FILE="$MARKER_FILE"
-
-start_server "$PORT" "-log-level" "debug" "-hook-script" "$HOOK_SCRIPT"
+start_server "$PORT" "-log-level" "debug" "-hook-script" "publish_start=$HOOK_SCRIPT"
 
 log_step "Publishing to trigger hook (3s)..."
 publish_test_pattern "rtmp://localhost:${PORT}/live/hook-test" 3

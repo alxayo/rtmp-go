@@ -68,7 +68,7 @@ _PIDS+=($WEBHOOK_PID)
 sleep 1
 
 start_server "$PORT" "-log-level" "debug" \
-    "-hook-webhook" "http://localhost:${WEBHOOK_PORT}/hook"
+    "-hook-webhook" "publish_start=http://localhost:${WEBHOOK_PORT}/hook"
 
 log_step "Publishing to trigger webhook (3s)..."
 publish_test_pattern "rtmp://localhost:${PORT}/live/webhook-test" 3

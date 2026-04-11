@@ -49,7 +49,7 @@ server.handle_request()
 $pyProc = Start-Process -FilePath $python -ArgumentList $webhookServer -NoNewWindow -PassThru
 Start-Sleep -Seconds 1
 
-if (-not (Start-TestServer -Port $Port -ExtraArgs @("-log-level", "debug", "-hook-webhook", "http://localhost:${WebhookPort}/hook"))) { exit 1 }
+if (-not (Start-TestServer -Port $Port -ExtraArgs @("-log-level", "debug", "-hook-webhook", "publish_start=http://localhost:${WebhookPort}/hook"))) { exit 1 }
 
 Write-Host "$(Get-Date -Format 'HH:mm:ss') -> Publishing to trigger webhook (3s)..." -ForegroundColor Blue
 Publish-TestPattern -Url "rtmp://localhost:${Port}/live/webhook-test" -Duration 3

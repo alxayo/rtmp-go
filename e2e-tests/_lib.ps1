@@ -206,7 +206,11 @@ function Publish-SrtH265 {
 function Start-Capture {
     param([string]$Url, [string]$Output, [int]$Timeout)
     $logFile = Join-Path $script:LogDir "$($script:TestName)-capture.log"
+    # -rw_timeout: microsecond I/O timeout; prevents ffmpeg from hanging
+    # indefinitely when the publisher disconnects mid-stream.
+    $rwTimeout = ($Timeout + 5) * 1000000
     $args = @("-hide_banner", "-loglevel", "error",
+        "-rw_timeout", $rwTimeout,
         "-i", $Url, "-t", $Timeout, "-c", "copy", $Output)
     $proc = Start-Process -FilePath "ffmpeg" -ArgumentList $args `
         -RedirectStandardOutput $logFile -RedirectStandardError "$logFile.err" `

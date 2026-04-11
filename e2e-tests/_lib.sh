@@ -267,8 +267,12 @@ CAPTURE_PID=""
 start_capture() {
     local url="$1" output="$2" timeout="$3"
     local log_file="$LOG_DIR/${_TEST_NAME}-capture.log"
+    # -rw_timeout: microsecond I/O timeout; prevents ffmpeg from hanging
+    # indefinitely when the publisher disconnects mid-stream.
+    local rw_timeout=$(( (timeout + 5) * 1000000 ))
 
     ffmpeg -hide_banner -loglevel error \
+        -rw_timeout "$rw_timeout" \
         -i "$url" \
         -t "$timeout" -c copy "$output" \
         > "$log_file" 2>&1 &
