@@ -475,6 +475,37 @@ assert_http_json_field() {
     fi
 }
 
+# ---- Manual Testing Documentation ----
+
+# Print manual testing section with exact commands used.
+# Useful for reproducing tests without the automation framework.
+print_manual_commands() {
+    local title="$1"
+    shift
+    
+    echo ""
+    echo "============================================"
+    echo "MANUAL TESTING: $title"
+    echo "============================================"
+    echo ""
+    echo "To run this test manually, execute the following commands:"
+    echo ""
+    
+    # Print each command with explanation
+    while [[ $# -gt 0 ]]; do
+        local label="$1"
+        local cmd="$2"
+        shift 2
+        
+        echo "# $label"
+        echo "$cmd"
+        echo ""
+    done
+    
+    echo "============================================"
+    echo ""
+}
+
 # ---- Result Reporting ----
 
 report_result() {

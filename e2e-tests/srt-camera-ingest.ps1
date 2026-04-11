@@ -14,6 +14,12 @@ $TestName = "srt-camera-ingest"
 $Port = Get-UniquePort $TestName
 $SrtPort = $Port + 200
 
+# Allow skipping camera tests via environment variable
+if ($env:SKIP_CAMERA_TESTS -eq "1") {
+    Write-Host "SKIP: Camera tests disabled (set SKIP_CAMERA_TESTS=0 to enable)" -ForegroundColor Yellow
+    exit 2
+}
+
 $protocols = & ffmpeg -hide_banner -protocols 2>&1
 if ($protocols -notmatch "srt") { Write-Host "SKIP: No SRT support" -ForegroundColor Yellow; exit 2 }
 

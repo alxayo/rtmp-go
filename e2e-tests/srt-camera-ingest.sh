@@ -30,6 +30,12 @@ TEST_NAME="srt-camera-ingest"
 PORT=$(unique_port "$TEST_NAME")
 SRT_PORT=$((PORT + 200))
 
+# Allow skipping camera tests via environment variable
+if [[ "${SKIP_CAMERA_TESTS:-0}" == "1" ]]; then
+    echo -e "${YELLOW}SKIP: Camera tests disabled (set SKIP_CAMERA_TESTS=0 to enable)${NC}"
+    exit 2
+fi
+
 if ! ffmpeg -hide_banner -protocols 2>/dev/null | grep -q srt; then
     echo -e "${YELLOW}SKIP: FFmpeg does not have SRT protocol support${NC}"
     exit 2
@@ -78,3 +84,17 @@ assert_log_not_contains "$SERVER_LOG" "panic\|FATAL" "No server panics"
 
 teardown
 report_result "$TEST_NAME"
+
+# ============================================================================
+# MANUAL TESTING
+# ============================================================================
+# For manual testing without the automation framework, see MANUAL_TESTING.md
+# which provides exact commands for:
+#   - Starting the server
+#   - Publishing streams
+#   - Capturing/subscribing
+#   - Verifying output with ffprobe
+#
+# Each test group in MANUAL_TESTING.md includes step-by-step instructions
+# with real commands you can copy and paste into your terminal.
+# ============================================================================
