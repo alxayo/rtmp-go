@@ -57,6 +57,7 @@ e2e-tests/.test-tmp/
 e2e-tests/.server.pid
 e2e-tests/recordings/
 e2e-tests/*.flv
+e2e-tests/*.mp4
 
 # Debug and profiling files
 *.prof
