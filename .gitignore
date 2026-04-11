@@ -48,6 +48,7 @@ scripts/logs/
 scripts/.test-tmp/
 scripts/.server.pid
 hls-output/
+/recordings/
 
 # E2E test artifacts (generated, not committed)
 e2e-tests/.certs/
