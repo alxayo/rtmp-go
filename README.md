@@ -194,6 +194,125 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 - No external dependencies (stdlib only)
 - FFmpeg/ffplay for testing (optional)
 
+## Developer Guide
+
+### Understand the Codebase
+
+New contributors should start here:
+
+1. **Read the Architecture Guide**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+   - Package hierarchy and dependencies
+   - Data flow diagrams (RTMP publish, SRT ingest, relay)
+   - Key abstractions (Stream, Connection, MediaWriter, Publisher)
+   - Concurrency model and error handling
+   - Wire format details and byte order
+
+2. **Quick Package Reference**:
+   - **internal/logger** — Structured JSON logging (slog) with runtime level changes
+   - **internal/errors** — Domain-specific error types for protocol layers (HandshakeError, ChunkError, AMFError, etc.)
+   - **internal/codec** — Video/audio codec utilities (H.264 AVC, H.265 HEVC, AAC, NALU parsing)
+   - **internal/rtmp/handshake** — RTMP v3 handshake exchange (C0/C1/C2 ↔ S0/S1/S2)
+   - **internal/rtmp/chunk** — RTMP chunk streaming (FMT 0-3, message reassembly)
+   - **internal/rtmp/amf** — AMF0 object encoding/decoding
+   - **internal/rtmp/rpc** — Command parsing (connect, createStream, publish, play)
+   - **internal/rtmp/conn** — Per-connection state machine (readLoop)
+   - **internal/rtmp/server** — Listener, registry, authentication, hooks
+   - **internal/rtmp/media** — Recording (FLV/MP4), codec detection, late-join headers
+   - **internal/rtmp/relay** — Multi-destination relay with bounded channels
+   - **internal/srt/\*** — SRT protocol (packet, handshake, conn, circular buffer, crypto)
+   - **internal/ingress** — Protocol-agnostic publish lifecycle (RTMP + SRT)
+
+3. **Code Navigation Tips**:
+   - **Want to understand RTMP connect?** Start with `internal/rtmp/server/command_integration.go:handleConnect()`
+   - **Want to understand media relay?** Start with `internal/rtmp/media/dispatcher.go` and `internal/rtmp/relay/relayer.go`
+   - **Want to understand codec detection?** Start with `internal/rtmp/media/video.go:detectEnhancedRTMP()`
+   - **Want to understand H.265 recording?** Start with `internal/rtmp/media/recorder.go:NewRecorder()`
+   - **Want to understand SRT ingest?** Start with `internal/srt/listener.go` and trace to `internal/srt/conn/`
+
+4. **Testing**:
+   - Unit tests: `go test -race ./internal/...`
+   - Integration tests: `go test -race ./tests/integration/...`
+   - E2E tests: `./e2e-tests/run-all.sh` (requires FFmpeg, ffprobe, ffplay)
+   - Manual test: Build server, publish from FFmpeg, subscribe with ffplay
+
+### Design Principles
+
+The codebase adheres to these principles:
+
+- **Wire Format Fidelity**: Big-endian integers (network byte order) throughout. Golden test vectors in `tests/golden/` validate against specs.
+- **One Goroutine Per Connection**: Each TCP/SRT connection runs a single goroutine (readLoop). No thread pools, no async callbacks.
+- **Bounded Channels**: Output queues are bounded (100 messages) to provide backpressure when subscribers are slow.
+- **Domain-Specific Errors**: Use error types from `internal/errors` instead of generic strings. Callers use `errors.As()` and `errors.Is()` to classify failures.
+- **Structured Logging**: Always include context fields: `conn_id`, `stream_key`, `type_id`, `remote_addr`, `timestamp`.
+- **MediaWriter Interface**: Unified API for recording (FLVRecorder for H.264, MP4Recorder for H.265+). Easy to add new formats.
+- **Codec Awareness**: Container format selected automatically at recording init based on video codec. No manual config needed.
+- **Protocol Agnostic**: Internal `chunk.Message` type bridges RTMP/SRT/TS. New protocols can be added by implementing Publisher interface.
+
+### Common Tasks
+
+**Add a new command handler** (e.g., new RTMP command):
+1. Define handler in `internal/rtmp/rpc/`
+2. Register in `internal/rtmp/server/command_integration.go:handleCommandMessage()`
+3. Write tests in `tests/integration/`
+4. Add E2E test in `e2e-tests/`
+
+**Add a new authentication backend** (e.g., LDAP):
+1. Implement `internal/rtmp/server/auth/Validator` interface
+2. Add factory function to create validator
+3. Register in server startup code (cmd/rtmp-server/main.go)
+
+**Add a new event hook** (e.g., Slack notifications):
+1. Implement `internal/rtmp/server/hooks/Hook` interface
+2. Add hook firing in `internal/rtmp/server/command_integration.go`
+3. Write tests
+
+**Add support for a new codec** (e.g., VP9):
+1. Add codec helper in `internal/codec/vp9.go` (sequence header builder)
+2. Update `internal/rtmp/media/video.go` to detect and process the codec
+3. Update `internal/rtmp/media/recorder.go` to select correct container format (MP4 for modern codecs)
+4. Add MPEG-TS support if needed (internal/ts/stream_types.go)
+5. Add golden test vector in `tests/golden/`
+6. Add E2E test
+
+### Performance Profiling
+
+Enable pprof metrics endpoint:
+```bash
+./rtmp-server -metrics-addr :6060
+```
+
+View profiles:
+```bash
+# CPU profile
+curl http://127.0.0.1:6060/debug/pprof/profile?seconds=30 > cpu.prof
+go tool pprof cpu.prof
+
+# Memory allocations
+curl http://127.0.0.1:6060/debug/pprof/allocs > alloc.prof
+go tool pprof alloc.prof
+
+# All metrics (JSON)
+curl http://127.0.0.1:6060/debug/vars
+```
+
+### Debugging
+
+Enable debug logs:
+```bash
+./rtmp-server -log-level debug
+```
+
+Key log fields to search for:
+- `"component":"rtmp_server"` — Server events
+- `"conn_id":"xyz"` — Connection lifecycle
+- `"stream_key":"live/test"` — Stream-specific events
+- `"err"` — Errors (classification: HandshakeError, ChunkError, etc.)
+
+Set breakpoints in your IDE (VS Code Go extension):
+```bash
+dlv debug ./cmd/rtmp-server -- -listen :1935 -log-level debug
+```
+
 ## Roadmap
 
 ### v0.2.0 (current)

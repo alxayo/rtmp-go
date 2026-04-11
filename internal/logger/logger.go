@@ -1,3 +1,24 @@
+// File: logger.go
+// Purpose: Implements the global logger initialization and lifecycle.
+// This file sets up the slog.Logger with JSON output, detects the initial log level
+// from command-line flags or environment variables, and provides helper functions
+// to change the log level at runtime.
+//
+// Key Types:
+//   - dynamicLevel: Implements slog.Leveler with atomic read/write for runtime changes
+//
+// Key Functions:
+//   - Init(): Initialize global logger (safe to call multiple times)
+//   - detectLevel(): Resolve initial log level from flags/env/default
+//   - parseLevel(): Convert string "debug"/"info"/etc to slog.Level
+//   - Default(): Get the global logger instance
+//   - SetLevel(level): Change log level at runtime
+//
+// Dependencies:
+//   - log/slog: Go's standard structured logging package
+//   - sync/atomic: Atomic operations for thread-safe level changes
+//   - flag: Command-line flag parsing
+//
 package logger
 
 import (
