@@ -56,7 +56,7 @@ func (l *limitedWriter) Close() error { l.closed = true; return nil }
 func TestRecorder_Header(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.flv")
-	r, err := NewRecorder(path, NullLogger())
+	r, err := NewRecorder(path, "H264", NullLogger())
 	if err != nil {
 		t.Fatalf("NewRecorder error: %v", err)
 	}
@@ -97,7 +97,7 @@ func writeMsg(ts uint32, typeID uint8, payload []byte) *chunk.Message {
 func TestRecorder_WriteAudioVideo(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "av.flv")
-	r, err := NewRecorder(path, NullLogger())
+	r, err := NewRecorder(path, "H264", NullLogger())
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRecorder_WriteAudioVideo(t *testing.T) {
 // the write failure and mark itself Disabled – subsequent writes are no-ops.
 func TestRecorder_DiskFullSimulation(t *testing.T) {
 	lw := &limitedWriter{limit: 8} // smaller than header (13) so header write fails
-	r := newRecorderWithWriter(lw, NullLogger())
+	r := newFLVRecorderWithWriter(lw, NullLogger())
 	if !r.Disabled() {
 		t.Fatalf("recorder should be disabled after header failure")
 	}

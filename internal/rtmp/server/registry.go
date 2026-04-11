@@ -48,7 +48,7 @@ type Stream struct {
 	VideoCodec  string             // detected video codec (e.g. "H264", "HEVC")
 	AudioCodec  string             // detected audio codec (e.g. "AAC", "MP3")
 	StartTime   time.Time          // when the stream was created
-	Recorder    *media.Recorder    // optional FLV file recorder (nil if not recording)
+	Recorder    media.MediaWriter  // optional media file recorder (nil if not recording)
 
 	// Cached sequence headers for late-joining subscribers.
 	// Sequence headers contain codec configuration (H.264 SPS/PPS, AAC AudioSpecificConfig)

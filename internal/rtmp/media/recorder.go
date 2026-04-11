@@ -1,16 +1,20 @@
 package media
 
-// FLV Recorder (Task T045)
-// ------------------------
-// Minimal FLV file writer used to optionally persist a published stream to disk.
-// Scope is intentionally small:
-//   * Writes fixed FLV header (both audio+video flags set) once
-//   * Writes audio (type 0x08) and video (type 0x09) tags from RTMP chunk.Message
-//   * Tag format: 11 byte tag header + data + 4 byte PreviousTagSize
-//   * Graceful degradation: on any write error the recorder is disabled (future
-//     live streaming continues unaffected)
-// No metadata / script tags are written; this is sufficient for basic playback
-// in ffplay/ffmpeg for validation tests.
+// Media Recorder (Task T045 / T046)
+// ----------------------------------
+// Minimal media file writer that automatically selects container format based on video codec:
+//   * H.264 → FLV (legacy format, optimal for H.264)
+//   * H.265, AV1, VP9, VVC, others → MP4 (supports all modern codecs)
+//
+// Design:
+//   * MediaWriter interface: unified API (WriteMessage, Close, Disabled)
+//   * FLVRecorder: writes FLV tags (existing format for H.264)
+//   * MP4Recorder: writes MP4 atoms (simple mdat + moov for H.265+)
+//   * NewRecorder factory: routes to appropriate implementation based on codec
+//
+// Graceful degradation: on any write error the recorder is disabled (future
+// live streaming continues unaffected). File extension is automatically set
+// based on selected format (.flv or .mp4).
 
 import (
 	"encoding/binary"
@@ -18,16 +22,67 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// Recorder persists RTMP audio/video messages into a single FLV file.
+// MediaWriter is a unified interface for recording media to different container formats.
+type MediaWriter interface {
+	WriteMessage(msg *chunk.Message)
+	Close() error
+	Disabled() bool
+}
+
+// selectContainerFormat returns the recommended container format for the given video codec.
+// Defaults to FLV for backward compatibility when codec is empty or unknown.
+func selectContainerFormat(codec string) string {
+	switch codec {
+	case "H265", "AV1", "VP9", "VVC": // Modern codecs that FLV doesn't support
+		return "mp4"
+	case "H264", "": // H.264 or unknown → FLV (backward compatible)
+		return "flv"
+	default:
+		return "mp4" // Conservative: use MP4 for any unknown codec
+	}
+}
+
+// updateRecordingPath modifies the file extension based on the selected container format.
+// E.g., "recordings/stream_20260411_103406.flv" → "recordings/stream_20260411_103406.mp4" for H.265
+func updateRecordingPath(path string, format string) string {
+	if format == "mp4" {
+		ext := filepath.Ext(path)
+		if ext == ".flv" {
+			return strings.TrimSuffix(path, ext) + ".mp4"
+		}
+	}
+	return path
+}
+
+// NewRecorder creates a recorder using the appropriate container format for the given codec.
+// If file creation fails it returns a nil recorder and the error.
+// The codec parameter determines output format: H.265+ → MP4, H.264 → FLV (default).
+func NewRecorder(path, codec string, logger *slog.Logger) (MediaWriter, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	format := selectContainerFormat(codec)
+	finalPath := updateRecordingPath(path, format)
+
+	if format == "mp4" {
+		return NewMP4Recorder(finalPath, logger)
+	}
+	return NewFLVRecorder(finalPath, logger)
+}
+
+// FLVRecorder persists RTMP audio/video messages into a single FLV file.
 // It is safe for single‑goroutine use (the media relay loop). A mutex is
 // included only to guard against accidental concurrent calls in future
 // extensions.
-type Recorder struct {
+type FLVRecorder struct {
 	mu           sync.Mutex
 	w            io.WriteCloser
 	logger       *slog.Logger
@@ -35,9 +90,9 @@ type Recorder struct {
 	bytesWritten uint64
 }
 
-// NewRecorder creates a recorder writing to the supplied file path. If file
-// creation fails it returns a nil *Recorder and the error.
-func NewRecorder(path string, logger *slog.Logger) (*Recorder, error) {
+// NewFLVRecorder creates an FLV recorder writing to the supplied file path.
+// If file creation fails it returns a nil *FLVRecorder and the error.
+func NewFLVRecorder(path string, logger *slog.Logger) (*FLVRecorder, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -45,7 +100,7 @@ func NewRecorder(path string, logger *slog.Logger) (*Recorder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("recorder.create: %w", err)
 	}
-	r := &Recorder{w: f, logger: logger}
+	r := &FLVRecorder{w: f, logger: logger}
 	if err := r.writeHeader(); err != nil {
 		// writeHeader already closed on failure
 		return nil, err
@@ -53,18 +108,18 @@ func NewRecorder(path string, logger *slog.Logger) (*Recorder, error) {
 	return r, nil
 }
 
-// newRecorderWithWriter allows tests to inject a failing writer (disk full simulation).
-func newRecorderWithWriter(w io.WriteCloser, logger *slog.Logger) *Recorder {
+// newFLVRecorderWithWriter allows tests to inject a failing writer (disk full simulation).
+func newFLVRecorderWithWriter(w io.WriteCloser, logger *slog.Logger) *FLVRecorder {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &Recorder{w: w, logger: logger}
+	r := &FLVRecorder{w: w, logger: logger}
 	_ = r.writeHeader() // Ignore error in helper; tests can assert state.
 	return r
 }
 
 // Disabled returns true if the recorder encountered a fatal write error.
-func (r *Recorder) Disabled() bool {
+func (r *FLVRecorder) Disabled() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.w == nil
@@ -78,7 +133,7 @@ func (r *Recorder) Disabled() bool {
 //	Flags:     0x05 (audio + video present)
 //	DataOffset: 0x00000009 (header length) big‑endian
 //	PreviousTagSize0: 0x00000000
-func (r *Recorder) writeHeader() error {
+func (r *FLVRecorder) writeHeader() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.w == nil || r.wroteHeader {
@@ -97,7 +152,7 @@ func (r *Recorder) writeHeader() error {
 
 // WriteMessage persists an RTMP media message (audio=8, video=9). Other message
 // types are ignored silently. Safe to call after a failure; it no‑ops when disabled.
-func (r *Recorder) WriteMessage(msg *chunk.Message) {
+func (r *FLVRecorder) WriteMessage(msg *chunk.Message) {
 	if msg == nil || (msg.TypeID != 8 && msg.TypeID != 9) {
 		return
 	}
@@ -125,7 +180,7 @@ func (r *Recorder) WriteMessage(msg *chunk.Message) {
 //	4-6 Timestamp Lower 24 bits
 //	7:  Timestamp Extended (upper 8 bits)
 //	8-10 StreamID (always 0)
-func (r *Recorder) writeTagLocked(tagType uint8, timestamp uint32, payload []byte) error {
+func (r *FLVRecorder) writeTagLocked(tagType uint8, timestamp uint32, payload []byte) error {
 	dataSize := len(payload)
 	if dataSize > 0xFFFFFF { // Out of FLV 24‑bit range (unlikely here)
 		return fmt.Errorf("recorder.tag: payload too large: %d", dataSize)
@@ -162,13 +217,13 @@ func (r *Recorder) writeTagLocked(tagType uint8, timestamp uint32, payload []byt
 }
 
 // Close releases the underlying file.
-func (r *Recorder) Close() error {
+func (r *FLVRecorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.closeLocked()
 }
 
-func (r *Recorder) closeLocked() error {
+func (r *FLVRecorder) closeLocked() error {
 	if r.w == nil {
 		return nil
 	}

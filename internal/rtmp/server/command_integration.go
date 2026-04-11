@@ -485,15 +485,16 @@ func initRecorder(stream *Stream, recordDir string, log *slog.Logger) error {
 		return fmt.Errorf("create record dir: %w", err)
 	}
 
-	// Generate filename: streamkey_timestamp.flv
+	// Generate filename: streamkey_timestamp.flv (or .mp4 for H.265+)
 	// Replace slashes in stream key with underscores for filesystem safety
 	safeKey := strings.ReplaceAll(stream.Key, "/", "_")
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("%s_%s.flv", safeKey, timestamp)
 	filepath := filepath.Join(recordDir, filename)
 
-	// Create recorder
-	recorder, err := media.NewRecorder(filepath, log)
+	// Create recorder with detected codec (auto-selects FLV or MP4)
+	codec := stream.GetVideoCodec()
+	recorder, err := media.NewRecorder(filepath, codec, log)
 	if err != nil {
 		return fmt.Errorf("create recorder: %w", err)
 	}
@@ -503,6 +504,6 @@ func initRecorder(stream *Stream, recordDir string, log *slog.Logger) error {
 	stream.Recorder = recorder
 	stream.mu.Unlock()
 
-	log.Info("recorder initialized", "stream_key", stream.Key, "file", filepath)
+	log.Info("recorder initialized", "stream_key", stream.Key, "file", filepath, "codec", codec)
 	return nil
 }
