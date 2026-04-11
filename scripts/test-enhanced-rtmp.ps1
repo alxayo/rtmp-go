@@ -180,7 +180,7 @@ $ServerErr = Join-Path $LogDir "test-enhanced-rtmp-server-err.log"
 #   -log-level debug: Capture Enhanced RTMP negotiation details in logs
 $serverProc = Start-Process -FilePath $Binary -ArgumentList @(
     "-listen", ":$Port",
-    "-record-all",
+    "-record-all", "true",
     "-record-dir", $RecordDir,
     "-log-level", "debug"
 ) -RedirectStandardOutput $ServerLog -RedirectStandardError $ServerErr `
@@ -251,9 +251,12 @@ $script:Pids = $script:Pids | Where-Object { $_ -ne $serverProc.Id }
 Write-Host ""
 Log "Step 3: Verifying recorded file"
 
-# The recorder saves files as: {streamkey_with_slashes_replaced}_{timestamp}.flv
-# For stream key "live/etest", the file is "live_etest_YYYYMMDD_HHMMSS.flv"
-$RecordedFile = Get-ChildItem -Path $RecordDir -Filter "live_etest_*.flv" -ErrorAction SilentlyContinue | Select-Object -First 1
+# The recorder saves files as: {streamkey_with_slashes_replaced}_{timestamp}.{ext}
+# H.265 → .mp4, H.264 → .flv. Search for MP4 first, fall back to FLV.
+$RecordedFile = Get-ChildItem -Path $RecordDir -Filter "live_etest_*.mp4" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $RecordedFile) {
+    $RecordedFile = Get-ChildItem -Path $RecordDir -Filter "live_etest_*.flv" -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
 # ===========================
 # Step 5: Verification checks

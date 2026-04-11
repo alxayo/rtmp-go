@@ -210,7 +210,7 @@ SERVER_LOG="$LOG_DIR/test-enhanced-rtmp-server.log"
 #   -log-level debug: Capture Enhanced RTMP negotiation details in logs
 "$BINARY" \
     -listen ":${PORT}" \
-    -record-all \
+    -record-all true \
     -record-dir "$RECORD_DIR" \
     -log-level debug \
     > "$SERVER_LOG" 2>&1 &
@@ -281,10 +281,10 @@ PIDS=("${NEW_PIDS[@]+"${NEW_PIDS[@]}"}")
 echo ""
 log "${BLUE}Step 3: Verifying recorded file${NC}"
 
-# The recorder saves files as: {streamkey_with_slashes_replaced}_{timestamp}.flv
-# For stream key "live/etest", the file is "live_etest_YYYYMMDD_HHMMSS.flv"
+# The recorder saves files as: {streamkey_with_slashes_replaced}_{timestamp}.{ext}
+# H.265 → .mp4, H.264 → .flv. Search for both with MP4 first.
 RECORDED_FILE=""
-for f in "$RECORD_DIR"/live_etest_*.flv; do
+for f in "$RECORD_DIR"/live_etest_*.mp4 "$RECORD_DIR"/live_etest_*.flv; do
     if [[ -f "$f" ]]; then
         RECORDED_FILE="$f"
         break
