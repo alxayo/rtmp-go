@@ -49,6 +49,7 @@ type Stream struct {
 	AudioCodec  string             // detected audio codec (e.g. "AAC", "MP3")
 	StartTime   time.Time          // when the stream was created
 	Recorder    media.MediaWriter  // optional media file recorder (nil if not recording)
+	RecordDir   string             // non-empty when recording is requested; used for lazy recorder init
 
 	// Cached sequence headers for late-joining subscribers.
 	// Sequence headers contain codec configuration (H.264 SPS/PPS, AAC AudioSpecificConfig)
@@ -236,6 +237,17 @@ func (s *Stream) GetVideoCodec() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.VideoCodec
+}
+
+// GetRecorder returns the current recorder in a thread-safe manner.
+// Returns nil if no recorder is active.
+func (s *Stream) GetRecorder() media.MediaWriter {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Recorder
 }
 
 // StreamKey returns the stream's key (required by CodecStore interface).

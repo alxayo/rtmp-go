@@ -12,7 +12,12 @@ import (
 )
 
 // dispatchMedia handles a single audio (TypeID 8) or video (TypeID 9)
-// message: logging, recording, local broadcast, and external relay.
+// message: logging, codec detection, recording, local broadcast, and external relay.
+//
+// The ordering is important: codec detection (via BroadcastMessage) runs first
+// so that ensureRecorder can select the correct container format (FLV for H.264,
+// MP4 for H.265+). The recorder is lazily initialized on the first frame after
+// codec detection, ensuring no format mismatch.
 func dispatchMedia(
 	m *chunk.Message,
 	st *commandState,
@@ -30,15 +35,21 @@ func dispatchMedia(
 		return
 	}
 
-	// Write to FLV recorder if recording is active.
-	if stream.Recorder != nil {
-		stream.Recorder.WriteMessage(m)
-	}
-
-	// Broadcast to all local subscribers (play clients).
+	// 1. Codec detection + subscriber broadcast first.
+	// BroadcastMessage performs one-shot codec detection (setting stream.VideoCodec
+	// and stream.AudioCodec) and fans out the frame to all subscribers.
 	stream.BroadcastMessage(st.codecDetector, m, log)
 
-	// Forward to external relay destinations.
+	// 2. Lazy recorder initialization — creates the recorder once the video codec
+	// is known, selecting the correct container format automatically.
+	ensureRecorder(stream, log)
+
+	// 3. Write to recorder (snapshot under lock to avoid race with teardown).
+	if rec := stream.GetRecorder(); rec != nil {
+		rec.WriteMessage(m)
+	}
+
+	// 4. Forward to external relay destinations.
 	if destMgr != nil {
 		destMgr.RelayMessage(m)
 	}

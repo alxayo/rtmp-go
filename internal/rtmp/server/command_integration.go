@@ -246,15 +246,17 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 			"publishing_name": pc.PublishingName,
 		})
 
-		// Initialize recorder if recording is enabled
+		// Mark stream for recording — actual recorder creation is deferred to the
+		// first media frame (in dispatchMedia → ensureRecorder) so that the video
+		// codec is known and the correct container format (FLV for H.264, MP4 for
+		// H.265+) is selected.
 		if cfg.RecordAll {
 			stream := reg.GetStream(pc.StreamKey)
 			if stream != nil {
-				if err := initRecorder(stream, cfg.RecordDir, log); err != nil {
-					log.Error("failed to create recorder", "error", err, "stream_key", pc.StreamKey)
-				} else {
-					log.Info("recording started", "stream_key", pc.StreamKey, "record_dir", cfg.RecordDir)
-				}
+				stream.mu.Lock()
+				stream.RecordDir = cfg.RecordDir
+				stream.mu.Unlock()
+				log.Info("recording requested", "stream_key", pc.StreamKey, "record_dir", cfg.RecordDir)
 			}
 		}
 
@@ -472,38 +474,64 @@ func authenticateRequest(
 	return true // rejected
 }
 
-// initRecorder creates and initializes a recorder for the given stream.
-// It generates a timestamped filename based on the stream key and stores
-// the recorder in the stream's Recorder field.
-func initRecorder(stream *Stream, recordDir string, log *slog.Logger) error {
+// ensureRecorder lazily creates a recorder for the given stream once the video
+// codec has been detected. This is called on each media frame from the dispatch
+// path. Recording is only attempted when:
+//   - stream.RecordDir is set (recording was requested at publish time)
+//   - stream.Recorder is nil (not yet created)
+//   - stream.VideoCodec is known (codec detection has run)
+//
+// This deferred approach ensures H.265 streams get MP4 containers (not FLV),
+// because the codec is only known after the first video frame is parsed.
+func ensureRecorder(stream *Stream, log *slog.Logger) {
 	if stream == nil {
-		return fmt.Errorf("nil stream")
+		return
 	}
 
-	// Ensure record directory exists
+	stream.mu.Lock()
+	// Quick check: already initialized, or recording not requested
+	if stream.Recorder != nil || stream.RecordDir == "" {
+		stream.mu.Unlock()
+		return
+	}
+
+	codec := stream.VideoCodec
+	if codec == "" {
+		stream.mu.Unlock()
+		return // Wait until codec is detected from the first video frame
+	}
+
+	recordDir := stream.RecordDir
+	stream.mu.Unlock()
+
+	// File creation happens outside the lock to avoid blocking media dispatch
 	if err := os.MkdirAll(recordDir, 0755); err != nil {
-		return fmt.Errorf("create record dir: %w", err)
+		log.Error("failed to create record dir", "error", err, "stream_key", stream.Key)
+		stream.mu.Lock()
+		stream.RecordDir = "" // Don't retry on every frame
+		stream.mu.Unlock()
+		return
 	}
 
-	// Generate filename: streamkey_timestamp.flv (or .mp4 for H.265+)
-	// Replace slashes in stream key with underscores for filesystem safety
+	// Generate filename with the correct extension based on detected codec
 	safeKey := strings.ReplaceAll(stream.Key, "/", "_")
 	timestamp := time.Now().Format("20060102_150405")
-	filename := fmt.Sprintf("%s_%s.flv", safeKey, timestamp)
-	filepath := filepath.Join(recordDir, filename)
+	format := media.SelectContainerFormat(codec)
+	filename := fmt.Sprintf("%s_%s.%s", safeKey, timestamp, format)
+	fpath := filepath.Join(recordDir, filename)
 
-	// Create recorder with detected codec (auto-selects FLV or MP4)
-	codec := stream.GetVideoCodec()
-	recorder, err := media.NewRecorder(filepath, codec, log)
+	recorder, err := media.NewRecorder(fpath, codec, log)
 	if err != nil {
-		return fmt.Errorf("create recorder: %w", err)
+		log.Error("failed to create recorder", "error", err, "stream_key", stream.Key)
+		stream.mu.Lock()
+		stream.RecordDir = "" // Don't retry on every frame
+		stream.mu.Unlock()
+		return
 	}
 
-	// Store recorder in stream
 	stream.mu.Lock()
 	stream.Recorder = recorder
 	stream.mu.Unlock()
 
-	log.Info("recorder initialized", "stream_key", stream.Key, "file", filepath, "codec", codec)
-	return nil
+	log.Info("recorder initialized", "stream_key", stream.Key, "file", fpath, "codec", codec, "format", format)
 }

@@ -338,39 +338,42 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		return
 	}
 
-	// Initialize recording if -record-all is enabled.
-	// This creates an FLV file in the record directory and attaches
-	// the recorder to the stream so media dispatch writes to it.
+	// Mark stream for recording — actual recorder creation is deferred to the
+	// first media frame (in the MediaHandler below) so that the video codec is
+	// known and the correct container format (FLV for H.264, MP4 for H.265+)
+	// is selected automatically.
 	if s.cfg.RecordAll {
-		if err := initRecorder(stream, s.cfg.RecordDir, s.log); err != nil {
-			s.log.Error("failed to create recorder for SRT stream",
-				"error", err,
-				"stream_key", info.StreamKey(),
-				"conn_id", connID,
-			)
-		} else {
-			s.log.Info("recording started",
-				"stream_key", info.StreamKey(),
-				"record_dir", s.cfg.RecordDir,
-				"conn_id", connID,
-			)
-		}
+		stream.mu.Lock()
+		stream.RecordDir = s.cfg.RecordDir
+		stream.mu.Unlock()
+		s.log.Info("recording requested",
+			"stream_key", info.StreamKey(),
+			"record_dir", s.cfg.RecordDir,
+			"conn_id", connID,
+		)
 	}
 
 	// Wire the media handler: when the bridge pushes a chunk.Message
 	// (audio TypeID=8 or video TypeID=9), it flows through this callback
 	// to the recording system and subscriber broadcast — exactly the same
 	// path as native RTMP media dispatch.
+	//
+	// Ordering: codec detection runs first (via BroadcastMessage), then the
+	// recorder is lazily initialized with the correct format, then the frame
+	// is written. This ensures H.265 streams get MP4 containers.
 	detector := &media.CodecDetector{}
 	connLog := s.log.With("conn_id", connID)
 	session.MediaHandler = func(msg *chunk.Message) {
-		// Write to FLV recorder if recording is active.
-		if stream.Recorder != nil {
-			stream.Recorder.WriteMessage(msg)
-		}
-		// Broadcast to all local subscribers (RTMP play clients)
-		// and perform one-shot codec detection.
+		// 1. Codec detection + subscriber broadcast first
 		stream.BroadcastMessage(detector, msg, connLog)
+
+		// 2. Lazy recorder init (creates recorder once codec is known)
+		ensureRecorder(stream, connLog)
+
+		// 3. Write to recorder (snapshot under lock to avoid race with teardown)
+		if rec := stream.GetRecorder(); rec != nil {
+			rec.WriteMessage(msg)
+		}
 	}
 
 	// Start the bridge — this blocks until the SRT connection closes.
@@ -401,7 +404,7 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	// Clean up: close recorder, clear publisher, end session, close connection.
 	// This mirrors the RTMP publisher disconnect cleanup in command_integration.go.
 
-	// Close the FLV recorder (if active) under lock to avoid races
+	// Close the recorder (if active) under lock to avoid races
 	// with the media handler callback that writes to it.
 	if stream != nil {
 		stream.mu.Lock()
