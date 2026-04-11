@@ -18,8 +18,14 @@ End-to-end tests for the go-rtmp server using FFmpeg, ffprobe, and the server bi
 # Run all tests (Bash/Linux/macOS)
 ./e2e-tests/run-all.sh
 
+# Run all tests WITHOUT camera tests (CI/headless environments)
+./e2e-tests/run-all-no-camera.sh
+
 # Run all tests (PowerShell/Windows)
 .\e2e-tests\run-all.ps1
+
+# Run all tests without camera (PowerShell)
+.\e2e-tests\run-all-no-camera.ps1
 
 # Run a single test
 ./e2e-tests/rtmp-publish-play-h264.sh
@@ -29,6 +35,57 @@ End-to-end tests for the go-rtmp server using FFmpeg, ffprobe, and the server bi
 
 # List all available tests
 ./e2e-tests/run-all.sh --list
+```
+
+## Manual Testing
+
+For manual testing without the automation framework, see **[MANUAL_TESTING.md](MANUAL_TESTING.md)** which provides:
+
+- **Exact command reference** for each tool (FFmpeg, ffprobe, ffplay, rtmp-server)
+- **Per-test walkthroughs** showing how to run tests manually in separate terminals
+- **Quick reference** for common commands (start server, publish, capture, verify)
+- **Verification examples** using ffprobe to check codecs and file properties
+
+Example:
+```bash
+# From MANUAL_TESTING.md — publish H.264 stream manually
+./rtmp-server -listen localhost:1935 -log-level debug
+
+# In another terminal:
+ffmpeg -hide_banner -loglevel error -re \
+  -f lavfi -i "testsrc=duration=5:size=320x240:rate=25" \
+  -f lavfi -i "sine=frequency=440:duration=5" \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 64k \
+  -f flv "rtmp://localhost:1935/live/test"
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | PASS    |
+| 1    | FAIL    |
+| 2    | SKIP (missing prerequisites) |
+
+## Disabling Camera Tests
+
+Camera tests (`srt-camera-ingest`) auto-skip if no camera is detected. For CI/headless environments, you can explicitly disable them:
+
+```bash
+# Bash: Set SKIP_CAMERA_TESTS environment variable
+export SKIP_CAMERA_TESTS=1
+./e2e-tests/run-all.sh
+
+# Or use the convenience script (recommended for CI)
+./e2e-tests/run-all-no-camera.sh
+
+# PowerShell: Set environment variable
+$env:SKIP_CAMERA_TESTS = "1"
+.\e2e-tests\run-all.ps1
+
+# Or use the convenience script
+.\e2e-tests\run-all-no-camera.ps1
 ```
 
 ## Exit Codes
