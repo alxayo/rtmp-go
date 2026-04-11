@@ -5,6 +5,7 @@ package handshake
 // Mirrors server.go patterns for deadlines, logging, and error wrapping.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -81,7 +82,7 @@ func ClientHandshake(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, s2buf[:]); err == nil {
 		haveS2 = true
 		// Validate S2 echoes our original C1; warn if mismatch but continue.
-		if !bytesEqual(s2buf[:], c1[:]) {
+		if !bytes.Equal(s2buf[:], c1[:]) {
 			log.Warn("S2 early echo mismatch", "expected_echo_len", len(c1))
 		}
 	}
@@ -106,7 +107,7 @@ func ClientHandshake(conn net.Conn) error {
 		if err := setReadDeadline(conn, clientReadTimeout); err == nil {
 			s2 := make([]byte, PacketSize)
 			if _, err := io.ReadFull(conn, s2); err == nil {
-				if !bytesEqual(s2, c1[:]) {
+				if !bytes.Equal(s2, c1[:]) {
 					log.Warn("S2 echo mismatch", "expected_echo_len", len(c1))
 				}
 			}

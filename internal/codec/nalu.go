@@ -140,10 +140,10 @@ func ToAVCC(nalus [][]byte) []byte {
 	buf := make([]byte, 0, totalSize)
 
 	// Write each NALU with its 4-byte length prefix
+	var lenBuf [4]byte // stack-allocated, reused across iterations
 	for _, nalu := range nalus {
-		lenBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lenBytes, uint32(len(nalu)))
-		buf = append(buf, lenBytes...)
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(nalu)))
+		buf = append(buf, lenBuf[:]...)
 		buf = append(buf, nalu...)
 	}
 

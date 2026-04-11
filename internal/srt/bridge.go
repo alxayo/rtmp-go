@@ -17,6 +17,7 @@ package srt
 // RTMP publishes — same internal data format, same routing, same subscribers.
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 
@@ -178,9 +179,9 @@ func (b *Bridge) handleH264Frame(frame *ts.MediaFrame) {
 	sps, pps, found := codec.ExtractSPSPPS(nalus)
 	if found {
 		// Check if the SPS/PPS changed (e.g., mid-stream resolution change)
-		if !b.h264SeqHeaderSent || !bytesEqual(b.sps, sps) || !bytesEqual(b.pps, pps) {
-			b.sps = copyBytes(sps)
-			b.pps = copyBytes(pps)
+		if !b.h264SeqHeaderSent || !bytes.Equal(b.sps, sps) || !bytes.Equal(b.pps, pps) {
+			b.sps = bytes.Clone(sps)
+			b.pps = bytes.Clone(pps)
 
 			// Build and send the RTMP video sequence header
 			seqHeader := codec.BuildAVCSequenceHeader(b.sps, b.pps)
@@ -273,13 +274,13 @@ func (b *Bridge) handleH265Frame(frame *ts.MediaFrame) {
 		// Check if the parameter sets changed (e.g., mid-stream profile change)
 		// This is important because H.265 allows switching profiles on-the-fly.
 		if !b.h265SeqHeaderSent ||
-			!bytesEqual(b.vps, vps) ||
-			!bytesEqual(b.sps265, sps) ||
-			!bytesEqual(b.pps265, pps) {
+			!bytes.Equal(b.vps, vps) ||
+			!bytes.Equal(b.sps265, sps) ||
+			!bytes.Equal(b.pps265, pps) {
 
-			b.vps = copyBytes(vps)
-			b.sps265 = copyBytes(sps)
-			b.pps265 = copyBytes(pps)
+			b.vps = bytes.Clone(vps)
+			b.sps265 = bytes.Clone(sps)
+			b.pps265 = bytes.Clone(pps)
 
 			// Build and send the RTMP video sequence header for H.265
 			// The HEVCDecoderConfigurationRecord includes all three parameter sets.
@@ -427,27 +428,3 @@ func (b *Bridge) pushAudio(payload []byte, timestamp uint32) {
 	b.session.PushMedia(msg)
 }
 
-// bytesEqual compares two byte slices for equality.
-// Handles nil slices correctly.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// copyBytes makes a copy of a byte slice.
-// Returns nil if the input is nil.
-func copyBytes(b []byte) []byte {
-	if b == nil {
-		return nil
-	}
-	c := make([]byte, len(b))
-	copy(c, b)
-	return c
-}

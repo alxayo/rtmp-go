@@ -5,6 +5,7 @@ package handshake
 // Wire format references: contracts/handshake.md and spec notes. Version 0x03 only.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -108,7 +109,7 @@ func ServerHandshake(conn net.Conn) error {
 	}
 
 	// Optional validation: C2 should echo S1. Non-fatal; warn if mismatch.
-	if !bytesEqual(c2, s1[:]) {
+	if !bytes.Equal(c2, s1[:]) {
 		log.Warn("C2 echo mismatch", "expected_echo_len", len(s1), "got_len", len(c2))
 	}
 
@@ -162,21 +163,6 @@ func writeFull(w io.Writer, b []byte) error {
 		off += n
 	}
 	return nil
-}
-
-// bytesEqual compares two byte slices for equality.
-// We use a simple inline version to avoid importing the "bytes" package
-// just for this single comparison.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // isTimeoutErr checks if an error is a network timeout.

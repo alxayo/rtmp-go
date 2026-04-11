@@ -148,9 +148,13 @@ func (r *Reader) ReadMessage() (*Message, error) {
 		if readLen > r.chunkSize {
 			readLen = r.chunkSize
 		}
-		// Ensure scratch buffer capacity
+		// Ensure scratch buffer capacity (exponential growth to reduce allocations)
 		if uint32(cap(r.scratch)) < readLen {
-			r.scratch = make([]byte, readLen)
+			newCap := readLen
+			if newCap < r.chunkSize*2 {
+				newCap = r.chunkSize * 2
+			}
+			r.scratch = make([]byte, newCap)
 		}
 		buf := r.scratch[:readLen]
 		if _, err := io.ReadFull(r.br, buf); err != nil {

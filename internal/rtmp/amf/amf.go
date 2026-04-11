@@ -82,8 +82,8 @@ func DecodeValue(r io.Reader) (interface{}, error) {
 // exhaustion. This is helpful for parsing command payloads. It stops at EOF.
 func DecodeAll(data []byte) ([]interface{}, error) {
 	r := bytes.NewReader(data)
-	var out []interface{}
-	for r.Len() > 0 { // while unread bytes remain
+	out := make([]interface{}, 0, 4) // typical RTMP command has 3-5 values
+	for r.Len() > 0 {               // while unread bytes remain
 		v, err := DecodeValue(r)
 		if err != nil {
 			return nil, err

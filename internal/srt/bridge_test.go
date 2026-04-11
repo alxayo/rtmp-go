@@ -1,12 +1,16 @@
 package srt
 
 import (
+	"bytes"
 	"testing"
 )
 
-// TestBytesEqual tests the byte slice comparison helper.
-func TestBytesEqual(t *testing.T) {
-	tests := []struct {
+// TestBytesCloneBehavior validates that bytes.Clone (used to replace
+// the custom copyBytes helper) preserves the semantics we depend on:
+// independent copy, nil-safe behavior.
+func TestBytesCloneBehavior(t *testing.T) {
+	// bytes.Equal tests (replaces custom bytesEqual)
+	eqTests := []struct {
 		name string
 		a, b []byte
 		want bool
@@ -17,34 +21,30 @@ func TestBytesEqual(t *testing.T) {
 		{"different content", []byte{1, 2, 3}, []byte{1, 2, 4}, false},
 		{"empty", []byte{}, []byte{}, true},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := bytesEqual(tt.a, tt.b); got != tt.want {
-				t.Errorf("bytesEqual(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+	for _, tt := range eqTests {
+		t.Run("equal/"+tt.name, func(t *testing.T) {
+			if got := bytes.Equal(tt.a, tt.b); got != tt.want {
+				t.Errorf("bytes.Equal(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
 	}
-}
 
-// TestCopyBytes tests the byte slice copy helper.
-func TestCopyBytes(t *testing.T) {
-	original := []byte{1, 2, 3, 4, 5}
-	copied := copyBytes(original)
+	// bytes.Clone tests (replaces custom copyBytes)
+	t.Run("clone/independent_copy", func(t *testing.T) {
+		original := []byte{1, 2, 3, 4, 5}
+		copied := bytes.Clone(original)
+		if !bytes.Equal(original, copied) {
+			t.Error("clone should be equal to original")
+		}
+		copied[0] = 99
+		if original[0] == 99 {
+			t.Error("modifying clone should not affect original")
+		}
+	})
 
-	// Should be equal
-	if !bytesEqual(original, copied) {
-		t.Error("copy should be equal to original")
-	}
-
-	// Should be a different underlying array
-	copied[0] = 99
-	if original[0] == 99 {
-		t.Error("modifying copy should not affect original")
-	}
-
-	// Nil input → nil output
-	if copyBytes(nil) != nil {
-		t.Error("copyBytes(nil) should return nil")
-	}
+	t.Run("clone/nil_input", func(t *testing.T) {
+		if bytes.Clone(nil) != nil {
+			t.Error("bytes.Clone(nil) should return nil")
+		}
+	})
 }

@@ -22,6 +22,7 @@
 package handshake
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -92,7 +93,7 @@ func TestServerHandshake_Valid(t *testing.T) {
 	s1 := sBuf[1 : 1+PacketSize]
 	s2 := sBuf[1+PacketSize:]
 	c1 := c0c1[1:]
-	if !bytesEqual(s2, c1) {
+	if !bytes.Equal(s2, c1) {
 		t.Fatalf("S2 did not echo C1")
 	}
 
