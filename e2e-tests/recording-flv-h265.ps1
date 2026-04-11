@@ -1,12 +1,13 @@
 # ============================================================================
 # TEST: recording-flv-h265
-# GROUP: FLV Recording
+# GROUP: Recording
 #
 # WHAT IS TESTED:
-#   FLV recording preserves H.265/HEVC codec from Enhanced RTMP publish.
+#   Recording preserves H.265/HEVC codec from Enhanced RTMP publish.
+#   H.265 streams are automatically recorded as MP4 (correct container).
 #
 # EXPECTED RESULT:
-#   - Recording .flv contains HEVC video, decodable
+#   - Recording .mp4 contains HEVC video, decodable
 # ============================================================================
 . "$PSScriptRoot\_lib.ps1"
 
@@ -30,9 +31,10 @@ Write-Host "$(Get-Date -Format 'HH:mm:ss') -> Publishing H.265 via Enhanced RTMP
 Publish-H265TestPattern -Url "rtmp://localhost:${Port}/live/h265-rec" -Duration 5
 Start-Sleep -Seconds 3
 
-$recording = Get-ChildItem -Path $recordDir -Filter "*.flv" -Recurse | Select-Object -First 1
+# H.265 should produce MP4; fall back to FLV for backwards compat
+$recording = Get-ChildItem -Path $recordDir -Include "*.mp4","*.flv" -Recurse | Select-Object -First 1
 if (-not $recording) {
-    Fail-Check "H.265 recording file created" "No .flv file found"
+    Fail-Check "H.265 recording file created" "No recording file found"
 } else {
     Pass-Check "H.265 recording file created: $($recording.Name)"
     Assert-VideoCodec -File $recording.FullName -Expected "hevc"

@@ -63,8 +63,8 @@ assert_file_exists "$CAPTURE" "H.265 subscriber capture exists"
 assert_video_codec "$CAPTURE" "hevc"
 assert_decodable "$CAPTURE"
 
-# Also verify recording
-RECORDING=$(find "$RECORD_DIR" -name "*.flv" -type f | head -n 1)
+# Also verify recording (H.265 should be MP4, fall back to FLV check)
+RECORDING=$(find "$RECORD_DIR" \( -name "*.mp4" -o -name "*.flv" \) -type f | head -n 1)
 if [[ -n "$RECORDING" ]]; then
     pass_check "H.265 recording also created"
     assert_video_codec "$RECORDING" "hevc"

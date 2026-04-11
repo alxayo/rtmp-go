@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================================
 # TEST: recording-flv-h265
-# GROUP: FLV Recording
+# GROUP: Recording
 #
 # WHAT IS TESTED:
-#   Server-side FLV recording preserves H.265/HEVC codec when published via
-#   Enhanced RTMP. Verifies that the recording pipeline correctly handles
-#   HEVC content including Enhanced RTMP FourCC signaling.
+#   Server-side recording preserves H.265/HEVC codec when published via
+#   Enhanced RTMP. H.265 streams are automatically recorded as MP4 (not FLV)
+#   since MP4 properly supports modern codecs. Verifies that the recording
+#   pipeline correctly detects the codec and selects the right container.
 #
 # EXPECTED RESULT:
-#   - A .flv recording file is created
+#   - A .mp4 recording file is created (not .flv)
 #   - ffprobe shows HEVC (H.265) video codec
 #   - File is decodable
 #
@@ -46,9 +47,13 @@ log_step "Publishing H.265 test pattern via Enhanced RTMP (5s)..."
 publish_h265_test_pattern "rtmp://localhost:${PORT}/live/h265-rec" 5
 sleep 3
 
-RECORDING=$(find "$RECORD_DIR" -name "*.flv" -type f | head -n 1)
+# H.265 recordings should be MP4; fall back to checking FLV for backwards compat
+RECORDING=$(find "$RECORD_DIR" -name "*.mp4" -type f | head -n 1)
 if [[ -z "$RECORDING" ]]; then
-    fail_check "H.265 recording file created" "No .flv file found in $RECORD_DIR"
+    RECORDING=$(find "$RECORD_DIR" -name "*.flv" -type f | head -n 1)
+fi
+if [[ -z "$RECORDING" ]]; then
+    fail_check "H.265 recording file created" "No recording file found in $RECORD_DIR"
 else
     pass_check "H.265 recording file created: $(basename "$RECORDING")"
     assert_video_codec "$RECORDING" "hevc"

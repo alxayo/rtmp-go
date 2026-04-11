@@ -51,7 +51,7 @@ Assert-FileExists -File $capture -Label "H.265 subscriber capture exists"
 Assert-VideoCodec -File $capture -Expected "hevc"
 Assert-Decodable -File $capture
 
-$recording = Get-ChildItem -Path $recordDir -Filter "*.flv" -Recurse | Select-Object -First 1
+$recording = Get-ChildItem -Path $recordDir -Include "*.mp4","*.flv" -Recurse | Select-Object -First 1
 if ($recording) {
     Pass-Check "H.265 recording also created"
     Assert-VideoCodec -File $recording.FullName -Expected "hevc"

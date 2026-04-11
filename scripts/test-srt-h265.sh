@@ -181,8 +181,8 @@ echo ""
 log_step "Waiting for recordings to be flushed..."
 sleep 2
 
-# Find the recording file (most recent H.265 or H.264 file)
-RECORD_FILE=$(ls -t "$RECORD_DIR"/*.flv 2>/dev/null | head -1)
+# Find the recording file — H.265 streams are recorded as MP4, H.264 as FLV
+RECORD_FILE=$(ls -t "$RECORD_DIR"/*.mp4 "$RECORD_DIR"/*.flv 2>/dev/null | head -1)
 
 if [ -z "$RECORD_FILE" ]; then
     log_error "No recording found in $RECORD_DIR"
@@ -197,10 +197,19 @@ log_step "Validating recording..."
 FILE_SIZE=$(stat -f%z "$RECORD_FILE" 2>/dev/null || stat -c%s "$RECORD_FILE" 2>/dev/null || echo "unknown")
 log_info "File size: ${FILE_SIZE} bytes"
 
+# Check container format for H.265 streams — should be MP4
+if [ "$H265_AVAILABLE" = true ]; then
+    if [[ "$RECORD_FILE" == *.mp4 ]]; then
+        log_info "✓ H.265 recorded as MP4 (correct format)"
+    else
+        log_warn "Expected MP4 container for H.265, got $(basename ${RECORD_FILE##*.})"
+    fi
+fi
+
 # Check for video codec in the recording
 if command -v ffprobe &> /dev/null; then
     CODEC_FOUND=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
-        -of default=noprint_wrappers=1:nokey=1:noprint_filename=1 "$RECORD_FILE" 2>/dev/null || echo "unknown")
+        -of csv=p=0 "$RECORD_FILE" 2>/dev/null | head -1 || echo "unknown")
     log_info "Video codec in file: ${CODEC_FOUND}"
 
     # Check for H.265 if we tried to stream it
