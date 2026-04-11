@@ -1,7 +1,6 @@
 package media
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -12,25 +11,41 @@ import (
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 )
 
-// MP4Recorder writes RTMP media to MP4 format.
-// MP4 supports modern codecs (H.265, AV1, VP9, VVC) that FLV cannot handle.
-// Implementation: buffers frames, then writes ftyp + mdat + moov on Close().
+// MP4Recorder writes RTMP media to MP4 format, streaming frames directly
+// to disk to avoid buffering the entire recording in memory.
+//
+// File layout: [ftyp box][mdat box (streamed)][moov box (written on Close)]
+//
+// On creation, the ftyp box and mdat header (with placeholder size) are written.
+// Each WriteMessage() appends frame data to mdat on disk immediately.
+// On Close(), the mdat header is patched with the actual size, and the moov
+// box (track metadata + sample tables) is appended at the end.
+//
+// Memory usage is O(number_of_samples) for sample metadata only — frame data
+// is never held in memory. A 1-hour recording at 30fps uses ~3MB of metadata
+// vs ~2GB if frames were buffered.
 type MP4Recorder struct {
 	mu            sync.Mutex
-	filepath      string
+	file          *os.File
 	logger        *slog.Logger
 	disabled      bool
-	samples       []*mp4Sample
-	frameBuffer   *bytes.Buffer
+	samples       []mp4Sample
+	mdatStart     int64  // file offset where mdat box begins
+	mdatDataSize  int64  // bytes of frame data written to mdat
 	lastTimestamp uint32
 }
 
 type mp4Sample struct {
 	isVideo   bool
-	offset    int64
+	offset    int64  // offset within mdat data (relative to mdat payload start)
 	size      int32
 	timestamp uint32
 }
+
+const (
+	ftypBoxSize = 32 // fixed ftyp box size
+	mdatHdrSize = 8  // mdat box header (size + "mdat")
+)
 
 func NewMP4Recorder(path string, logger *slog.Logger) (MediaWriter, error) {
 	if logger == nil {
@@ -40,14 +55,29 @@ func NewMP4Recorder(path string, logger *slog.Logger) (MediaWriter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mp4_recorder.create: %w", err)
 	}
-	f.Close()
 
-	return &MP4Recorder{
-		filepath:    path,
-		logger:      logger,
-		samples:     make([]*mp4Sample, 0, 1024),
-		frameBuffer: &bytes.Buffer{},
-	}, nil
+	r := &MP4Recorder{
+		file:      f,
+		logger:    logger,
+		samples:   make([]mp4Sample, 0, 1024),
+		mdatStart: ftypBoxSize,
+	}
+
+	// Write ftyp box immediately
+	if err := r.writeFtypBox(); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("mp4_recorder.ftyp: %w", err)
+	}
+
+	// Write mdat header with placeholder size (patched on Close)
+	var mdatHdr [mdatHdrSize]byte
+	copy(mdatHdr[4:], []byte("mdat"))
+	if _, err := f.Write(mdatHdr[:]); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("mp4_recorder.mdat_header: %w", err)
+	}
+
+	return r, nil
 }
 
 func (r *MP4Recorder) WriteMessage(msg *chunk.Message) {
@@ -62,21 +92,23 @@ func (r *MP4Recorder) WriteMessage(msg *chunk.Message) {
 	}
 
 	isVideo := msg.TypeID == 9
-	offset := int64(r.frameBuffer.Len())
+	offset := r.mdatDataSize
 	size := int32(len(msg.Payload))
 
-	if _, err := r.frameBuffer.Write(msg.Payload); err != nil {
-		r.logger.Error("mp4_recorder buffer failed", "err", err)
+	// Stream frame data directly to disk
+	if _, err := r.file.Write(msg.Payload); err != nil {
+		r.logger.Error("mp4_recorder write failed", "err", err)
 		r.disabled = true
 		return
 	}
 
-	r.samples = append(r.samples, &mp4Sample{
+	r.samples = append(r.samples, mp4Sample{
 		isVideo:   isVideo,
 		offset:    offset,
 		size:      size,
 		timestamp: msg.Timestamp,
 	})
+	r.mdatDataSize += int64(size)
 	r.lastTimestamp = msg.Timestamp
 }
 
@@ -90,50 +122,42 @@ func (r *MP4Recorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.file == nil {
+		return nil
+	}
+	defer func() {
+		r.file.Close()
+		r.file = nil
+	}()
+
 	if r.disabled || len(r.samples) == 0 {
 		return nil
 	}
 
-	f, err := os.Create(r.filepath)
-	if err != nil {
-		return fmt.Errorf("mp4_recorder.reopen: %w", err)
+	// Patch mdat box size: seek to mdat header, write actual size
+	mdatBoxSize := uint32(mdatHdrSize + r.mdatDataSize)
+	var sizeBuf [4]byte
+	binary.BigEndian.PutUint32(sizeBuf[:], mdatBoxSize)
+	if _, err := r.file.WriteAt(sizeBuf[:], r.mdatStart); err != nil {
+		return fmt.Errorf("mp4_recorder.patch_mdat: %w", err)
 	}
-	defer f.Close()
 
-	if err := r.writeFtypBox(f); err != nil {
-		return err
-	}
-	if err := r.writeMdatBox(f); err != nil {
-		return err
-	}
-	if err := r.writeMoovBox(f); err != nil {
-		return err
+	// Append moov box at end of file
+	if err := r.writeMoovBox(r.file); err != nil {
+		return fmt.Errorf("mp4_recorder.moov: %w", err)
 	}
 
 	return nil
 }
 
-func (r *MP4Recorder) writeFtypBox(w io.Writer) error {
+func (r *MP4Recorder) writeFtypBox() error {
 	ftypData := []byte{
 		0x00, 0x00, 0x00, 0x20, 'f', 't', 'y', 'p',
 		'i', 's', 'o', 'm', 0x00, 0x00, 0x00, 0x00,
 		'i', 's', 'o', 'm', 'i', 's', 'o', '2',
 		'a', 'v', 'c', '1', 'h', 'e', 'v', '1',
 	}
-	_, err := w.Write(ftypData)
-	return err
-}
-
-func (r *MP4Recorder) writeMdatBox(w io.Writer) error {
-	frameData := r.frameBuffer.Bytes()
-	mdatSize := 8 + len(frameData)
-	header := make([]byte, 8)
-	binary.BigEndian.PutUint32(header, uint32(mdatSize))
-	copy(header[4:], []byte("mdat"))
-	if _, err := w.Write(header); err != nil {
-		return err
-	}
-	_, err := w.Write(frameData)
+	_, err := r.file.Write(ftypData)
 	return err
 }
 
@@ -391,23 +415,24 @@ func (r *MP4Recorder) buildSampleTable(isVideo bool) *mp4BoxBuilder {
 	stsz.writeU32(0)
 	stsz.writeU32(0)
 	stsz.writeU32(uint32(len(r.samples)))
-	for _, sample := range r.samples {
-		stsz.writeU32(uint32(sample.size))
+	for i := range r.samples {
+		stsz.writeU32(uint32(r.samples[i].size))
 	}
 	stblBuf.writeBox("stsz", stsz.Bytes())
 
+	// stco: chunk offset — points to start of mdat payload
 	stcoBuf := newMP4BoxBuilder()
 	stcoBuf.writeU32(0)
 	stcoBuf.writeU32(1)
-	stcoBuf.writeU32(40)
+	stcoBuf.writeU32(uint32(ftypBoxSize + mdatHdrSize)) // offset to first byte of mdat data
 	stblBuf.writeBox("stco", stcoBuf.Bytes())
 
 	return stblBuf
 }
 
 func (r *MP4Recorder) hasVideoSamples() bool {
-	for _, s := range r.samples {
-		if s.isVideo {
+	for i := range r.samples {
+		if r.samples[i].isVideo {
 			return true
 		}
 	}
@@ -415,8 +440,8 @@ func (r *MP4Recorder) hasVideoSamples() bool {
 }
 
 func (r *MP4Recorder) hasAudioSamples() bool {
-	for _, s := range r.samples {
-		if !s.isVideo {
+	for i := range r.samples {
+		if !r.samples[i].isVideo {
 			return true
 		}
 	}
@@ -424,11 +449,10 @@ func (r *MP4Recorder) hasAudioSamples() bool {
 }
 
 func (r *MP4Recorder) writeBoxHeader(w io.Writer, boxType string, data []byte) error {
-	boxSize := 8 + len(data)
-	header := make([]byte, 8)
-	binary.BigEndian.PutUint32(header, uint32(boxSize))
+	var header [8]byte
+	binary.BigEndian.PutUint32(header[:], uint32(8+len(data)))
 	copy(header[4:], []byte(boxType))
-	if _, err := w.Write(header); err != nil {
+	if _, err := w.Write(header[:]); err != nil {
 		return err
 	}
 	_, err := w.Write(data)
@@ -452,15 +476,15 @@ func (b *mp4BoxBuilder) writeU8(v uint8) {
 }
 
 func (b *mp4BoxBuilder) writeU16(v uint16) {
-	buf := make([]byte, 2)
-	binary.BigEndian.PutUint16(buf, v)
-	b.data = append(b.data, buf...)
+	var buf [2]byte
+	binary.BigEndian.PutUint16(buf[:], v)
+	b.data = append(b.data, buf[:]...)
 }
 
 func (b *mp4BoxBuilder) writeU32(v uint32) {
-	buf := make([]byte, 4)
-	binary.BigEndian.PutUint32(buf, v)
-	b.data = append(b.data, buf...)
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], v)
+	b.data = append(b.data, buf[:]...)
 }
 
 func (b *mp4BoxBuilder) writeBytes(p []byte) {
@@ -468,11 +492,10 @@ func (b *mp4BoxBuilder) writeBytes(p []byte) {
 }
 
 func (b *mp4BoxBuilder) writeBox(boxType string, contents []byte) {
-	size := 8 + len(contents)
-	header := make([]byte, 8)
-	binary.BigEndian.PutUint32(header, uint32(size))
+	var header [8]byte
+	binary.BigEndian.PutUint32(header[:], uint32(8+len(contents)))
 	copy(header[4:], []byte(boxType))
-	b.data = append(b.data, header...)
+	b.data = append(b.data, header[:]...)
 	b.data = append(b.data, contents...)
 }
 
