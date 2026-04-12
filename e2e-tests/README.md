@@ -21,11 +21,17 @@ End-to-end tests for the go-rtmp server using FFmpeg, ffprobe, and the server bi
 # Run all tests WITHOUT camera tests (CI/headless environments)
 ./e2e-tests/run-all-no-camera.sh
 
+# Run ONLY camera tests (requires live camera device)
+./e2e-tests/run-camera-tests.sh
+
 # Run all tests (PowerShell/Windows)
 .\e2e-tests\run-all.ps1
 
 # Run all tests without camera (PowerShell)
 .\e2e-tests\run-all-no-camera.ps1
+
+# Run only camera tests (PowerShell)
+.\e2e-tests\run-camera-tests.ps1
 
 # Run a single test
 ./e2e-tests/rtmp-publish-play-h264.sh
@@ -68,9 +74,40 @@ ffmpeg -hide_banner -loglevel error -re \
 | 1    | FAIL    |
 | 2    | SKIP (missing prerequisites) |
 
-## Disabling Camera Tests
+## Camera Tests
 
-Camera tests (`srt-camera-ingest`) auto-skip if no camera is detected. For CI/headless environments, you can explicitly disable them:
+Camera tests validate live camera capture and streaming across protocols and codecs. They require a physical camera device attached to the system.
+
+| Test | Protocol | Codec | Transport | Recording |
+|------|----------|-------|-----------|-----------|
+| `camera-rtmp-h264` | RTMP | H.264 | Plain TCP | FLV |
+| `camera-rtmps-h264` | RTMPS | H.264 | TLS | — |
+| `camera-enhanced-rtmp-h265` | Enhanced RTMP | H.265 | Plain TCP | MP4 |
+| `camera-enhanced-rtmps-h265` | Enhanced RTMP | H.265 | TLS | MP4 |
+| `camera-srt-h264` | SRT | H.264 | UDP/SRT | FLV |
+| `camera-srt-h265` | SRT | H.265 | UDP/SRT | MP4 |
+
+### Running Camera Tests
+
+```bash
+# Run all camera tests (Bash)
+./e2e-tests/run-camera-tests.sh
+
+# List camera tests
+./e2e-tests/run-camera-tests.sh --list
+
+# Filter camera tests
+./e2e-tests/run-camera-tests.sh --filter srt
+
+# PowerShell
+.\e2e-tests\run-camera-tests.ps1
+.\e2e-tests\run-camera-tests.ps1 -List
+.\e2e-tests\run-camera-tests.ps1 -Filter srt
+```
+
+### Skipping Camera Tests
+
+Camera tests auto-skip if no camera is detected. For CI/headless environments, you can explicitly disable them:
 
 ```bash
 # Bash: Set SKIP_CAMERA_TESTS environment variable
@@ -88,13 +125,20 @@ $env:SKIP_CAMERA_TESTS = "1"
 .\e2e-tests\run-all-no-camera.ps1
 ```
 
-## Exit Codes
+### Platform Support
 
-| Code | Meaning |
-|------|---------|
-| 0    | PASS    |
-| 1    | FAIL    |
-| 2    | SKIP (missing prerequisites) |
+| Platform | Camera Input | Runner |
+|----------|-------------|--------|
+| macOS | `-f avfoundation -i "0:0"` | `.sh` |
+| Linux | `-f v4l2 -i /dev/video0` | `.sh` |
+| Windows | `-f dshow -i video="Camera"` | `.ps1` only |
+
+### Prerequisites
+
+- Live camera device connected to the system
+- FFmpeg built with the appropriate capture backend (avfoundation/v4l2/dshow)
+- For H.265 tests: FFmpeg built with libx265
+- For SRT tests: FFmpeg built with libsrt
 
 ## Test Groups
 
@@ -159,6 +203,16 @@ $env:SKIP_CAMERA_TESTS = "1"
 |------|-------------|
 | `metrics-expvar-counters` | /debug/vars returns RTMP counters |
 
+### Camera (6 tests)
+| Test | Description |
+|------|-------------|
+| `camera-rtmp-h264` | Live camera → RTMP H.264 publish with FLV recording |
+| `camera-rtmps-h264` | Live camera → RTMPS H.264 publish over TLS |
+| `camera-enhanced-rtmp-h265` | Live camera → Enhanced RTMP H.265 with MP4 recording |
+| `camera-enhanced-rtmps-h265` | Live camera → Enhanced RTMP H.265 over TLS with MP4 recording |
+| `camera-srt-h264` | Live camera → SRT H.264 ingest with FLV recording |
+| `camera-srt-h265` | Live camera → SRT H.265 ingest with MP4 recording |
+
 ### Connection Lifecycle (3 tests)
 | Test | Description |
 |------|-------------|
@@ -187,7 +241,7 @@ Every test sources the shared library which provides:
 
 ### Naming Convention
 
-- **Group prefix**: `rtmp-`, `rtmps-`, `enhanced-rtmp-`, `srt-`, `recording-`, `auth-`, `hooks-`, `relay-`, `metrics-`, `reconnect-`, `server-`
+- **Group prefix**: `rtmp-`, `rtmps-`, `enhanced-rtmp-`, `srt-`, `camera-`, `recording-`, `auth-`, `hooks-`, `relay-`, `metrics-`, `reconnect-`, `server-`
 - **Utility files**: Prefixed with `_` (e.g., `_lib.sh`)
 - All test content is synthetic (FFmpeg `lavfi` generators) — no input files needed.
 

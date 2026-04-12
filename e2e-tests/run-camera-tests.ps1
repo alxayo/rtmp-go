@@ -1,10 +1,13 @@
 # ============================================================================
-# run-all.ps1 — Discovers and runs all E2E tests in this directory (Windows)
+# run-camera-tests.ps1 — Run only camera E2E tests (Windows)
+#
+# These tests require a live camera device (Windows: dshow, macOS: avfoundation).
+# Tests will auto-skip if no camera is detected on the current platform.
 #
 # USAGE:
-#   .\e2e-tests\run-all.ps1                    # Run all tests
-#   .\e2e-tests\run-all.ps1 -Filter rtmp       # Run tests matching "rtmp"
-#   .\e2e-tests\run-all.ps1 -List              # List tests without running
+#   .\e2e-tests\run-camera-tests.ps1               # Run all camera tests
+#   .\e2e-tests\run-camera-tests.ps1 -List          # List camera tests
+#   .\e2e-tests\run-camera-tests.ps1 -Filter srt    # Filter by pattern
 # ============================================================================
 param(
     [string]$Filter = "",
@@ -16,14 +19,13 @@ $ScriptDir = $PSScriptRoot
 
 . "$ScriptDir\_lib.ps1"
 
-# Discover test scripts
-$tests = Get-ChildItem "$ScriptDir\[a-z]*-*.ps1" -File |
-    Where-Object { $_.Name -notlike "run-*.ps1" } |
+# Discover camera test scripts only
+$tests = Get-ChildItem "$ScriptDir\camera-*.ps1" -File |
     Where-Object { -not $Filter -or $_.Name -match $Filter } |
     Sort-Object Name
 
 Write-Host "============================================" -ForegroundColor Blue
-Write-Host "  go-rtmp - Full E2E Test Suite" -ForegroundColor Blue
+Write-Host "  go-rtmp - Camera E2E Tests" -ForegroundColor Blue
 Write-Host "============================================" -ForegroundColor Blue
 Write-Host ""
 Write-Host "Tests found: $($tests.Count)"
@@ -58,7 +60,7 @@ foreach ($testScript in $tests) {
 }
 
 Write-Host ""
-Write-Host "=== E2E Test Suite Summary ===" -ForegroundColor Blue
+Write-Host "=== Camera Test Suite Summary ===" -ForegroundColor Blue
 Write-Host "  Total:   $total"
 Write-Host "  Passed:  $passed" -ForegroundColor Green
 Write-Host "  Failed:  $failed" -ForegroundColor Red
@@ -71,6 +73,6 @@ if ($failed -gt 0) {
     exit 1
 } else {
     Write-Host ""
-    Write-Host "All tests passed!" -ForegroundColor Green
+    Write-Host "All camera tests passed!" -ForegroundColor Green
     exit 0
 }

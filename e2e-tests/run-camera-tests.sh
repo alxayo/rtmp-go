@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run-all.sh — Discovers and runs all E2E tests in this directory
+# Run only camera E2E tests
 #
-# Tests are any executable files matching the pattern: [a-z]*-*.sh
-# (excludes files starting with _ which are utilities)
+# These tests require a live camera device (macOS: avfoundation, Linux: v4l2).
+# Tests will auto-skip if no camera is detected on the current platform.
 #
 # USAGE:
-#   ./e2e-tests/run-all.sh                    # Run all tests
-#   ./e2e-tests/run-all.sh --filter rtmp      # Run tests matching "rtmp"
-#   ./e2e-tests/run-all.sh --list             # List tests without running
+#   ./e2e-tests/run-camera-tests.sh           # Run all camera tests
+#   ./e2e-tests/run-camera-tests.sh --list    # List camera tests
+#   ./e2e-tests/run-camera-tests.sh --filter srt  # Filter by pattern
 # ============================================================================
 set -euo pipefail
 
@@ -24,19 +24,18 @@ while [[ $# -gt 0 ]]; do
         --list)   LIST_ONLY=true; shift ;;
         --help|-h)
             echo "Usage: $0 [--filter PATTERN] [--list]"
-            echo "  --filter PATTERN   Only run tests whose filename contains PATTERN"
-            echo "  --list             List tests without running them"
+            echo "  --filter PATTERN   Only run camera tests whose filename contains PATTERN"
+            echo "  --list             List camera tests without running them"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-# Discover test scripts (exclude _ prefixed utilities and run-all itself)
+# Discover camera test scripts only
 TESTS=()
-for f in "$SCRIPT_DIR"/[a-z]*-*.sh; do
+for f in "$SCRIPT_DIR"/camera-*.sh; do
     [[ -f "$f" ]] || continue
-    [[ "$(basename "$f")" == run-*.sh ]] && continue
     if [[ -n "$FILTER" ]] && [[ "$(basename "$f")" != *"$FILTER"* ]]; then
         continue
     fi
@@ -44,7 +43,7 @@ for f in "$SCRIPT_DIR"/[a-z]*-*.sh; do
 done
 
 echo -e "${BLUE}============================================${NC}"
-echo -e "${BLUE}  go-rtmp — Full E2E Test Suite${NC}"
+echo -e "${BLUE}  go-rtmp — Camera E2E Tests${NC}"
 echo -e "${BLUE}============================================${NC}"
 echo ""
 echo "Tests found: ${#TESTS[@]}"
@@ -61,7 +60,7 @@ if $LIST_ONLY; then
     exit 0
 fi
 
-# Build server once before running all tests
+# Build server once before running tests
 build_server
 
 # Clean up previous test artifacts
@@ -94,7 +93,7 @@ done
 
 # Summary
 echo ""
-echo -e "${BLUE}=== E2E Test Suite Summary ===${NC}"
+echo -e "${BLUE}=== Camera Test Suite Summary ===${NC}"
 echo -e "  Total:   $TOTAL"
 echo -e "  ${GREEN}Passed:  $PASSED${NC}"
 echo -e "  ${RED}Failed:  $FAILED${NC}"
@@ -111,6 +110,6 @@ if [[ $FAILED -gt 0 ]]; then
     exit 1
 else
     echo ""
-    echo -e "${GREEN}All tests passed!${NC}"
+    echo -e "${GREEN}All camera tests passed!${NC}"
     exit 0
 fi

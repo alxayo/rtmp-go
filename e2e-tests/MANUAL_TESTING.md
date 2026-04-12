@@ -560,3 +560,259 @@ curl -s "http://localhost:8080/debug/vars" | jq '.rtmp_connections_total'
 - **Audio**: `sine` generates test audio. Replace with `-i` microphone/file input.
 - **Verify files**: Always check codecs and duration with ffprobe after capture.
 
+---
+
+## Camera Tests
+
+Camera tests use a live camera device instead of synthetic test patterns. They validate real-world capture workflows across protocols and codecs.
+
+**Platform-specific camera input:**
+- **macOS**: `-f avfoundation -framerate 30 -i "0:0"` (video device 0, audio device 0)
+- **Linux**: `-f v4l2 -framerate 30 -i /dev/video0` (add `-f alsa -i default` for audio)
+- **Windows**: `-f dshow -i video="Camera":audio="Microphone"`
+
+---
+
+### Camera: RTMP H.264
+
+**What**: Live camera → RTMP publish with H.264+AAC, FLV recording
+
+**Terminal 1 - Start Server**:
+```bash
+./rtmp-server -listen localhost:1935 -record-all true -record-dir ./recordings -log-level debug
+```
+
+**Terminal 2 - Publish (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -f flv rtmp://localhost:1935/live/camera-h264
+```
+
+**Terminal 2 - Publish (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -f flv rtmp://localhost:1935/live/camera-h264
+```
+
+**Verify**:
+```bash
+# Check recording exists and has correct codecs
+ffprobe -v error -show_streams recordings/live_camera-h264_*.flv
+# Expected: video=h264, audio=aac
+
+# Play back the recording
+ffplay recordings/live_camera-h264_*.flv
+```
+
+---
+
+### Camera: RTMPS H.264
+
+**What**: Live camera → RTMPS (TLS) publish with H.264+AAC
+
+**Prerequisites - Generate TLS Certificate**:
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -nodes -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+**Terminal 1 - Start Server with TLS**:
+```bash
+./rtmp-server -listen localhost:1935 -tls-listen localhost:1936 \
+  -tls-cert cert.pem -tls-key key.pem -log-level debug
+```
+
+**Terminal 2 - Publish via RTMPS (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -tls_verify 0 \
+  -f flv rtmps://localhost:1936/live/camera-secure
+```
+
+**Terminal 2 - Publish via RTMPS (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -tls_verify 0 \
+  -f flv rtmps://localhost:1936/live/camera-secure
+```
+
+**Verify**:
+```bash
+# Check server log for successful TLS connection and publish
+# Subscribe via RTMPS to verify live playback
+ffplay -tls_verify 0 rtmps://localhost:1936/live/camera-secure
+```
+
+---
+
+### Camera: Enhanced RTMP H.265
+
+**What**: Live camera → Enhanced RTMP with H.265/HEVC, MP4 recording
+
+**Terminal 1 - Start Server**:
+```bash
+./rtmp-server -listen localhost:1935 -record-all true -record-dir ./recordings -log-level debug
+```
+
+**Terminal 2 - Publish (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -f flv rtmp://localhost:1935/live/camera-h265
+```
+
+**Terminal 2 - Publish (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -f flv rtmp://localhost:1935/live/camera-h265
+```
+
+**Verify**:
+```bash
+# Check recording exists with HEVC codec
+ffprobe -v error -show_streams recordings/live_camera-h265_*.mp4
+# Expected: video=hevc, audio=aac
+
+ffplay recordings/live_camera-h265_*.mp4
+```
+
+---
+
+### Camera: Enhanced RTMPS H.265
+
+**What**: Live camera → Enhanced RTMP with H.265/HEVC over TLS, MP4 recording
+
+**Prerequisites - Generate TLS Certificate** (if not already done):
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -nodes -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+**Terminal 1 - Start Server with TLS**:
+```bash
+./rtmp-server -listen localhost:1935 -tls-listen localhost:1936 \
+  -tls-cert cert.pem -tls-key key.pem \
+  -record-all true -record-dir ./recordings -log-level debug
+```
+
+**Terminal 2 - Publish via RTMPS (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -tls_verify 0 \
+  -f flv rtmps://localhost:1936/live/camera-h265-secure
+```
+
+**Terminal 2 - Publish via RTMPS (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -tls_verify 0 \
+  -f flv rtmps://localhost:1936/live/camera-h265-secure
+```
+
+**Verify**:
+```bash
+ffprobe -v error -show_streams recordings/live_camera-h265-secure_*.mp4
+# Expected: video=hevc, audio=aac
+
+ffplay recordings/live_camera-h265-secure_*.mp4
+```
+
+---
+
+### Camera: SRT H.264
+
+**What**: Live camera → SRT ingest with H.264+AAC, FLV recording
+
+**Terminal 1 - Start Server with SRT**:
+```bash
+./rtmp-server -listen localhost:1935 -srt-listen localhost:10080 \
+  -record-all true -record-dir ./recordings -log-level debug
+```
+
+**Terminal 2 - Publish via SRT (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -f mpegts "srt://localhost:10080?streamid=publish:live/camera-srt&latency=200000"
+```
+
+**Terminal 2 - Publish via SRT (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -f mpegts "srt://localhost:10080?streamid=publish:live/camera-srt&latency=200000"
+```
+
+**Verify**:
+```bash
+# Check recording
+ffprobe -v error -show_streams recordings/live_camera-srt_*.flv
+# Expected: video=h264, audio=aac
+
+# Subscribe via RTMP (cross-protocol)
+ffplay rtmp://localhost:1935/live/camera-srt
+```
+
+---
+
+### Camera: SRT H.265
+
+**What**: Live camera → SRT ingest with H.265/HEVC, MP4 recording
+
+**Terminal 1 - Start Server with SRT**:
+```bash
+./rtmp-server -listen localhost:1935 -srt-listen localhost:10080 \
+  -record-all true -record-dir ./recordings -log-level debug
+```
+
+**Terminal 2 - Publish via SRT (macOS)**:
+```bash
+ffmpeg -f avfoundation -framerate 30 -i "0:0" -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -f mpegts "srt://localhost:10080?streamid=publish:live/camera-srt-h265&latency=200000"
+```
+
+**Terminal 2 - Publish via SRT (Linux)**:
+```bash
+ffmpeg -f v4l2 -framerate 30 -i /dev/video0 \
+  -f alsa -i default -t 10 \
+  -c:v libx265 -preset ultrafast \
+  -c:a aac -b:a 128k \
+  -f mpegts "srt://localhost:10080?streamid=publish:live/camera-srt-h265&latency=200000"
+```
+
+**Verify**:
+```bash
+# Check recording
+ffprobe -v error -show_streams recordings/live_camera-srt-h265_*.mp4
+# Expected: video=hevc, audio=aac
+
+# Subscribe via RTMP (cross-protocol)
+ffplay rtmp://localhost:1935/live/camera-srt-h265
+```
+
