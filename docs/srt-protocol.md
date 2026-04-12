@@ -51,7 +51,7 @@ SRT Publisher (FFmpeg/OBS)
 # Run with both RTMP and SRT
 ./rtmp-server -listen :1935 -srt-listen :10080
 
-# With SRT encryption
+# With SRT encryption (NOT YET FUNCTIONAL — flag is accepted but has no effect)
 ./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "mysecret"
 
 # With custom latency (default 120ms)
@@ -69,7 +69,7 @@ ffmpeg -re -i test.mp4 -c copy -f mpegts \
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=#!::r=live/test,m=publish"
 
-# With encryption
+# With encryption (NOT YET FUNCTIONAL — see note below)
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=publish:live/test&passphrase=mysecret"
 ```
@@ -92,8 +92,21 @@ ffplay rtmps://localhost:443/live/test
 |------|---------|-------------|
 | `-srt-listen` | (disabled) | SRT UDP listen address (e.g., `:10080`) |
 | `-srt-latency` | `120` | TSBPD buffer latency in milliseconds |
-| `-srt-passphrase` | (none) | AES encryption passphrase |
+| `-srt-passphrase` | (none) | AES encryption passphrase (not yet enforced — see below) |
 | `-srt-pbkeylen` | `16` | AES key length: 16 (AES-128), 24 (AES-192), or 32 (AES-256) |
+
+> **⚠️ SRT Encryption: Not Yet Functional**
+>
+> The encryption primitives are implemented (PBKDF2 key derivation in `crypto/pbkdf2.go`, AES Key Wrap/Unwrap in `crypto/keywrap.go`, KMREQ/KMRSP extension types in `handshake/extensions.go`), but the key exchange is **not wired into the handshake**. Specifically:
+>
+> - The listener does not read `config.Passphrase` during the handshake
+> - The Conclusion handler only processes HSREQ and SID extensions — no KMREQ/KMRSP exchange occurs
+> - The handshake always sets `EncryptionField: 0` (no encryption)
+> - No packet-level encryption or decryption is performed
+>
+> **Impact**: The `-srt-passphrase` flag is accepted but silently ignored. Clients connecting without a passphrase will succeed. Clients connecting *with* a passphrase will likely fail because the server never responds with KMRSP.
+>
+> For encrypted transport, use RTMPS (TLS) which encrypts the entire connection.
 
 ## Stream ID Format
 

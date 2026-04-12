@@ -52,25 +52,16 @@ SRT uses the Stream ID to identify the target stream key. Three formats are supp
 
 ## SRT Encryption
 
-Enable AES encryption with a passphrase:
+> **Status: Not Yet Functional** — The encryption infrastructure (PBKDF2 key derivation, AES Key Wrap) is implemented, but the key exchange (KMREQ/KMRSP) is not yet integrated into the SRT handshake. The `-srt-passphrase` and `-srt-pbkeylen` flags are accepted but have no effect.
+>
+> **Workaround**: Use [RTMPS (TLS)]({{< relref "rtmps" >}}) for encrypted transport. RTMPS encrypts the entire connection including all media data.
 
-```bash
-./rtmp-server -srt-listen :4200 \
-  -srt-passphrase "my-secret-key" \
-  -srt-pbkeylen 16
-```
+The following flags are reserved for future SRT encryption support:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-srt-passphrase` | *(none)* | Shared secret for AES encryption |
+| `-srt-passphrase` | *(none)* | Shared secret for AES encryption (not yet enforced) |
 | `-srt-pbkeylen` | `16` | Key length in bytes: 16 (AES-128), 24 (AES-192), or 32 (AES-256) |
-
-Publishers must use the same passphrase:
-
-```bash
-ffmpeg -re -i test.mp4 -c copy -f mpegts \
-  "srt://localhost:4200?streamid=live/test&passphrase=my-secret-key&pbkeylen=16"
-```
 
 ## Latency Tuning
 
