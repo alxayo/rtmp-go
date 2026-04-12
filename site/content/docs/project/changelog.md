@@ -9,6 +9,46 @@ All notable changes to go-rtmp are documented here.
 
 ---
 
+## v0.2.0 (2026-04-12)
+
+### Added
+- **SRT (Secure Reliable Transport) Ingest**: Accept SRT streams over UDP alongside RTMP
+  - SRT v5 handshake with SYN cookie exchange and extension negotiation
+  - Stream ID parsing: simple, prefixed, and structured formats
+  - TSBPD jitter buffer with configurable latency
+  - ACK/NAK reliability with RTT measurement and retransmission
+  - Optional AES encryption (128/192/256-bit) with PBKDF2 key derivation
+- **MPEG-TS Demuxer**: Full transport stream parser with PAT/PMT table decoding, PES reassembly
+- **Codec Converters**: H.264/H.265 Annex B→AVCC and AAC ADTS→raw converters for SRT-to-RTMP bridge
+- **SRT-to-RTMP Bridge**: End-to-end pipeline converting SRT data packets through TS demuxing and codec conversion
+- **Codec-Aware Recording**: Automatic container selection — FLV for H.264, MP4 for H.265/HEVC
+  - MP4 recorder streams to disk in real-time (zero memory buffering)
+  - Lazy recorder initialization for correct codec detection
+- **Ingress Abstraction**: Protocol-agnostic publish lifecycle manager shared by RTMP and SRT
+- **Comprehensive E2E Test Suite**: 25+ tests in `e2e-tests/` covering all major features
+- **SRT CLI Flags**: `-srt-listen`, `-srt-latency`, `-srt-passphrase`, `-srt-pbkeylen`
+- **SRT Metrics**: 6 new expvar counters for SRT connections, bytes, packets, retransmits, drops
+- Comprehensive package documentation and developer guide
+
+### Changed
+- MP4 recorder streams to disk instead of buffering in memory
+- Allocation optimizations across media handling hot paths
+- Lazy recorder initialization for codec-aware container selection
+
+### Fixed
+- H.265 HEVCDecoderConfigurationRecord corrected per ISO/IEC 14496-15
+- `-record-all` explicit bool flag parsing
+- `slog.SetDefault()` now called for consistent log levels across subsystems
+- Three broken E2E tests (hooks and reconnect)
+
+### New Packages
+- `internal/srt/` — Full SRT protocol implementation (packet, circular, crypto, handshake, conn)
+- `internal/ts/` — MPEG-TS demuxer
+- `internal/codec/` — Video/audio codec converters (H.264, H.265, AAC)
+- `internal/ingress/` — Publish lifecycle abstraction
+
+---
+
 ## v0.1.4 (2026-04-10)
 
 ### Added

@@ -1,11 +1,16 @@
 ---
-title: "FLV Recording"
+title: "Recording"
 weight: 1
 ---
 
-# FLV Recording
+# Recording
 
-go-rtmp can record every published stream to FLV files on disk. Recording runs alongside live relay — subscribers see the stream in real-time while the server simultaneously writes to disk.
+go-rtmp records published streams to disk automatically. The server selects the container format based on the video codec:
+
+- **H.264/AVC streams** → **FLV** (Flash Video) container
+- **H.265/HEVC streams** → **MP4** (ISO BMFF) container
+
+Recording runs alongside live relay — subscribers see the stream in real-time while the server simultaneously writes to disk.
 
 ## Enabling Recording
 
@@ -22,22 +27,37 @@ The directory is created automatically if it doesn't exist. By default, `-record
 Recordings follow this naming pattern:
 
 ```
-{streamkey}_{YYYYMMDD}_{HHMMSS}.flv
+{streamkey}_{YYYYMMDD}_{HHMMSS}.{flv,mp4}
 ```
 
-Any forward slashes in the stream key are replaced with underscores. For example, publishing to `live/mystream` at 2:30:22 PM on January 15, 2024 produces:
+Any forward slashes in the stream key are replaced with underscores. For example, publishing H.264 to `live/mystream` at 2:30:22 PM on January 15, 2024 produces:
 
 ```
 recordings/live_mystream_20240115_143022.flv
 ```
 
-## FLV Format
+An H.265 stream to the same key would produce:
 
-FLV files contain video (H.264, H.265/HEVC, AV1, VP9) and audio (AAC) in a standard Flash Video container. Enhanced RTMP tags are preserved transparently. The server writes:
+```
+recordings/live_mystream_20240115_143022.mp4
+```
+
+## FLV Recording (H.264)
+
+FLV files contain video (H.264, AV1, VP9) and audio (AAC) in a standard Flash Video container. Enhanced RTMP tags are preserved transparently. The server writes:
 
 - A 13-byte FLV header (signature `FLV`, version 1, audio+video flags)
 - FLV tags for each audio (type 0x08) and video (type 0x09) message
 - Proper `PreviousTagSize` fields for seeking compatibility
+
+## MP4 Recording (H.265)
+
+When H.265/HEVC video is detected, the server writes an ISO BMFF (MP4) container:
+
+- **Streaming write**: `mdat` (media data) is written to disk in real-time as frames arrive — no memory buffering
+- **On close**: The `mdat` size is patched via `WriteAt()` and the `moov` atom (with `trak`, `stbl`, sample tables) is appended
+- **File layout**: `ftyp` (32 bytes) → `mdat` (streamed media) → `moov` (metadata)
+- **Codec detection**: Container format is decided lazily when the first video message arrives, ensuring correct codec identification
 
 ## Verifying Recordings
 
@@ -45,23 +65,15 @@ Inspect a recording with FFprobe:
 
 ```bash
 ffprobe recordings/live_mystream_20240115_143022.flv
+ffprobe recordings/live_mystream_20240115_143022.mp4
 ```
 
 Play it back directly:
 
 ```bash
 ffplay recordings/live_mystream_20240115_143022.flv
+ffplay recordings/live_mystream_20240115_143022.mp4
 ```
-
-## Converting to MP4
-
-Since the FLV file already contains the original codec data, you can remux to MP4 without re-encoding:
-
-```bash
-ffmpeg -i recordings/live_mystream_20240115_143022.flv -c copy output.mp4
-```
-
-This is nearly instantaneous regardless of file size.
 
 ## Graceful Degradation
 
@@ -71,9 +83,10 @@ The recorder's `Disabled()` method returns true after a fatal write error, and a
 
 ## Lifecycle
 
-- **Start**: A new FLV file is created when a publisher begins streaming (if `-record-all` is enabled). The FLV header is written immediately.
-- **During**: Each audio and video message is written as an FLV tag in real-time.
-- **Stop**: The file is closed cleanly when the publisher disconnects or the server shuts down.
+- **Start**: A new file is created when a publisher begins streaming (if `-record-all` is enabled).
+- **Codec detection**: The container format (FLV or MP4) is determined when the first video message arrives.
+- **During**: Each audio and video message is written in real-time.
+- **Stop**: The file is finalized (MP4 moov atom appended, FLV closed) when the publisher disconnects.
 
 ## Limitations
 
@@ -90,13 +103,14 @@ The recorder's `Disabled()` method returns true after a fatal write error, and a
 # Terminal 1: Start server with recording
 ./rtmp-server -record-all true -record-dir ./recordings -log-level info
 
-# Terminal 2: Publish a stream
-ffmpeg -re -i test.mp4 -c copy -f flv rtmp://localhost:1935/live/test
+# Terminal 2: Publish H.264 (records as FLV)
+ffmpeg -re -i test.mp4 -c:v libx264 -c:a aac -f flv rtmp://localhost:1935/live/h264
 
-# Terminal 3: Check recordings directory
-ls -la recordings/
-# live_test_20240115_143022.flv  (grows as stream continues)
+# Terminal 3: Publish H.265 (records as MP4)
+ffmpeg -re -i test.mp4 -c:v libx265 -c:a aac -f flv rtmp://localhost:1935/live/h265
 
-# After publisher disconnects, convert to MP4
-ffmpeg -i recordings/live_test_20240115_143022.flv -c copy output.mp4
+# Check recordings
+ls recordings/
+# live_h264_20240115_143022.flv
+# live_h265_20240115_143025.mp4
 ```

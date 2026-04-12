@@ -72,6 +72,17 @@ The minimum TLS version is 1.2.
 |------|---------|-------------|
 | `-metrics-addr` | *(disabled)* | HTTP address for metrics endpoint |
 
+## SRT Ingest
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-srt-listen` | *(disabled)* | UDP address for SRT ingest connections |
+| `-srt-latency` | `120ms` | TSBPD jitter buffer latency |
+| `-srt-passphrase` | *(none)* | Shared secret for AES encryption |
+| `-srt-pbkeylen` | `16` | AES key length in bytes: 16, 24, or 32 |
+
+When `-srt-listen` is set, the server starts a UDP listener for SRT publishers. SRT streams are automatically converted to RTMP format and injected into the stream registry — existing RTMP subscribers can watch SRT sources transparently.
+
 ---
 
 ## Example Configurations
@@ -129,40 +140,24 @@ Publishers must include the token in their stream key:
 rtmp://server:1935/live/mystream?token=secret123
 ```
 
-### 5. Full Production Setup
+### 5. Authenticated Server with Webhooks and Relay
 
-All features enabled:
+All RTMP features — relay, auth, and hooks:
 
 ```bash
 ./rtmp-server \
   -listen 0.0.0.0:1935 \
   -log-level info \
-  -chunk-size 4096 \
   -record-all true \
   -record-dir /data/recordings \
   -relay-to rtmp://a.rtmp.youtube.com/live2/YOUTUBE_KEY \
   -relay-to rtmp://live.twitch.tv/app/TWITCH_KEY \
-  -auth-mode callback \
-  -auth-callback https://api.example.com/auth/rtmp \
-  -auth-callback-timeout 3s \
+  -auth-mode token \
+  -auth-token "live/mystream=secret123" \
   -hook-webhook "publish_start=https://api.example.com/hooks/stream" \
   -hook-webhook "publish_stop=https://api.example.com/hooks/stream" \
-  -hook-webhook "connection_accept=https://api.example.com/hooks/connect" \
-  -hook-webhook "connection_close=https://api.example.com/hooks/connect" \
-  -hook-script "publish_start=/opt/scripts/notify-slack.sh" \
-  -hook-timeout 10s \
-  -hook-concurrency 20 \
   -metrics-addr :8080
 ```
-
-This configuration:
-- Listens on all interfaces
-- Records all streams to `/data/recordings`
-- Simulcasts to YouTube and Twitch
-- Validates tokens via webhook callback
-- Notifies an API on stream start/stop and connection events
-- Runs a Slack notification script on publish
-- Exposes metrics at `http://localhost:8080/debug/vars`
 
 ### 6. RTMPS (TLS-Encrypted) Server
 
@@ -191,3 +186,68 @@ Run both plain and encrypted listeners simultaneously:
 ```
 
 Plain RTMP on port 1935 and encrypted RTMPS on port 1936. Useful during migration or when supporting both legacy and modern clients.
+
+### 8. SRT Ingest
+
+Accept SRT streams alongside RTMP:
+
+```bash
+./rtmp-server \
+  -listen :1935 \
+  -srt-listen :4200 \
+  -srt-latency 120ms \
+  -log-level info
+```
+
+Publishers can stream via SRT and subscribers watch via RTMP:
+
+```bash
+# Publish via SRT
+ffmpeg -re -i test.mp4 -c copy -f mpegts "srt://localhost:4200?streamid=live/test"
+
+# Subscribe via RTMP
+ffplay rtmp://localhost:1935/live/test
+```
+
+### 9. SRT with Encryption
+
+Encrypted SRT ingest with AES-256:
+
+```bash
+./rtmp-server \
+  -srt-listen :4200 \
+  -srt-passphrase "my-secret-key" \
+  -srt-pbkeylen 32 \
+  -record-all true
+```
+
+### 10. Full Production Setup (RTMP + RTMPS + SRT)
+
+All features enabled:
+
+```bash
+./rtmp-server \
+  -listen 0.0.0.0:1935 \
+  -tls-listen :1936 \
+  -tls-cert /path/to/cert.pem \
+  -tls-key /path/to/key.pem \
+  -srt-listen :4200 \
+  -srt-latency 120ms \
+  -log-level info \
+  -chunk-size 4096 \
+  -record-all true \
+  -record-dir /data/recordings \
+  -relay-to rtmp://a.rtmp.youtube.com/live2/YOUTUBE_KEY \
+  -relay-to rtmp://live.twitch.tv/app/TWITCH_KEY \
+  -auth-mode callback \
+  -auth-callback https://api.example.com/auth/rtmp \
+  -auth-callback-timeout 3s \
+  -hook-webhook "publish_start=https://api.example.com/hooks/stream" \
+  -hook-webhook "publish_stop=https://api.example.com/hooks/stream" \
+  -hook-script "publish_start=/opt/scripts/notify-slack.sh" \
+  -hook-timeout 10s \
+  -hook-concurrency 20 \
+  -metrics-addr :8080
+```
+
+This configuration accepts RTMP (port 1935), RTMPS (port 1936), and SRT (port 4200) simultaneously with recording, relay, authentication, hooks, and metrics.

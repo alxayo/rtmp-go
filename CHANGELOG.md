@@ -5,7 +5,7 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.2.0] — 2025-07-14
+## [v0.2.0] — 2026-04-12
 
 ### Added
 - **SRT (Secure Reliable Transport) Ingest**: Accept SRT streams over UDP alongside RTMP. SRT publishers are transparently converted to RTMP format, allowing RTMP subscribers to watch SRT sources without any changes.
@@ -18,17 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MPEG-TS Demuxer** (`internal/ts/`): Full transport stream parser with PAT/PMT table decoding, PES packet reassembly, and stream type detection (H.264, H.265, AAC)
 - **Codec Converters** (`internal/codec/`): H.264/H.265 Annex B→AVCC and AAC ADTS→raw frame converters for SRT-to-RTMP bridge
   - **H.264 Support**: NALU splitter, SPS/PPS extraction, AVCDecoderConfigurationRecord builder
-  - **H.265/HEVC Support** (NEW): VPS/SPS/PPS extraction, HEVCDecoderConfigurationRecord builder per ISO/IEC 14496-15
+  - **H.265/HEVC Support**: VPS/SPS/PPS extraction, HEVCDecoderConfigurationRecord builder per ISO/IEC 14496-15
   - ADTS parser, AudioSpecificConfig builder
   - 90kHz→1ms timestamp conversion with CTS (Composition Time Offset) calculation
 - **SRT-to-RTMP Bridge** (`internal/srt/bridge.go`): End-to-end pipeline converting SRT data packets through MPEG-TS demuxing and codec conversion into `chunk.Message` for the existing stream registry
   - H.265 frame handler with parameter set extraction and sequence header management
   - Support for H.264, H.265, and mixed H.264/H.265 streams with codec change detection
+- **Codec-Aware Recording**: Automatic container selection based on codec — FLV for H.264/legacy codecs, MP4 for H.265/HEVC
+  - MP4 recorder streams `mdat` to disk during recording (zero memory buffering), patches `mdat` size and appends `moov` atom on close
+  - Lazy recorder initialization deferred until first media message for correct codec detection
 - **Ingress Abstraction** (`internal/ingress/`): Protocol-agnostic publish lifecycle manager shared by RTMP and SRT ingest paths
+- **Comprehensive E2E Test Suite** (`e2e-tests/`): 25+ end-to-end tests covering RTMP publish/play, SRT ingest, RTMPS/TLS, Enhanced RTMP H.265, FLV/MP4 recording, authentication, event hooks, relay, metrics, and connection lifecycle
+  - Shared test library (`_lib.sh`) with helpers for server management, stream validation, and cleanup
+  - Cross-platform runners (Bash + PowerShell)
+  - SRT camera integration tests with recording validation
 - **SRT CLI Flags**: `-srt-listen`, `-srt-latency` (default 120ms), `-srt-passphrase`, `-srt-pbkeylen` (16/24/32)
 - **SRT Metrics**: 6 new expvar counters — `srt_connections_active`, `srt_connections_total`, `srt_bytes_received`, `srt_packets_received`, `srt_packets_retransmit`, `srt_packets_dropped`
+- **Comprehensive package documentation**: File-level comments and developer guide for all critical modules
 - **SRT Documentation**: `docs/srt-protocol.md` technical reference with architecture diagram, codec conversion details, Stream ID format reference
 - **H.265 Documentation**: `docs/H265_SUPPORT.md` with codec support matrix, bitrate comparisons, encoding/decoding guidelines, and troubleshooting
+
+### Changed
+- **MP4 recorder performance**: Streams `mdat` to disk in real-time instead of buffering in memory; patches `mdat` size via `WriteAt()` and appends `moov` atom on close
+- **Allocation optimizations**: Replaced custom helpers with stdlib functions, reduced allocations in hot paths across media handling
+- **Lazy recorder initialization**: Container format decision deferred until first media message arrives, enabling correct codec-aware container selection
+
+### Fixed
+- **H.265 HEVCDecoderConfigurationRecord**: Corrected builder to comply with ISO/IEC 14496-15 and switched to Enhanced RTMP signaling format
+- **Flag parsing**: Fixed `-record-all` explicit bool flag parsing that caused incorrect behavior
+- **Logging**: Call `slog.SetDefault()` so SRT listener and other subsystems use the configured log level
+- **E2E test corrections**: Fixed three broken E2E tests (hooks and reconnect), updated Enhanced RTMP scripts for H.265 MP4 recording
 
 ### New Packages
 - `internal/srt/packet/` — SRT wire protocol types
