@@ -22,6 +22,7 @@ All notable changes to go-rtmp are documented here.
 - **Codec Converters**: H.264/H.265 Annex B→AVCC and AAC ADTS→raw converters for SRT-to-RTMP bridge
 - **SRT-to-RTMP Bridge**: End-to-end pipeline converting SRT data packets through TS demuxing and codec conversion
 - **Codec-Aware Recording**: Automatic container selection — FLV for H.264, MP4 for H.265/HEVC
+- **FLV `onMetaData` Script Tag**: FLV recordings include `onMetaData` with video dimensions, codec IDs, audio properties, and patched duration/filesize on close
   - MP4 recorder streams to disk in real-time (zero memory buffering)
   - Lazy recorder initialization for correct codec detection
 - **Ingress Abstraction**: Protocol-agnostic publish lifecycle manager shared by RTMP and SRT

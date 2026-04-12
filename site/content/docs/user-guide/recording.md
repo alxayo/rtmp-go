@@ -47,8 +47,11 @@ recordings/live_mystream_20240115_143022.mp4
 FLV files contain video (H.264, AV1, VP9) and audio (AAC) in a standard Flash Video container. Enhanced RTMP tags are preserved transparently. The server writes:
 
 - A 13-byte FLV header (signature `FLV`, version 1, audio+video flags)
+- An `onMetaData` script tag (type 0x12) containing video dimensions, codec IDs, audio sample rate, and stereo flag
 - FLV tags for each audio (type 0x08) and video (type 0x09) message
 - Proper `PreviousTagSize` fields for seeking compatibility
+
+On close, the `duration` and `filesize` fields in the `onMetaData` tag are patched via `WriteAt()` so that players can display accurate duration and seeking information.
 
 ## MP4 Recording (H.265)
 
@@ -94,7 +97,6 @@ The recorder's `Disabled()` method returns true after a fatal write error, and a
 |------------|--------|
 | All-or-nothing | `-record-all` records every stream — there is no per-stream control |
 | No file rotation | Each publish session creates one file; there is no time-based or size-based splitting |
-| No metadata tag | FLV `onMetaData` script tags are not written |
 | Audio + video only | Data messages (AMF) are not recorded |
 
 ## Example Session

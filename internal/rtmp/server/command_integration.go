@@ -502,6 +502,16 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 	}
 
 	recordDir := stream.RecordDir
+	audioCodec := stream.AudioCodec
+
+	// Snapshot sequence headers for metadata extraction (under lock)
+	var videoSeqPayload, audioSeqPayload []byte
+	if stream.VideoSequenceHeader != nil {
+		videoSeqPayload = stream.VideoSequenceHeader.Payload
+	}
+	if stream.AudioSequenceHeader != nil {
+		audioSeqPayload = stream.AudioSequenceHeader.Payload
+	}
 	stream.mu.Unlock()
 
 	// File creation happens outside the lock to avoid blocking media dispatch
@@ -513,6 +523,21 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 		return
 	}
 
+	// Extract metadata from sequence headers for onMetaData tag
+	meta := media.FLVMetadata{
+		VideoCodecID: media.VideoCodecFLVID(codec),
+		AudioCodecID: media.AudioCodecFLVID(audioCodec),
+	}
+	if len(videoSeqPayload) > 0 {
+		meta.Width, meta.Height = media.ExtractVideoMetadata(videoSeqPayload)
+	}
+	if len(audioSeqPayload) > 0 {
+		sr, ch, st := media.ExtractAudioMetadata(audioSeqPayload)
+		meta.AudioSampleRate = float64(sr)
+		meta.AudioChannels = ch
+		meta.Stereo = st
+	}
+
 	// Generate filename with the correct extension based on detected codec
 	safeKey := strings.ReplaceAll(stream.Key, "/", "_")
 	timestamp := time.Now().Format("20060102_150405")
@@ -520,7 +545,7 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 	filename := fmt.Sprintf("%s_%s.%s", safeKey, timestamp, format)
 	fpath := filepath.Join(recordDir, filename)
 
-	recorder, err := media.NewRecorder(fpath, codec, log)
+	recorder, err := media.NewRecorder(fpath, codec, log, meta)
 	if err != nil {
 		log.Error("failed to create recorder", "error", err, "stream_key", stream.Key)
 		stream.mu.Lock()
@@ -533,5 +558,6 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 	stream.Recorder = recorder
 	stream.mu.Unlock()
 
-	log.Info("recorder initialized", "stream_key", stream.Key, "file", fpath, "codec", codec, "format", format)
+	log.Info("recorder initialized", "stream_key", stream.Key, "file", fpath, "codec", codec, "format", format,
+		"width", meta.Width, "height", meta.Height)
 }

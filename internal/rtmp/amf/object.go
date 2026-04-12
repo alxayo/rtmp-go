@@ -78,7 +78,7 @@ func EncodeObject(w io.Writer, m map[string]interface{}) error {
 }
 
 // encodeAny is an internal dispatcher for the AMF0 types supported by this package:
-// Number, Boolean, String, Null, Object, and Strict Array.
+// Number, Boolean, String, Null, Object, ECMA Array, and Strict Array.
 func encodeAny(w io.Writer, v interface{}) error {
 	switch vv := v.(type) {
 	case nil:
@@ -91,6 +91,8 @@ func encodeAny(w io.Writer, v interface{}) error {
 		return EncodeString(w, vv)
 	case map[string]interface{}:
 		return EncodeObject(w, vv)
+	case ECMAArray:
+		return EncodeECMAArray(w, map[string]interface{}(vv))
 	case []interface{}: // Strict Array
 		return EncodeStrictArray(w, vv)
 	default:
@@ -135,6 +137,8 @@ func decodeValueWithMarker(marker byte, r io.Reader) (interface{}, error) {
 		return nil, nil // null has no payload beyond the marker
 	case markerObject:
 		return decodeObjectPayload(r)
+	case markerECMAArray:
+		return decodeECMAArrayPayload(r)
 	case markerStrictArray:
 		return decodeStrictArrayPayload(r)
 	default:

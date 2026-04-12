@@ -5,6 +5,17 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.1] — 2026-04-12
+
+### Added
+- **FLV `onMetaData` Script Tag**: FLV recordings now include an `onMetaData` tag (TypeID 18) with video dimensions, codec IDs, audio sample rate, stereo flag, duration, and filesize. Duration and filesize are patched on close via `WriteAt()`.
+- **AMF0 ECMA Array**: Full encoding/decoding support for AMF0 ECMA Array (marker `0x08`), used by the `onMetaData` tag.
+- **H.264 SPS Parser**: Extracts video width and height from AVCDecoderConfigurationRecord sequence headers.
+- **AAC AudioSpecificConfig Parser**: Extracts audio sample rate and channel configuration from AAC sequence headers.
+
+### Fixed
+- **FLV recording playback**: Players (VLC, ffplay) could only show the first frame because no `onMetaData` tag was present (`r_frame_rate=1000/1`, `avg_frame_rate=0/0`). Recordings now play correctly with proper frame rate and duration metadata.
+
 ## [v0.2.0] — 2026-04-12
 
 ### Added
@@ -27,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codec-Aware Recording**: Automatic container selection based on codec — FLV for H.264/legacy codecs, MP4 for H.265/HEVC
   - MP4 recorder streams `mdat` to disk during recording (zero memory buffering), patches `mdat` size and appends `moov` atom on close
   - Lazy recorder initialization deferred until first media message for correct codec detection
+- **FLV `onMetaData` Script Tag**: FLV recordings now include an `onMetaData` tag with video dimensions, codec IDs, audio sample rate, stereo flag, duration, and filesize. Duration and filesize are patched on close via `WriteAt()`. Metadata is extracted from H.264 SPS (width/height) and AAC AudioSpecificConfig (sample rate/channels). This fixes playback issues where players showed only the first frame due to missing frame rate information.
 - **Ingress Abstraction** (`internal/ingress/`): Protocol-agnostic publish lifecycle manager shared by RTMP and SRT ingest paths
 - **Comprehensive E2E Test Suite** (`e2e-tests/`): 25+ end-to-end tests covering RTMP publish/play, SRT ingest, RTMPS/TLS, Enhanced RTMP H.265, FLV/MP4 recording, authentication, event hooks, relay, metrics, and connection lifecycle
   - Shared test library (`_lib.sh`) with helpers for server management, stream validation, and cleanup

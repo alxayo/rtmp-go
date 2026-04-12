@@ -11,7 +11,7 @@ package amf
 // AMF3 types) are rejected with an *errors.AMFError.
 //
 // Supported markers here: 0x00 Number, 0x01 Boolean, 0x02 String, 0x03 Object,
-// 0x05 Null, 0x0A Strict Array.
+// 0x05 Null, 0x08 ECMA Array, 0x0A Strict Array.
 
 import (
 	"bytes"
@@ -29,6 +29,7 @@ import (
 //	bool -> Boolean (0x01)
 //	string -> String (0x02)
 //	map[string]interface{} -> Object (0x03)
+//	ECMAArray -> ECMA Array (0x08)
 //	[]interface{} -> Strict Array (0x0A)
 //
 // Any other type results in *errors.AMFError.
@@ -63,7 +64,7 @@ func DecodeValue(r io.Reader) (interface{}, error) {
 	// Dispatch to helper which decodes the payload directly after the
 	// marker has been consumed (no intermediate reader allocation).
 	switch marker[0] {
-	case markerNumber, markerBoolean, markerString, markerNull, markerObject, markerStrictArray:
+	case markerNumber, markerBoolean, markerString, markerNull, markerObject, markerECMAArray, markerStrictArray:
 		v, err := decodeValueWithMarker(marker[0], r)
 		if err != nil {
 			return nil, amferrors.NewAMFError("decode.value.dispatch", err)
@@ -73,7 +74,7 @@ func DecodeValue(r io.Reader) (interface{}, error) {
 	if unsupportedMarker(marker[0]) {
 		return nil, amferrors.NewAMFError("decode.value.unsupported", fmt.Errorf("unsupported marker 0x%02x", marker[0]))
 	}
-	// Any other AMF0 marker (0x04 MovieClip, 0x08 ECMA Array, 0x09 Object End)
+	// Any other AMF0 marker (0x04 MovieClip, 0x09 Object End)
 	// is unsupported per project scope.
 	return nil, amferrors.NewAMFError("decode.value.unsupported", fmt.Errorf("unsupported marker 0x%02x", marker[0]))
 }
