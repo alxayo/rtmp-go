@@ -87,6 +87,7 @@ ffplay rtmps://localhost:443/live/test
 | **Event Hooks** | Webhooks, shell scripts, and stdio notifications on RTMP events |
 | **Authentication** | Pluggable token-based validation for publish/play (static tokens, file, webhook) |
 | **Metrics** | Expvar counters for connections, publishers, subscribers, media (HTTP `/debug/vars`) |
+| **Multi-Stream** | Multiple simultaneous streams on different stream keys — RTMP and SRT can coexist |
 | **Connection Cleanup** | TCP deadline enforcement (read 90s, write 30s), disconnect handlers, zombie detection |
 
 ## Architecture
@@ -167,8 +168,8 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -tls-key             Path to PEM-encoded TLS private key file
 -srt-listen          SRT UDP listen address (e.g. :10080). Empty = disabled
 -srt-latency         SRT buffer latency in milliseconds (default 120)
--srt-passphrase      SRT encryption passphrase (empty = no encryption)
--srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16)
+-srt-passphrase      SRT encryption passphrase (empty = no encryption) ⚠️ not yet enforced
+-srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16) ⚠️ not yet enforced
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)
 -record-dir          Recording directory (default recordings)
@@ -176,7 +177,7 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -relay-to            RTMP relay destination URL (repeatable)
 -auth-mode           Authentication mode: none|token|file|callback (default none)
 -auth-token          Stream token: "streamKey=token" (repeatable, for token mode)
--auth-file           Path to JSON token file (for file mode)
+-auth-file           Path to JSON token file (for file mode; read once at startup, restart to reload)
 -auth-callback       Webhook URL for auth validation (for callback mode)
 -auth-callback-timeout  Auth callback timeout (default 5s)
 -hook-script         Shell hook: event_type=/path/to/script (repeatable)

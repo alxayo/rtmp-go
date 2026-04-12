@@ -13,7 +13,7 @@ go-rtmp supports pluggable token-based authentication to control who can publish
 |------|------|----------|
 | `none` | `-auth-mode none` (default) | Open access, backward compatible |
 | `token` | `-auth-mode token` | Small setups, static configuration |
-| `file` | `-auth-mode file` | Medium deployments, live reload |
+| `file` | `-auth-mode file` | Medium deployments, managed token file |
 | `callback` | `-auth-mode callback` | Full integration with existing auth systems |
 
 Authentication is enforced at the **publish/play command level** — not at connect or handshake. This means the RTMP connection is established first, then auth is checked when the client issues a publish or play command.
@@ -58,13 +58,9 @@ The JSON file maps stream keys to tokens:
 }
 ```
 
-**Live reload**: Send `SIGHUP` to the server process to reload the token file without restarting:
-
-```bash
-kill -HUP $(pidof rtmp-server)
-```
-
-The reload is thread-safe — active streams are not interrupted.
+> **Current Limitation**: The token file is read once at server startup. Changes to the file require a server restart to take effect. The `FileValidator.Reload()` method exists in the codebase for future signal-based reload support, but no automatic reload trigger is currently wired up.
+>
+> For dynamic token management without restarts, use `-auth-mode callback` with a webhook instead.
 
 ## Webhook Callback
 
@@ -102,6 +98,83 @@ Content-Type: application/json
 | Any other status | Authentication **fails** — connection closed |
 
 The `-auth-callback-timeout` flag (default `5s`) controls the HTTP request timeout.
+
+### Payload Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `action` | string | `"publish"` or `"play"` — lets you authorize publishing and viewing independently |
+| `app` | string | Application name from the RTMP connect command (e.g. `"live"`) |
+| `stream_name` | string | Clean stream name without query params (e.g. `"cam1"`) |
+| `stream_key` | string | Full key: `app/streamName` (e.g. `"live/cam1"`) — use this for per-stream authorization |
+| `token` | string | Value of `?token=` query param from the client URL. Empty string if not provided |
+| `remote_addr` | string | Client IP and port (e.g. `"192.168.1.100:54321"`) — use for IP-based rules |
+
+### Separate Publish/Play Callbacks
+
+Every publish and play attempt triggers a **separate** HTTP POST to your callback. This means you can apply completely different authorization logic per action:
+
+- Allow a publisher but require a different token for viewers
+- Allow all viewers but restrict who can publish
+- Apply different rate limits or IP restrictions per action
+
+For example, a viewer and a publisher hitting the same stream will result in two independent calls — one with `"action": "publish"` and one with `"action": "play"`.
+
+### Timeout & Error Behavior
+
+The callback auth mode is **fail-closed**: if your auth service is unavailable, no streams can start.
+
+| Scenario | Result |
+|----------|--------|
+| Webhook returns non-200 | Connection closed, `auth_failed` hook event fires |
+| Webhook times out (default 5s) | Treated as failure — connection denied. This is a transport error, not `ErrUnauthorized` |
+| Webhook is unreachable | Same as timeout — connection denied |
+
+> **Important**: If your auth service goes down, all new publish and play attempts will be denied. Monitor your auth endpoint and consider the timeout value carefully.
+
+### Security Considerations
+
+- **Always use `https://`** for the callback URL — the token is sent in the JSON body in plain text
+- The token is also visible in the plain RTMP stream. Use RTMPS (`-tls-listen`) to encrypt the client→server connection, and HTTPS for the server→webhook connection
+- The callback does **not** receive `ConnectParams` beyond what's listed in the field reference. For custom data, encode it in the token field (e.g. as a JWT or other structured token)
+
+### Why Callback Is the Only Dynamic Auth Mode
+
+| Mode | Behavior |
+|------|----------|
+| `token` | Static — set at startup via flags, requires restart to change |
+| `file` | Loaded once at startup, requires restart to reload (no auto-reload) |
+| `callback` | Fresh HTTP call on every publish/play — change logic in your webhook anytime without touching the RTMP server |
+
+If you need to update authorization rules without restarting the server, `callback` is the only mode that supports it.
+
+### Example: Minimal Webhook Server
+
+A simple Node.js webhook that validates tokens:
+
+```javascript
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+app.post('/rtmp/auth', (req, res) => {
+  const { action, stream_key, token } = req.body;
+
+  // Your logic: check database, validate JWT, etc.
+  const isValid = checkToken(stream_key, token);
+
+  res.sendStatus(isValid ? 200 : 403);
+});
+
+app.listen(3000);
+```
+
+Point the RTMP server at it:
+
+```bash
+./rtmp-server -auth-mode callback \
+  -auth-callback http://localhost:3000/rtmp/auth
+```
 
 ## Client Configuration
 
