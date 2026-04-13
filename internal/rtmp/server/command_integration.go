@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/control"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
@@ -70,8 +71,10 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				stream.mu.Lock()
 				if stream.Recorder != nil {
 					if err := stream.Recorder.Close(); err != nil {
+						metrics.RecordingErrorsTotal.Add(1)
 						log.Error("recorder close error on disconnect", "error", err, "stream_key", st.streamKey)
 					}
+					metrics.RecordingsActive.Add(-1)
 					stream.Recorder = nil
 				}
 				stream.mu.Unlock()
@@ -329,9 +332,11 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				stream.mu.Lock()
 				if stream.Recorder != nil {
 					if err := stream.Recorder.Close(); err != nil {
+						metrics.RecordingErrorsTotal.Add(1)
 						log.Error("recorder close error on stream teardown",
 							"error", err, "stream_key", st.streamKey)
 					}
+					metrics.RecordingsActive.Add(-1)
 					stream.Recorder = nil
 				}
 				stream.mu.Unlock()
@@ -452,10 +457,12 @@ func authenticateRequest(
 
 	if err == nil {
 		log.Info(action+" authenticated", "stream_key", streamKey)
+		metrics.AuthSuccessesTotal.Add(1)
 		return false // auth passed
 	}
 
 	// Auth failed — send error, emit hook, close connection.
+	metrics.AuthFailuresTotal.Add(1)
 	log.Warn(action+" authentication failed",
 		"stream_key", streamKey,
 		"remote_addr", authReq.RemoteAddr,
@@ -547,6 +554,7 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 
 	recorder, err := media.NewRecorder(fpath, codec, log, meta)
 	if err != nil {
+		metrics.RecordingErrorsTotal.Add(1)
 		log.Error("failed to create recorder", "error", err, "stream_key", stream.Key)
 		stream.mu.Lock()
 		stream.RecordDir = "" // Don't retry on every frame
@@ -557,6 +565,7 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 	stream.mu.Lock()
 	stream.Recorder = recorder
 	stream.mu.Unlock()
+	metrics.RecordingsActive.Add(1)
 
 	log.Info("recorder initialized", "stream_key", stream.Key, "file", fpath, "codec", codec, "format", format,
 		"width", meta.Width, "height", meta.Height)

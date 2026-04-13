@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 )
 
 // NOTE: The full Stream entity will ultimately live in internal/rtmp/server (see data-model.md).
@@ -113,13 +114,17 @@ func (s *Stream) BroadcastMessage(detector *CodecDetector, msg *chunk.Message, l
 		// Non‑blocking path if available.
 		if ts, ok := sub.(TrySendMessage); ok {
 			if ok := ts.TrySendMessage(msg); !ok {
+				metrics.SubscriberDropsTotal.Add(1)
 				logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.key)
 				continue
 			}
 			continue
 		}
 		// Fallback: best effort send.
-		_ = sub.SendMessage(msg)
+		if err := sub.SendMessage(msg); err != nil {
+			metrics.SubscriberDropsTotal.Add(1)
+			logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.key)
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ package conn
 // ensure the sender eventually learns about every loss.
 
 import (
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
 
@@ -101,6 +102,8 @@ func (c *Conn) ProcessRetransmissions() {
 
 		if err := c.sendPacket(data); err != nil {
 			c.log.Warn("failed to send retransmit packet", "error", err)
+		} else {
+			metrics.SRTPacketsRetransmit.Add(1)
 		}
 	}
 }

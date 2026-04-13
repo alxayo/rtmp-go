@@ -15,9 +15,15 @@ func TestCountersInitializedToZero(t *testing.T) {
 		ConnectionsActive, ConnectionsTotal,
 		StreamsActive,
 		PublishersActive, PublishersTotal,
-		SubscribersActive, SubscribersTotal,
-		MessagesAudio, MessagesVideo, BytesIngested,
+		SubscribersActive, SubscribersTotal, SubscriberDropsTotal,
+		AuthSuccessesTotal, AuthFailuresTotal,
+		MessagesAudio, MessagesVideo, BytesIngested, BytesEgress,
+		HandshakeFailuresTotal,
+		RecordingsActive, RecordingErrorsTotal,
+		ZombieConnectionsTotal,
 		RelayMessagesSent, RelayMessagesDropped, RelayBytesSent,
+		SRTConnectionsActive, SRTConnectionsTotal,
+		SRTBytesReceived, SRTPacketsReceived, SRTPacketsRetransmit, SRTPacketsDropped,
 	}
 	for _, c := range counters {
 		if v := c.Value(); v != 0 {
@@ -104,19 +110,45 @@ func TestExpvarHandlerContainsRTMPKeys(t *testing.T) {
 
 	body := rec.Body.String()
 	expectedKeys := []string{
+		// Connection metrics
 		"rtmp_connections_active",
 		"rtmp_connections_total",
+		// Stream metrics
 		"rtmp_streams_active",
+		// Publisher metrics
 		"rtmp_publishers_active",
 		"rtmp_publishers_total",
+		// Subscriber metrics
 		"rtmp_subscribers_active",
 		"rtmp_subscribers_total",
+		"rtmp_subscriber_drops_total",
+		// Auth metrics
+		"rtmp_auth_successes_total",
+		"rtmp_auth_failures_total",
+		// Media metrics
 		"rtmp_messages_audio",
 		"rtmp_messages_video",
 		"rtmp_bytes_ingested",
+		"rtmp_bytes_egress",
+		// Handshake metrics
+		"rtmp_handshake_failures_total",
+		// Recording metrics
+		"rtmp_recordings_active",
+		"rtmp_recording_errors_total",
+		// Connection health
+		"rtmp_zombie_connections_total",
+		// Relay metrics
 		"rtmp_relay_messages_sent",
 		"rtmp_relay_messages_dropped",
 		"rtmp_relay_bytes_sent",
+		// SRT metrics
+		"srt_connections_active",
+		"srt_connections_total",
+		"srt_bytes_received",
+		"srt_packets_received",
+		"srt_packets_retransmit",
+		"srt_packets_dropped",
+		// Info
 		"rtmp_uptime_seconds",
 		"rtmp_server_info",
 	}
@@ -124,5 +156,43 @@ func TestExpvarHandlerContainsRTMPKeys(t *testing.T) {
 		if !strings.Contains(body, key) {
 			t.Errorf("expvar output missing key %q", key)
 		}
+	}
+}
+
+func TestRegisterStreamSnapshot(t *testing.T) {
+	testData := []map[string]interface{}{
+		{"key": "live/test", "subscribers": 2},
+	}
+	RegisterStreamSnapshot(func() interface{} {
+		return testData
+	})
+
+	v := expvar.Get("rtmp_streams")
+	if v == nil {
+		t.Fatal("rtmp_streams not registered")
+	}
+
+	raw := v.String()
+	if !strings.Contains(raw, "live/test") {
+		t.Errorf("rtmp_streams should contain stream key, got %s", raw)
+	}
+}
+
+func TestRegisterRelaySnapshot(t *testing.T) {
+	testData := []map[string]interface{}{
+		{"url": "rtmp://cdn.example.com/live/key", "status": "connected"},
+	}
+	RegisterRelaySnapshot(func() interface{} {
+		return testData
+	})
+
+	v := expvar.Get("rtmp_relay_destinations")
+	if v == nil {
+		t.Fatal("rtmp_relay_destinations not registered")
+	}
+
+	raw := v.String()
+	if !strings.Contains(raw, "cdn.example.com") {
+		t.Errorf("rtmp_relay_destinations should contain destination URL, got %s", raw)
 	}
 }

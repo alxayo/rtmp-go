@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
 )
@@ -162,7 +163,8 @@ func (c *Connection) startReadLoop() {
 				// Timeout from read deadline — connection is dead
 				var netErr net.Error
 				if errors.As(err, &netErr) && netErr.Timeout() {
-					c.log.Warn("readLoop timeout (zombie connection reaped)")
+					metrics.ZombieConnectionsTotal.Add(1)
+				c.log.Warn("readLoop timeout (zombie connection reaped)")
 					return
 				}
 				c.log.Error("readLoop error", "error", err)

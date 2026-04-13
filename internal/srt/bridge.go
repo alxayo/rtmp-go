@@ -24,6 +24,7 @@ import (
 	"github.com/alxayo/go-rtmp/internal/codec"
 	"github.com/alxayo/go-rtmp/internal/ingress"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/srt/conn"
 	"github.com/alxayo/go-rtmp/internal/ts"
 )
@@ -133,6 +134,9 @@ func (b *Bridge) Run() error {
 			}
 			return err
 		}
+
+		metrics.SRTBytesReceived.Add(int64(n))
+		metrics.SRTPacketsReceived.Add(1)
 
 		// Feed the raw bytes to the TS demuxer. It handles:
 		// - Packet boundary alignment (188-byte TS packets)

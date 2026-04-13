@@ -108,6 +108,40 @@ func (r *Registry) DeleteStream(key string) bool {
 	return false
 }
 
+// StreamInfo represents a point-in-time snapshot of a stream for the metrics endpoint.
+type StreamInfo struct {
+	Key           string `json:"key"`
+	Subscribers   int    `json:"subscribers"`
+	VideoCodec    string `json:"video_codec,omitempty"`
+	AudioCodec    string `json:"audio_codec,omitempty"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Recording     bool   `json:"recording"`
+}
+
+// Snapshot returns a point-in-time view of all active streams for the
+// metrics endpoint. Safe for concurrent use.
+func (r *Registry) Snapshot() []StreamInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	now := time.Now()
+	infos := make([]StreamInfo, 0, len(r.streams))
+	for _, s := range r.streams {
+		s.mu.RLock()
+		info := StreamInfo{
+			Key:           s.Key,
+			Subscribers:   len(s.Subscribers),
+			VideoCodec:    s.VideoCodec,
+			AudioCodec:    s.AudioCodec,
+			UptimeSeconds: int64(now.Sub(s.StartTime).Seconds()),
+			Recording:     s.Recorder != nil,
+		}
+		s.mu.RUnlock()
+		infos = append(infos, info)
+	}
+	return infos
+}
+
 // SetPublisher sets the publisher if empty else returns ErrPublisherExists.
 func (s *Stream) SetPublisher(pub interface{}) error {
 	if s == nil || pub == nil {
@@ -347,12 +381,19 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		// Non-blocking path if available (TrySendMessage interface).
 		if ts, ok := sub.(media.TrySendMessage); ok {
 			if ok := ts.TrySendMessage(relayMsg); !ok {
+				metrics.SubscriberDropsTotal.Add(1)
 				logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.Key)
 				continue
 			}
+			metrics.BytesEgress.Add(int64(len(relayMsg.Payload)))
 			continue
 		}
 		// Fallback: best effort send (assumes timeout handling in SendMessage).
-		_ = sub.SendMessage(relayMsg)
+		if err := sub.SendMessage(relayMsg); err != nil {
+			metrics.SubscriberDropsTotal.Add(1)
+			logger.Debug("Dropped media message (slow subscriber)", "stream_key", s.Key)
+		} else {
+			metrics.BytesEgress.Add(int64(len(relayMsg.Payload)))
+		}
 	}
 }

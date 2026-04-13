@@ -138,6 +138,44 @@ func (dm *DestinationManager) GetMetrics() map[string]DestinationMetrics {
 	return metrics
 }
 
+// DestinationInfo represents a point-in-time snapshot of a relay destination
+// for the metrics endpoint.
+type DestinationInfo struct {
+	URL             string `json:"url"`
+	Status          string `json:"status"`
+	MessagesSent    uint64 `json:"messages_sent"`
+	MessagesDropped uint64 `json:"messages_dropped"`
+	BytesSent       uint64 `json:"bytes_sent"`
+	ReconnectCount  uint32 `json:"reconnect_count"`
+	LastError       string `json:"last_error,omitempty"`
+}
+
+// Snapshot returns a point-in-time view of all relay destinations for the
+// metrics endpoint. Safe for concurrent use.
+func (dm *DestinationManager) Snapshot() []DestinationInfo {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+
+	infos := make([]DestinationInfo, 0, len(dm.destinations))
+	for _, d := range dm.destinations {
+		d.mu.RLock()
+		info := DestinationInfo{
+			URL:             d.URL,
+			Status:          d.Status.String(),
+			MessagesSent:    d.Metrics.MessagesSent,
+			MessagesDropped: d.Metrics.MessagesDropped,
+			BytesSent:       d.Metrics.BytesSent,
+			ReconnectCount:  d.Metrics.ReconnectCount,
+		}
+		if d.LastError != nil {
+			info.LastError = d.LastError.Error()
+		}
+		d.mu.RUnlock()
+		infos = append(infos, info)
+	}
+	return infos
+}
+
 // Close disconnects from all destinations
 func (dm *DestinationManager) Close() error {
 	dm.mu.Lock()

@@ -415,6 +415,7 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 					"stream_key", info.StreamKey(),
 					"conn_id", connID,
 				)
+				metrics.RecordingErrorsTotal.Add(1)
 			} else {
 				s.log.Info("recording stopped",
 					"stream_key", info.StreamKey(),
@@ -422,6 +423,7 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 				)
 			}
 			stream.Recorder = nil
+			metrics.RecordingsActive.Add(-1)
 		}
 		stream.mu.Unlock()
 

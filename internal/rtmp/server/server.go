@@ -124,12 +124,30 @@ func New(cfg Config) *Server {
 		}
 	}
 
+	// Register per-destination relay metrics endpoint
+	if destMgr != nil {
+		metrics.RegisterRelaySnapshot(func() interface{} {
+			return destMgr.Snapshot()
+		})
+	} else {
+		metrics.RegisterRelaySnapshot(func() interface{} {
+			return []interface{}{}
+		})
+	}
+
 	// Initialize hook manager
 	hookMgr := initializeHookManager(cfg, logger.Logger())
 
+	reg := NewRegistry()
+
+	// Register per-stream metrics snapshot (computed on each /debug/vars request).
+	metrics.RegisterStreamSnapshot(func() interface{} {
+		return reg.Snapshot()
+	})
+
 	return &Server{
 		cfg:                cfg,
-		reg:                NewRegistry(),
+		reg:                reg,
 		conns:              make(map[string]*iconn.Connection),
 		log:                logger.Logger().With("component", "rtmp_server"),
 		destinationManager: destMgr,
@@ -371,6 +389,7 @@ func (s *Server) acceptLoop(l net.Listener) {
 		c, err := iconn.Accept(single)
 		if err != nil {
 			// Handshake failed — log at WARN so operators can diagnose
+			metrics.HandshakeFailuresTotal.Add(1)
 			s.log.Warn("RTMP handshake failed",
 				"remote", remoteAddr,
 				"local", localAddr,

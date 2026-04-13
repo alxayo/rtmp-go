@@ -21,6 +21,7 @@ package conn
 import (
 	"time"
 
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
 
@@ -272,6 +273,7 @@ func (c *Conn) dropTooLate() {
 	}
 
 	if dropped > 0 {
+		metrics.SRTPacketsDropped.Add(int64(dropped))
 		c.log.Debug("TLPKTDROP: dropped too-late packets", "count", dropped)
 	}
 }
