@@ -64,9 +64,14 @@ The JSON file maps stream keys to tokens:
 kill -HUP $(pidof rtmp-server)
 ```
 
-The reload is thread-safe — active streams are not interrupted. New publish/play requests will validate against the updated tokens immediately.
+`SIGHUP` **only reloads the token file** — it does not stop the server, close connections, or interrupt any active streams. The server atomically swaps its in-memory token map so that **new** publish/play requests validate against the updated file immediately. Streams that were already authenticated continue unaffected.
 
-> **Note**: SIGHUP-based reload is available on Linux and macOS. On Windows, a server restart is required to pick up token file changes.
+| Signal | Effect |
+|--------|--------|
+| `SIGHUP` | Reloads token file. Server keeps running, all active streams stay connected |
+| `SIGINT` / `SIGTERM` | Graceful shutdown — stops accepting connections and terminates the server |
+
+> **Note**: SIGHUP-based reload is available on Linux and macOS only (`syscall.SIGHUP` is a Unix signal). On Windows, a server restart is required to pick up token file changes.
 
 ## Webhook Callback
 
