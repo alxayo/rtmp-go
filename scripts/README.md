@@ -71,6 +71,29 @@ Launches ffmpeg in the background to convert the RTMP stream to HLS segments.
 
 HLS output appears in `hls-output/<stream_name>/playlist.m3u8`.
 
+### `on-publish-abr` — Adaptive Bitrate HLS Hook
+
+Like `on-publish-hls`, but spawns **3 parallel FFmpeg transcoders** (1080p, 720p, 480p) with aligned GOP parameters for seamless adaptive bitrate switching. Also writes a `master.m3u8` playlist.
+
+```bash
+./rtmp-server -hook-script "publish_start=scripts/on-publish-abr.sh"
+```
+
+```powershell
+.\rtmp-server.exe -hook-script "publish_start=.\scripts\on-publish-abr.ps1"
+```
+
+Output structure:
+```
+hls-output/<stream_name>/
+├── master.m3u8
+├── 1080p/index.m3u8 + seg_*.ts
+├── 720p/index.m3u8  + seg_*.ts
+└── 480p/index.m3u8  + seg_*.ts
+```
+
+Logs per rendition in `scripts/logs/abr-<key>-<rendition>.log`. PIDs saved to `.ffmpeg.pid` per rendition and `.abr-pids` for bulk cleanup.
+
 ### `start-server` — Server Launcher
 Starts the go-rtmp server with configurable options. Handles building the binary,
 generating TLS certs, and waiting for the server to be ready.
@@ -186,6 +209,7 @@ scripts/
 ├── check-deps.sh/.ps1
 ├── generate-certs.sh/.ps1
 ├── on-publish-hls.sh/.ps1
+├── on-publish-abr.sh/.ps1
 ├── start-server.sh/.ps1
 ├── test-e2e.sh/.ps1
 ├── test-enhanced-rtmp.sh/.ps1

@@ -105,6 +105,186 @@ This produces:
 
 The browser player (hls.js or native) automatically switches quality based on bandwidth.
 
+## Parallel FFmpeg ABR
+
+The single-FFmpeg approach above works well for small deployments. For fault isolation, multi-core scaling, or distributed encoding across machines, run **independent FFmpeg instances** — one per rendition — each subscribing to the same RTMP stream.
+
+### Architecture
+
+```
+Publisher (OBS / FFmpeg / SRT)
+     │
+     ▼
+go-rtmp server (:1935)
+     │ (multiple RTMP subscribers on same key)
+     ├───────────────────┬───────────────────┐
+     ▼                   ▼                   ▼
+FFmpeg #1 (1080p)   FFmpeg #2 (720p)    FFmpeg #3 (480p)
+     │                   │                   │
+     ▼                   ▼                   ▼
+hls/1080p/index.m3u8 hls/720p/index.m3u8 hls/480p/index.m3u8
+     │                   │                   │
+     └───────────┬───────┘                   │
+                 ▼                           │
+        hls/master.m3u8 ◀───────────────────┘
+                 │
+                 ▼
+        HTTP Server (:8080)
+                 │
+                 ▼
+        Browser (hls.js)
+```
+
+This works because go-rtmp supports **unlimited concurrent subscribers** per stream key. Each FFmpeg instance is just another subscriber receiving independent copies of media data.
+
+### Why Parallel
+
+| Aspect | Single FFmpeg | Parallel FFmpeg |
+|--------|--------------|-----------------|
+| **Fault isolation** | One crash kills all renditions | One crash leaves others running |
+| **CPU scaling** | Single process | Spreads across all cores/machines |
+| **Distribution** | Same machine only | Each encoder on a different server |
+| **Master playlist** | Auto-generated | Manual (static, create once) |
+| **Segment alignment** | Guaranteed | Requires matching GOP params |
+
+### Critical: Segment Alignment
+
+For players to switch between renditions produced by different FFmpeg instances, keyframes must appear at the **exact same timestamps**. These flags must be identical across all instances:
+
+| Flag | Purpose |
+|------|---------|
+| `-force_key_frames "expr:gte(t,n_forced*2)"` | Time-based keyframe every 2s (works at any fps) |
+| `-sc_threshold 0` | Disable scene-change keyframes |
+| `-hls_time 2` | Segment duration (must match keyframe interval) |
+| `-r 30` | Normalize output fps across all renditions |
+
+> **Why `-force_key_frames` over `-g`**: The `-g` flag sets keyframes by frame count (e.g. `-g 60` = every 60 frames), which only produces 2-second segments at exactly 30fps. With variable frame rate or other fps values, segments become misaligned. Time-based forcing works regardless of input fps.
+
+Without `-sc_threshold 0`, FFmpeg inserts extra keyframes at scene changes. Different resolutions have different scene-detection sensitivity, which breaks alignment between renditions.
+
+### Step-by-Step
+
+**1. Start the server:**
+
+```bash
+./rtmp-server -listen :1935
+```
+
+**2. Publish a stream:**
+
+```bash
+ffmpeg -re -i source.mp4 -c copy -f flv rtmp://localhost:1935/live/test
+```
+
+**3. Launch 3 parallel transcoders** (each subscribes independently):
+
+```bash
+SEG=2  LIST=10  FPS=30
+
+# 1080p @ 5 Mbps
+mkdir -p hls/1080p
+ffmpeg -i rtmp://localhost:1935/live/test \
+  -c:v libx264 -s 1920x1080 -b:v 5000k -maxrate 5500k -bufsize 10000k \
+  -preset veryfast -r $FPS \
+  -force_key_frames "expr:gte(t,n_forced*${SEG})" -sc_threshold 0 \
+  -c:a aac -b:a 192k -ar 48000 \
+  -f hls -hls_time $SEG -hls_list_size $LIST \
+  -hls_flags delete_segments+temp_file \
+  -hls_segment_filename hls/1080p/seg_%05d.ts \
+  hls/1080p/index.m3u8 &
+
+# 720p @ 2.5 Mbps
+mkdir -p hls/720p
+ffmpeg -i rtmp://localhost:1935/live/test \
+  -c:v libx264 -s 1280x720 -b:v 2500k -maxrate 2750k -bufsize 5000k \
+  -preset veryfast -r $FPS \
+  -force_key_frames "expr:gte(t,n_forced*${SEG})" -sc_threshold 0 \
+  -c:a aac -b:a 128k -ar 48000 \
+  -f hls -hls_time $SEG -hls_list_size $LIST \
+  -hls_flags delete_segments+temp_file \
+  -hls_segment_filename hls/720p/seg_%05d.ts \
+  hls/720p/index.m3u8 &
+
+# 480p @ 1 Mbps
+mkdir -p hls/480p
+ffmpeg -i rtmp://localhost:1935/live/test \
+  -c:v libx264 -s 854x480 -b:v 1000k -maxrate 1100k -bufsize 2000k \
+  -preset veryfast -r $FPS \
+  -force_key_frames "expr:gte(t,n_forced*${SEG})" -sc_threshold 0 \
+  -c:a aac -b:a 96k -ar 48000 \
+  -f hls -hls_time $SEG -hls_list_size $LIST \
+  -hls_flags delete_segments+temp_file \
+  -hls_segment_filename hls/480p/seg_%05d.ts \
+  hls/480p/index.m3u8 &
+```
+
+**4. Create master playlist** (one time — this file is static):
+
+```bash
+cat > hls/master.m3u8 << 'EOF'
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-INDEPENDENT-SEGMENTS
+
+#EXT-X-STREAM-INF:BANDWIDTH=5700000,RESOLUTION=1920x1080
+1080p/index.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=2900000,RESOLUTION=1280x720
+720p/index.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=854x480
+480p/index.m3u8
+EOF
+```
+
+**5. Serve and play:**
+
+```bash
+# Serve HLS files
+cd hls && python3 -m http.server 8080
+
+# Browser: open http://localhost:8080/master.m3u8
+```
+
+The `BANDWIDTH` value should include video + audio + overhead. Players read the master playlist once, then poll the sub-playlists for new segments.
+
+### File Structure
+
+```
+hls/
+├── master.m3u8            ← static, created once
+├── 1080p/
+│   ├── index.m3u8         ← updated by FFmpeg every segment
+│   ├── seg_00001.ts
+│   └── seg_00002.ts
+├── 720p/
+│   ├── index.m3u8
+│   └── seg_*.ts
+└── 480p/
+    ├── index.m3u8
+    └── seg_*.ts
+```
+
+### Automate with Publish Hook
+
+Instead of starting transcoders manually, use the included hook script to launch all 3 renditions automatically when a publisher connects:
+
+```bash
+./rtmp-server -listen :1935 \
+  -hook-script "publish_start=./scripts/on-publish-abr.sh" \
+  -hook-timeout 30s
+```
+
+**Windows:**
+```powershell
+.\rtmp-server.exe `
+  -listen :1935 `
+  -hook-script "publish_start=.\scripts\on-publish-abr.ps1" `
+  -hook-timeout 30s
+```
+
+The hook reads `RTMP_STREAM_KEY` from the environment, spawns 3 FFmpeg background processes with aligned GOP parameters, writes `master.m3u8`, and saves PIDs for cleanup. Logs go to `scripts/logs/abr-{key}-{rendition}.log`.
+
 ## Low-Latency Tips
 
 For the lowest possible HLS latency:
