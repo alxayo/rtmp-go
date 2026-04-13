@@ -5,6 +5,36 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] — 2026-04-13
+
+### Added
+- **Per-stream metrics endpoint** (`rtmp_streams`): Dynamic JSON snapshot showing each active stream's key, subscriber count, video/audio codecs, recording status, and uptime — queryable via `curl localhost:8080/debug/vars | jq '.rtmp_streams'`
+- **Per-destination relay endpoint** (`rtmp_relay_destinations`): Dynamic JSON snapshot of each relay destination's URL, connection status, and message/byte counters
+- **8 new metrics counters and gauges**:
+  - `rtmp_subscriber_drops_total` — messages dropped due to slow subscribers
+  - `rtmp_auth_successes_total` / `rtmp_auth_failures_total` — authentication outcomes
+  - `rtmp_handshake_failures_total` — failed RTMP handshakes
+  - `rtmp_bytes_egress` — total bytes sent to subscribers
+  - `rtmp_recordings_active` (gauge) — currently active recordings
+  - `rtmp_recording_errors_total` — recorder creation/close errors
+  - `rtmp_zombie_connections_total` — connections closed due to read timeout
+- **Secure server setup scripts**: Platform-specific scripts for Linux (`scripts/run-secure-linux.sh`), macOS (`scripts/run-secure-macos.sh`), and Windows (`scripts/run-secure-windows.ps1`) with TLS, auth, and recording preconfigured
+- **ABR HLS hook scripts**: On-publish event hooks that launch parallel FFmpeg instances for adaptive bitrate HLS output with automatic master playlist generation (`scripts/on-publish-abr.{sh,ps1}`)
+
+### Fixed
+- **SRT recorder gauge leak**: SRT publisher teardown path now correctly decrements `recordings_active` and increments `recording_errors_total` on close failure — previously every recorded SRT session left the gauge permanently high
+- **Subscriber drop under-counting**: Real RTMP connections using `SendMessage` (with timeout) now correctly increment `subscriber_drops_total` on send failure — previously only the `TrySendMessage` non-blocking path was instrumented
+- **Bytes egress over-counting**: `rtmp_bytes_egress` now only increments after successful message delivery, not before the send attempt
+- **4 dead SRT metrics wired**: `srt_bytes_received`, `srt_packets_received` (in SRT→RTMP bridge), `srt_packets_retransmit` (NAK handler), and `srt_packets_dropped` (TSBPD reliability loop) were declared in v0.2.0 but never incremented — all four now report accurate values
+
+### Documentation
+- **Multi-stream ingest guide**: RTMP + SRT simultaneous operation, per-stream file storage layout, consumer subscription patterns (`docs/multi-stream-guide.md`, `site/content/docs/user-guide/multi-stream.md`)
+- **Authentication deep-dive**: File-based token configuration, SIGHUP reload behavior and limitations, webhook authentication flow, TLS token security considerations (`site/content/docs/user-guide/authentication.md`)
+- **Parallel FFmpeg ABR HLS guide**: Step-by-step setup for multi-resolution HLS using on-publish hooks with GOP alignment requirements (`site/content/docs/user-guide/hls-streaming.md`)
+- **SRT encryption**: Passphrase validation flow and current limitations (`site/content/docs/user-guide/srt-ingest.md`, `docs/srt-protocol.md`)
+- **Expanded metrics & monitoring**: SRT metrics section, dynamic endpoint documentation with `jq` query examples, Grafana dashboard panel suggestions (`site/content/docs/user-guide/metrics.md`)
+- **README**: Added multi-stream and auth-file reload notes
+
 ## [v0.2.1] — 2026-04-12
 
 ### Added
