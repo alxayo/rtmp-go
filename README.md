@@ -177,7 +177,7 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -relay-to            RTMP relay destination URL (repeatable)
 -auth-mode           Authentication mode: none|token|file|callback (default none)
 -auth-token          Stream token: "streamKey=token" (repeatable, for token mode)
--auth-file           Path to JSON token file (for file mode; read once at startup, restart to reload)
+-auth-file           Path to JSON token file (for file mode; send SIGHUP to reload)
 -auth-callback       Webhook URL for auth validation (for callback mode)
 -auth-callback-timeout  Auth callback timeout (default 5s)
 -hook-script         Shell hook: event_type=/path/to/script (repeatable)

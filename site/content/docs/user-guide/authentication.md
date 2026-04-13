@@ -13,7 +13,7 @@ go-rtmp supports pluggable token-based authentication to control who can publish
 |------|------|----------|
 | `none` | `-auth-mode none` (default) | Open access, backward compatible |
 | `token` | `-auth-mode token` | Small setups, static configuration |
-| `file` | `-auth-mode file` | Medium deployments, managed token file |
+| `file` | `-auth-mode file` | Medium deployments, live reload |
 | `callback` | `-auth-mode callback` | Full integration with existing auth systems |
 
 Authentication is enforced at the **publish/play command level** — not at connect or handshake. This means the RTMP connection is established first, then auth is checked when the client issues a publish or play command.
@@ -58,9 +58,15 @@ The JSON file maps stream keys to tokens:
 }
 ```
 
-> **Current Limitation**: The token file is read once at server startup. Changes to the file require a server restart to take effect. The `FileValidator.Reload()` method exists in the codebase for future signal-based reload support, but no automatic reload trigger is currently wired up.
->
-> For dynamic token management without restarts, use `-auth-mode callback` with a webhook instead.
+**Live reload**: Send `SIGHUP` to the server process to reload the token file without restarting:
+
+```bash
+kill -HUP $(pidof rtmp-server)
+```
+
+The reload is thread-safe — active streams are not interrupted. New publish/play requests will validate against the updated tokens immediately.
+
+> **Note**: SIGHUP-based reload is available on Linux and macOS. On Windows, a server restart is required to pick up token file changes.
 
 ## Webhook Callback
 
@@ -143,10 +149,10 @@ The callback auth mode is **fail-closed**: if your auth service is unavailable, 
 | Mode | Behavior |
 |------|----------|
 | `token` | Static — set at startup via flags, requires restart to change |
-| `file` | Loaded once at startup, requires restart to reload (no auto-reload) |
-| `callback` | Fresh HTTP call on every publish/play — change logic in your webhook anytime without touching the RTMP server |
+| `file` | Loaded at startup, live reload via `SIGHUP` signal (Linux/macOS) |
+| `callback` | Fresh HTTP call on every publish/play — fully dynamic, no server interaction needed |
 
-If you need to update authorization rules without restarting the server, `callback` is the only mode that supports it.
+`callback` is the most flexible: no signal or file editing required. `file` with SIGHUP is a good middle ground for teams that manage tokens as config files.
 
 ### Example: Minimal Webhook Server
 
