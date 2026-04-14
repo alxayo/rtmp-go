@@ -8,8 +8,10 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -91,7 +93,7 @@ func (c *Config) applyDefaults() {
 type Server struct {
 	cfg                Config
 	l                  net.Listener
-	tlsListener        net.Listener // optional RTMPS listener (nil when TLS disabled)
+	tlsListener        net.Listener  // optional RTMPS listener (nil when TLS disabled)
 	srtListener        *srt.Listener // optional SRT listener (nil when SRT disabled)
 	log                *slog.Logger
 	reg                *Registry
@@ -224,20 +226,105 @@ func (s *Server) Start() error {
 }
 
 // startTLSListener creates and returns a TLS-wrapped net.Listener.
+// The listener wraps a plain TCP socket with Go's crypto/tls, which
+// performs the TLS handshake lazily on first Read/Write (or when
+// Handshake() is called explicitly — see acceptLoop).
 func (s *Server) startTLSListener() (net.Listener, error) {
 	cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load TLS certificate: %w", err)
 	}
+
+	// Log the certificate's subject and SANs so operators can verify
+	// the certificate matches what clients expect.
+	if cert.Leaf == nil {
+		// ParseCertificate populates the Leaf field for inspection.
+		cert.Leaf, _ = x509.ParseCertificate(cert.Certificate[0])
+	}
+	if cert.Leaf != nil {
+		s.log.Info("TLS certificate loaded",
+			"subject", cert.Leaf.Subject.CommonName,
+			"dns_names", cert.Leaf.DNSNames,
+			"ip_addresses", fmt.Sprint(cert.Leaf.IPAddresses),
+			"issuer", cert.Leaf.Issuer.CommonName,
+			"not_before", cert.Leaf.NotBefore,
+			"not_after", cert.Leaf.NotAfter,
+		)
+	}
+
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
+
+		// GetConfigForClient is called after the TLS ClientHello is parsed.
+		// If this callback fires, we know the client sent a valid ClientHello
+		// (i.e. it is actually speaking TLS). If TLS handshake still fails
+		// with EOF *after* this fires, the client received our certificate
+		// and rejected it (common with Android self-signed / mkcert certs).
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			s.log.Debug("TLS ClientHello received",
+				"remote", hello.Conn.RemoteAddr().String(),
+				"server_name", hello.ServerName,
+				"supported_versions", fmt.Sprintf("%#v", hello.SupportedVersions),
+				"supported_ciphers_count", len(hello.CipherSuites),
+				"supported_curves", fmt.Sprintf("%v", hello.SupportedCurves),
+				"alpn_protocols", hello.SupportedProtos,
+				"stage", "tls-handshake",
+			)
+			// Return nil to use the default config — we only observe here.
+			return nil, nil
+		},
 	}
 	tcpLn, err := net.Listen("tcp", s.cfg.TLSListenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", s.cfg.TLSListenAddr, err)
 	}
 	return tls.NewListener(tcpLn, tlsCfg), nil
+}
+
+// classifyTLSError inspects a TLS handshake error and returns a short
+// human-readable diagnosis to help operators fix the problem quickly.
+func classifyTLSError(err error) string {
+	if errors.Is(err, io.EOF) {
+		return "client closed connection during TLS handshake — likely rejected the server certificate. " +
+			"On Android (API 24+), user-installed CA certificates are NOT trusted by default for non-browser apps; " +
+			"the app must configure a custom Network Security Config or use certificate pinning. " +
+			"Also verify the certificate SAN (Subject Alternative Name) covers the exact IP/hostname the client connects to."
+	}
+
+	errStr := err.Error()
+
+	// Connection reset by peer (client sent RST instead of FIN)
+	if strings.Contains(errStr, "connection reset by peer") {
+		return "client forcibly reset the connection during TLS handshake — likely certificate rejection or firewall interference"
+	}
+
+	// Non-TLS data sent to the TLS port (e.g. plain RTMP byte 0x03)
+	if strings.Contains(errStr, "first record does not look like a TLS handshake") {
+		return "client sent non-TLS data to the RTMPS port — ensure the client is configured for RTMPS (not plain RTMP)"
+	}
+
+	// TLS version mismatch
+	if strings.Contains(errStr, "protocol version") {
+		return "TLS protocol version mismatch — server requires TLS 1.2+; check client TLS capabilities"
+	}
+
+	// No shared cipher suite
+	if strings.Contains(errStr, "no cipher suite") {
+		return "no common TLS cipher suite — check client and server cipher suite compatibility"
+	}
+
+	// Timeout
+	if strings.Contains(errStr, "i/o timeout") {
+		return "TLS handshake timed out — client connected TCP but never completed TLS negotiation"
+	}
+
+	// TLS alert from client (e.g. "tls: error decoding message" or alert codes)
+	if strings.Contains(errStr, "tls:") {
+		return "TLS protocol error from client: " + errStr
+	}
+
+	return "unknown TLS error — see 'error' field for details"
 }
 
 // logListenerInfo logs the listening address and resolves all reachable IPs.
@@ -379,8 +466,50 @@ func (s *Server) acceptLoop(l net.Listener) {
 			"stage", "pre-handshake",
 		)
 
-		// Detect whether this connection arrived over TLS
-		_, isTLS := raw.(*tls.Conn)
+		// Detect whether this connection arrived over TLS.
+		// If TLS, perform an explicit TLS handshake so that any certificate or
+		// protocol errors are captured with full detail instead of surfacing
+		// later as an opaque EOF during the RTMP handshake.
+		tlsConn, isTLS := raw.(*tls.Conn)
+		if isTLS {
+			// Give the TLS handshake its own deadline so a stalled client
+			// doesn't block the accept loop indefinitely.
+			tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+			if err := tlsConn.Handshake(); err != nil {
+				metrics.HandshakeFailuresTotal.Add(1)
+
+				// Classify the TLS error to give operators actionable guidance.
+				// - EOF / connection reset: the client closed before completing
+				//   the handshake, usually because it rejected our certificate
+				//   (common with Android user-installed CA certs since API 24+).
+				// - tls.RecordHeaderError: the client sent non-TLS data (e.g.
+				//   plain RTMP to the TLS port).
+				// - tls.AlertError or other: protocol-level TLS alert.
+				diagnosis := classifyTLSError(err)
+				s.log.Warn("TLS handshake failed",
+					"remote", remoteAddr,
+					"local", localAddr,
+					"error", err,
+					"diagnosis", diagnosis,
+					"stage", "tls-handshake",
+				)
+				_ = raw.Close()
+				continue
+			}
+			// Log negotiated TLS parameters for diagnostics.
+			cs := tlsConn.ConnectionState()
+			s.log.Debug("TLS handshake completed",
+				"remote", remoteAddr,
+				"local", localAddr,
+				"tls_version", cs.Version,
+				"cipher_suite", tls.CipherSuiteName(cs.CipherSuite),
+				"server_name", cs.ServerName,
+				"negotiated_protocol", cs.NegotiatedProtocol,
+				"stage", "tls-handshake",
+			)
+			// Clear the deadline so the RTMP handshake can set its own.
+			tlsConn.SetDeadline(time.Time{})
+		}
 
 		// Handshake + control burst integration lives in conn.Accept.
 		// We temporarily wrap the raw listener to reuse existing function.
