@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/alxayo/go-rtmp/internal/srt/circular"
+	"github.com/alxayo/go-rtmp/internal/srt/crypto"
 	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
 
@@ -73,6 +74,16 @@ type ConnConfig struct {
 	// PayloadSize is the maximum payload bytes per data packet.
 	// Calculated as MTU - 16 (SRT data header size).
 	PayloadSize uint32
+
+	// Cipher is the AES-CTR cipher for decrypting incoming data packet
+	// payloads and encrypting outgoing ones. nil means no encryption —
+	// the connection operates in plaintext mode.
+	Cipher *crypto.PacketCipher
+
+	// Encrypted indicates whether this connection uses encryption.
+	// When true, incoming data packets with the KK encryption flag set
+	// will be decrypted using Cipher before delivery to the application.
+	Encrypted bool
 }
 
 // Conn represents an established SRT connection.
@@ -341,17 +352,38 @@ func (c *Conn) RecvPacket(data []byte) {
 // handleDataPacket parses a raw data packet and passes it to the receiver
 // for buffering and in-order delivery.
 func (c *Conn) handleDataPacket(data []byte) {
-	// Parse the full data packet from the raw bytes
+	// Parse the full data packet from the raw bytes.
 	pkt, err := packet.UnmarshalDataPacket(data)
 	if err != nil {
 		c.log.Warn("failed to parse data packet", "error", err)
 		return
 	}
 
-	// Hand it off to the receiver for buffering and delivery
+	// If this connection uses encryption, decrypt the payload before
+	// delivering it to the application. The KK field in the packet header
+	// tells us whether (and with which key) the payload is encrypted.
+	if c.config.Cipher != nil && pkt.Encryption != packet.EncryptionNone {
+		if err := c.config.Cipher.DecryptPayload(pkt.Payload, pkt.SequenceNumber); err != nil {
+			c.log.Warn("failed to decrypt data packet",
+				"seq", pkt.SequenceNumber,
+				"encryption", pkt.Encryption,
+				"error", err,
+			)
+			return // Drop packets that fail decryption
+		}
+	} else if c.config.Encrypted && pkt.Encryption == packet.EncryptionNone {
+		// Connection is encrypted but this packet isn't — this shouldn't
+		// happen in normal operation. Log it but still deliver (some
+		// implementations send unencrypted control-like data packets).
+		c.log.Debug("unencrypted packet on encrypted connection",
+			"seq", pkt.SequenceNumber,
+		)
+	}
+
+	// Hand it off to the receiver for buffering and delivery.
 	c.receiver.OnData(pkt)
 
-	// Track the received packet for ACK interval calculation
+	// Track the received packet for ACK interval calculation.
 	c.ackState.OnDataReceived()
 }
 

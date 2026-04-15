@@ -39,6 +39,7 @@ import (
 	"sync/atomic"
 
 	srtconn "github.com/alxayo/go-rtmp/internal/srt/conn"
+	"github.com/alxayo/go-rtmp/internal/srt/crypto"
 	"github.com/alxayo/go-rtmp/internal/srt/handshake"
 	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
@@ -693,6 +694,31 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 		PeerTSBPDDelay: uint32(result.PeerTSBPD),
 		InitialSeqNum:  result.InitialSeqNum,
 		PayloadSize:    result.MTU - 16, // SRT header is 16 bytes
+		Encrypted:      result.Encrypted,
+	}
+
+	// If encryption was negotiated during the handshake, create the
+	// AES-CTR cipher from the unwrapped SEK and salt. This cipher
+	// will be used to decrypt every incoming data packet.
+	if result.Encrypted {
+		pktCipher, err := crypto.NewPacketCipher(result.SEK, result.Salt)
+		if err != nil {
+			l.log.Warn("SRT failed to create packet cipher",
+				"remote", remoteAddr,
+				"error", err,
+			)
+			// Clean up and reject the connection
+			l.connsMu.Lock()
+			delete(l.pendingByAddr, ph.remoteAddr)
+			delete(l.pendingBySID, ph.localSID)
+			l.connsMu.Unlock()
+			return
+		}
+		connCfg.Cipher = pktCipher
+		l.log.Info("SRT encryption enabled for connection",
+			"remote", remoteAddr,
+			"key_len", result.KeyLen,
+		)
 	}
 
 	// Create the SRT connection. It shares the listener's UDP socket
