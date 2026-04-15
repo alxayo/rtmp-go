@@ -90,9 +90,17 @@ type HandshakeResult struct {
 	// our flags and the peer's flags).
 	Flags uint32
 
-	// SEK is the unwrapped Stream Encrypting Key, ready for use with
-	// AES-CTR encryption/decryption. Nil if the connection is not encrypted.
-	SEK []byte
+	// EvenSEK is the unwrapped even Stream Encrypting Key. Nil if no even key
+	// was negotiated. For KKEven or KKBoth, this contains the even key.
+	EvenSEK []byte
+
+	// OddSEK is the unwrapped odd Stream Encrypting Key. Nil if no odd key
+	// was negotiated. For KKOdd or KKBoth, this contains the odd key.
+	OddSEK []byte
+
+	// KK indicates which key(s) were negotiated during the handshake:
+	// KKEven (0x01), KKOdd (0x02), or KKBoth (0x03). Zero if unencrypted.
+	KK uint8
 
 	// Salt is the salt from the client's KMREQ, needed to construct
 	// the AES-CTR IV. Nil if the connection is not encrypted.
@@ -321,8 +329,11 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		return nil, nil, fmt.Errorf("client sent KMREQ but server has no passphrase configured")
 	}
 
-	// If encryption is negotiated, derive KEK and unwrap the SEK.
-	var sek []byte
+	// If encryption is negotiated, derive KEK and unwrap the SEK(s).
+	// The unwrapped plaintext contains one or two keys depending on the
+	// KK flag: KKEven/KKOdd = one key, KKBoth = two keys concatenated
+	// (even first, then odd).
+	var evenSEK, oddSEK []byte
 	if kmReq != nil {
 		keyLen := int(kmReq.KLen)
 
@@ -341,16 +352,44 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 			return nil, nil, fmt.Errorf("derive KEK: %w", err)
 		}
 
-		// Unwrap the Stream Encrypting Key (SEK) using AES Key Wrap (RFC 3394).
+		// Unwrap the Stream Encrypting Key(s) using AES Key Wrap (RFC 3394).
 		// If the passphrase is wrong, the integrity check will fail here.
-		sek, err = crypto.Unwrap(kek, kmReq.WrappedKey)
+		plaintext, err := crypto.Unwrap(kek, kmReq.WrappedKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("unwrap SEK (wrong passphrase?): %w", err)
+		}
+
+		// Split the unwrapped plaintext into individual keys based on the
+		// KK flag. KKEven/KKOdd carry one key; KKBoth carries two keys
+		// concatenated (even || odd), each keyLen bytes.
+		switch kmReq.KK {
+		case crypto.KKEven:
+			if len(plaintext) != keyLen {
+				return nil, nil, fmt.Errorf("unwrapped key length %d != expected %d", len(plaintext), keyLen)
+			}
+			evenSEK = plaintext
+
+		case crypto.KKOdd:
+			if len(plaintext) != keyLen {
+				return nil, nil, fmt.Errorf("unwrapped key length %d != expected %d", len(plaintext), keyLen)
+			}
+			oddSEK = plaintext
+
+		case crypto.KKBoth:
+			if len(plaintext) != 2*keyLen {
+				return nil, nil, fmt.Errorf("unwrapped dual key length %d != expected %d", len(plaintext), 2*keyLen)
+			}
+			evenSEK = plaintext[:keyLen]
+			oddSEK = plaintext[keyLen:]
+
+		default:
+			return nil, nil, fmt.Errorf("invalid KK flag: %d", kmReq.KK)
 		}
 
 		l.log.Info("encryption negotiated",
 			"cipher", "AES-CTR",
 			"key_len", keyLen,
+			"kk", kmReq.KK,
 			"from", from.String(),
 		)
 	}
@@ -482,7 +521,9 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 
 	// Set encryption fields on the result if encryption was negotiated.
 	if kmReq != nil {
-		result.SEK = sek
+		result.EvenSEK = evenSEK
+		result.OddSEK = oddSEK
+		result.KK = kmReq.KK
 		result.Salt = kmReq.Salt
 		result.KeyLen = int(kmReq.KLen)
 		result.Encrypted = true

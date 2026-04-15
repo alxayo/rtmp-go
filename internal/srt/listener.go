@@ -705,8 +705,19 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 	// If encryption was negotiated during the handshake, create the
 	// AES-CTR cipher from the unwrapped SEK and salt. This cipher
 	// will be used to decrypt every incoming data packet.
+	//
+	// When KKBoth is negotiated, both even and odd keys are available.
+	// For now we extract the primary (even-preferred) key into a single
+	// PacketCipher for ConnConfig. Full KeySet integration with dual-key
+	// decryption comes in a later todo.
 	if result.Encrypted {
-		pktCipher, err := crypto.NewPacketCipher(result.SEK, result.Salt)
+		var primarySEK []byte
+		if result.EvenSEK != nil {
+			primarySEK = result.EvenSEK
+		} else {
+			primarySEK = result.OddSEK
+		}
+		pktCipher, err := crypto.NewPacketCipher(primarySEK, result.Salt)
 		if err != nil {
 			l.log.Warn("SRT failed to create packet cipher",
 				"remote", remoteAddr,

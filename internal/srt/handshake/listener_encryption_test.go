@@ -181,8 +181,14 @@ func TestEncryptionHappyPath(t *testing.T) {
 	if result.KeyLen != keyLen {
 		t.Errorf("result.KeyLen: got %d, want %d", result.KeyLen, keyLen)
 	}
-	if !bytes.Equal(result.SEK, originalSEK) {
-		t.Error("result.SEK does not match the original SEK")
+	if result.KK != crypto.KKEven {
+		t.Errorf("result.KK: got %d, want %d (KKEven)", result.KK, crypto.KKEven)
+	}
+	if !bytes.Equal(result.EvenSEK, originalSEK) {
+		t.Error("result.EvenSEK does not match the original SEK")
+	}
+	if result.OddSEK != nil {
+		t.Error("result.OddSEK: got non-nil, want nil for KKEven")
 	}
 	if !bytes.Equal(result.Salt, originalSalt) {
 		t.Error("result.Salt does not match the original salt")
@@ -212,8 +218,8 @@ func TestEncryptionAES256(t *testing.T) {
 	if result.KeyLen != 32 {
 		t.Errorf("result.KeyLen: got %d, want 32", result.KeyLen)
 	}
-	if !bytes.Equal(result.SEK, originalSEK) {
-		t.Error("result.SEK does not match the original SEK")
+	if !bytes.Equal(result.EvenSEK, originalSEK) {
+		t.Error("result.EvenSEK does not match the original SEK")
 	}
 }
 
@@ -325,8 +331,14 @@ func TestNoEncryptionBackwardCompatible(t *testing.T) {
 	if result.Encrypted {
 		t.Error("result.Encrypted: got true, want false")
 	}
-	if result.SEK != nil {
-		t.Error("result.SEK: got non-nil, want nil")
+	if result.EvenSEK != nil {
+		t.Error("result.EvenSEK: got non-nil, want nil")
+	}
+	if result.OddSEK != nil {
+		t.Error("result.OddSEK: got non-nil, want nil")
+	}
+	if result.KK != 0 {
+		t.Errorf("result.KK: got %d, want 0", result.KK)
 	}
 	if result.Salt != nil {
 		t.Error("result.Salt: got non-nil, want nil")
@@ -360,7 +372,154 @@ func TestEncryptionPbKeyLenZeroAcceptsAny(t *testing.T) {
 	if result.KeyLen != 24 {
 		t.Errorf("result.KeyLen: got %d, want 24", result.KeyLen)
 	}
-	if !bytes.Equal(result.SEK, originalSEK) {
-		t.Error("result.SEK does not match the original SEK")
+	if !bytes.Equal(result.EvenSEK, originalSEK) {
+		t.Error("result.EvenSEK does not match the original SEK")
+	}
+}
+
+// buildDualKMREQExtension is a test helper that builds a valid KMREQ extension
+// with KK=KKBoth, containing two wrapped SEKs (even + odd) concatenated.
+func buildDualKMREQExtension(t *testing.T, passphrase string, keyLen int) (kmContent []byte, evenSEK []byte, oddSEK []byte, salt []byte) {
+	t.Helper()
+
+	// Generate two random SEKs: one for the even slot, one for the odd slot.
+	evenSEK = make([]byte, keyLen)
+	if _, err := rand.Read(evenSEK); err != nil {
+		t.Fatalf("generate even SEK: %v", err)
+	}
+	oddSEK = make([]byte, keyLen)
+	if _, err := rand.Read(oddSEK); err != nil {
+		t.Fatalf("generate odd SEK: %v", err)
+	}
+
+	// Generate a random 16-byte salt.
+	salt = make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		t.Fatalf("generate salt: %v", err)
+	}
+
+	// Derive the KEK from the passphrase and salt.
+	// Per SRT spec, only the LSB 64 bits (last 8 bytes) of salt are used.
+	kek, err := crypto.DeriveKey(passphrase, salt[len(salt)-8:], keyLen)
+	if err != nil {
+		t.Fatalf("derive KEK: %v", err)
+	}
+
+	// Concatenate even + odd SEKs and wrap them together.
+	combined := append(evenSEK, oddSEK...)
+	wrappedKey, err := crypto.Wrap(kek, combined)
+	if err != nil {
+		t.Fatalf("wrap dual SEK: %v", err)
+	}
+
+	// Build the KMMsg with KK=KKBoth and marshal it.
+	km := &crypto.KMMsg{
+		Version:    crypto.KMVersion,
+		PacketType: crypto.KMPacketType,
+		Sign:       crypto.KMSignature,
+		KK:         crypto.KKBoth,
+		KEKI:       0,
+		Cipher:     crypto.CipherAESCTR,
+		Auth:       0,
+		SE:         crypto.SELiveSRT,
+		SLen:       16,
+		KLen:       uint16(keyLen),
+		Salt:       salt,
+		WrappedKey: wrappedKey,
+	}
+
+	kmContent, err = km.Marshal()
+	if err != nil {
+		t.Fatalf("marshal KMMsg: %v", err)
+	}
+
+	return kmContent, evenSEK, oddSEK, salt
+}
+
+// TestEncryptionKKBoth verifies that a handshake with KK=KKBoth correctly
+// unwraps both even and odd SEKs from the concatenated plaintext.
+func TestEncryptionKKBoth(t *testing.T) {
+	passphrase := "dual-key-secret"
+	keyLen := 16 // AES-128
+
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, originalEvenSEK, originalOddSEK, originalSalt := buildDualKMREQExtension(t, passphrase, keyLen)
+
+	resp, result, err := doConclusionWithKMREQ(t, l, from, kmContent)
+	if err != nil {
+		t.Fatalf("HandleConclusion failed: %v", err)
+	}
+
+	// Verify EncryptionField: 2 = AES-128.
+	if resp.EncryptionField != 2 {
+		t.Errorf("EncryptionField: got %d, want 2 (AES-128)", resp.EncryptionField)
+	}
+
+	// Verify KMRSP extension is present and echoes KK=KKBoth.
+	if len(resp.Extensions) < 2 {
+		t.Fatalf("expected at least 2 extensions (HSRSP + KMRSP), got %d", len(resp.Extensions))
+	}
+	kmRsp, err := crypto.ParseKMMsg(resp.Extensions[1].Content)
+	if err != nil {
+		t.Fatalf("parse KMRSP: %v", err)
+	}
+	if kmRsp.KK != crypto.KKBoth {
+		t.Errorf("KMRSP KK: got %d, want %d (KKBoth)", kmRsp.KK, crypto.KKBoth)
+	}
+
+	// Verify the result has both keys and the correct KK flag.
+	if !result.Encrypted {
+		t.Error("result.Encrypted: got false, want true")
+	}
+	if result.KK != crypto.KKBoth {
+		t.Errorf("result.KK: got %d, want %d (KKBoth)", result.KK, crypto.KKBoth)
+	}
+	if result.KeyLen != keyLen {
+		t.Errorf("result.KeyLen: got %d, want %d", result.KeyLen, keyLen)
+	}
+	if !bytes.Equal(result.EvenSEK, originalEvenSEK) {
+		t.Error("result.EvenSEK does not match the original even SEK")
+	}
+	if !bytes.Equal(result.OddSEK, originalOddSEK) {
+		t.Error("result.OddSEK does not match the original odd SEK")
+	}
+	if !bytes.Equal(result.Salt, originalSalt) {
+		t.Error("result.Salt does not match the original salt")
+	}
+}
+
+// TestEncryptionKKBothAES256 verifies KKBoth works with AES-256 keys.
+func TestEncryptionKKBothAES256(t *testing.T) {
+	passphrase := "dual-key-256"
+	keyLen := 32 // AES-256
+
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, originalEvenSEK, originalOddSEK, _ := buildDualKMREQExtension(t, passphrase, keyLen)
+
+	resp, result, err := doConclusionWithKMREQ(t, l, from, kmContent)
+	if err != nil {
+		t.Fatalf("HandleConclusion failed: %v", err)
+	}
+
+	// EncryptionField: 4 = AES-256.
+	if resp.EncryptionField != 4 {
+		t.Errorf("EncryptionField: got %d, want 4 (AES-256)", resp.EncryptionField)
+	}
+
+	if result.KK != crypto.KKBoth {
+		t.Errorf("result.KK: got %d, want %d (KKBoth)", result.KK, crypto.KKBoth)
+	}
+	if result.KeyLen != 32 {
+		t.Errorf("result.KeyLen: got %d, want 32", result.KeyLen)
+	}
+	if !bytes.Equal(result.EvenSEK, originalEvenSEK) {
+		t.Error("result.EvenSEK does not match the original even SEK")
+	}
+	if !bytes.Equal(result.OddSEK, originalOddSEK) {
+		t.Error("result.OddSEK does not match the original odd SEK")
 	}
 }
