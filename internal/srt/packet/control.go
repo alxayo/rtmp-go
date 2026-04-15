@@ -69,6 +69,26 @@ const (
 	// CtrlPeerError signals a fatal error from the peer, with an
 	// error code in the type-specific info field.
 	CtrlPeerError ControlType = 0x0008
+
+	// CtrlUserDefined is the user-defined control message type (0x7FFF).
+	// SRT uses this for post-handshake Key Material (KM) messages during
+	// key rotation. The TypeSpecific field carries the message subtype:
+	//   - 3 = KMREQ (Key Material Request — new key from sender)
+	//   - 4 = KMRSP (Key Material Response — acknowledgment from receiver)
+	CtrlUserDefined ControlType = 0x7FFF
+)
+
+// User-defined control message subtypes. These are carried in the
+// TypeSpecific field of a CtrlUserDefined control packet and match
+// the SRT handshake extension type IDs for key material messages.
+const (
+	// UserSubtypeKMREQ identifies a post-handshake Key Material Request.
+	// The sender sends this when rotating to a new Stream Encrypting Key.
+	UserSubtypeKMREQ uint32 = 3
+
+	// UserSubtypeKMRSP identifies a post-handshake Key Material Response.
+	// The receiver sends this to acknowledge receipt of the new key.
+	UserSubtypeKMRSP uint32 = 4
 )
 
 // ControlPacket represents a parsed SRT control packet used for protocol

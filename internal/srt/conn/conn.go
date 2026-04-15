@@ -429,6 +429,18 @@ func (c *Conn) handleControlPacket(data []byte) {
 		// Keepalive: the peer is still alive, nothing to do
 		c.log.Debug("received keepalive")
 
+	case packet.CtrlUserDefined:
+		// User-defined control messages carry a subtype in TypeSpecific.
+		// Currently only KMREQ (key rotation) is handled.
+		switch ctrl.TypeSpecific {
+		case packet.UserSubtypeKMREQ:
+			c.handleKMREQ(ctrl)
+		default:
+			c.log.Debug("received unknown user-defined control message",
+				"subtype", ctrl.TypeSpecific,
+			)
+		}
+
 	default:
 		c.log.Debug("received unhandled control packet",
 			"type", ctrl.Type,
@@ -485,6 +497,18 @@ func (c *Conn) handleNAK(ctrl *packet.ControlPacket) {
 
 	// Tell the sender to queue these packets for retransmission
 	c.sender.OnNAK(ranges)
+}
+
+// handleKMREQ processes a post-handshake Key Material Request from the peer.
+// The sender sends this during key rotation to deliver a new Stream Encrypting
+// Key (SEK). We unwrap it, install it in the KeySet, and send back a KMRSP.
+//
+// This is a stub — full implementation comes in the post-handshake-rekey todo.
+func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
+	c.log.Info("received post-handshake KMREQ (key rotation)",
+		"cif_len", len(ctrl.CIF),
+	)
+	// TODO: Parse KM message, derive KEK, unwrap SEK, install in KeySet, send KMRSP
 }
 
 // sendPacket sends raw bytes to the peer via the shared UDP socket.

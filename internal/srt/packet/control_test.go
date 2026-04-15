@@ -125,6 +125,34 @@ func TestControlPacket_RoundTrip(t *testing.T) {
 			},
 		},
 		{
+			name: "user_defined_kmreq",
+			pkt: ControlPacket{
+				Header: Header{
+					IsControl:    true,
+					Timestamp:    88888,
+					DestSocketID: 300,
+				},
+				Type:         CtrlUserDefined,
+				Subtype:      0,
+				TypeSpecific: UserSubtypeKMREQ, // KMREQ subtype
+				CIF:          []byte{0xDE, 0xAD, 0xBE, 0xEF},
+			},
+		},
+		{
+			name: "user_defined_kmrsp",
+			pkt: ControlPacket{
+				Header: Header{
+					IsControl:    true,
+					Timestamp:    99999,
+					DestSocketID: 400,
+				},
+				Type:         CtrlUserDefined,
+				Subtype:      0,
+				TypeSpecific: UserSubtypeKMRSP, // KMRSP subtype
+				CIF:          []byte{0xCA, 0xFE, 0xBA, 0xBE},
+			},
+		},
+		{
 			name: "with_subtype",
 			pkt: ControlPacket{
 				Header: Header{
@@ -251,6 +279,7 @@ func TestControlPacket_AllTypes(t *testing.T) {
 		{"ackack", CtrlACKACK},
 		{"dropreq", CtrlDropReq},
 		{"peererror", CtrlPeerError},
+		{"userdefined", CtrlUserDefined},
 	}
 
 	for _, tt := range types {
@@ -271,5 +300,57 @@ func TestControlPacket_AllTypes(t *testing.T) {
 				t.Errorf("Type: got %d, want %d", got.Type, tt.ct)
 			}
 		})
+	}
+}
+
+// TestControlPacket_UserDefined_WireFormat verifies the exact byte layout
+// of a user-defined control packet (type 0x7FFF) with a KMREQ subtype.
+// This ensures the maximum 15-bit control type value survives the round trip
+// and the TypeSpecific field correctly carries the subtype identifier.
+func TestControlPacket_UserDefined_WireFormat(t *testing.T) {
+	pkt := ControlPacket{
+		Header: Header{
+			IsControl:    true,
+			Timestamp:    0x00001000,
+			DestSocketID: 0x00000005,
+		},
+		Type:         CtrlUserDefined,  // 0x7FFF
+		Subtype:      0,
+		TypeSpecific: UserSubtypeKMREQ, // 3
+		CIF:          []byte{0x01, 0x02},
+	}
+
+	data, err := pkt.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary failed: %v", err)
+	}
+
+	// Bytes 0-3: F=1, Type=0x7FFF, Subtype=0x0000
+	// Binary: 1_111111111111111_0000000000000000
+	// = 0xFFFF0000
+	if data[0] != 0xFF || data[1] != 0xFF || data[2] != 0x00 || data[3] != 0x00 {
+		t.Errorf("bytes 0-3: got %02X %02X %02X %02X, want FF FF 00 00",
+			data[0], data[1], data[2], data[3])
+	}
+
+	// Bytes 4-7: TypeSpecific = 3 (KMREQ subtype)
+	if data[4] != 0x00 || data[5] != 0x00 || data[6] != 0x00 || data[7] != 0x03 {
+		t.Errorf("bytes 4-7: got %02X %02X %02X %02X, want 00 00 00 03",
+			data[4], data[5], data[6], data[7])
+	}
+
+	// Round-trip: unmarshal and verify fields
+	got, err := UnmarshalControlPacket(data)
+	if err != nil {
+		t.Fatalf("UnmarshalControlPacket failed: %v", err)
+	}
+	if got.Type != CtrlUserDefined {
+		t.Errorf("Type: got %d, want %d", got.Type, CtrlUserDefined)
+	}
+	if got.TypeSpecific != UserSubtypeKMREQ {
+		t.Errorf("TypeSpecific: got %d, want %d", got.TypeSpecific, UserSubtypeKMREQ)
+	}
+	if len(got.CIF) != 2 || got.CIF[0] != 0x01 || got.CIF[1] != 0x02 {
+		t.Errorf("CIF: got %v, want [01 02]", got.CIF)
 	}
 }
