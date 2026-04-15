@@ -163,6 +163,14 @@ func parseFlags(args []string) (*cliConfig, error) {
 	if cfg.srtPbKeyLen != 0 && cfg.srtPbKeyLen != 16 && cfg.srtPbKeyLen != 24 && cfg.srtPbKeyLen != 32 {
 		return nil, fmt.Errorf("-srt-pbkeylen must be 16, 24, or 32, got %d", cfg.srtPbKeyLen)
 	}
+	if cfg.srtPassphrase != "" {
+		if len(cfg.srtPassphrase) < 10 {
+			return nil, fmt.Errorf("-srt-passphrase too short: %d characters (minimum 10, per SRT spec)", len(cfg.srtPassphrase))
+		}
+		if len(cfg.srtPassphrase) > 79 {
+			return nil, fmt.Errorf("-srt-passphrase too long: %d characters (maximum 79, per SRT spec)", len(cfg.srtPassphrase))
+		}
+	}
 
 	return cfg, nil
 }

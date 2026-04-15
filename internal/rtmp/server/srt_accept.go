@@ -44,6 +44,14 @@ func (s *Server) startSRTListener() error {
 		"pb_key_len", cfg.PbKeyLen,
 	)
 
+	// Log encryption status at Info level so operators can confirm the config.
+	if cfg.Passphrase != "" {
+		aesLabel := map[int]string{16: "AES-128", 24: "AES-192", 32: "AES-256"}[cfg.PbKeyLen]
+		s.log.Info("SRT encryption enabled", "key_length", aesLabel)
+	} else {
+		s.log.Info("SRT encryption disabled (no passphrase configured)")
+	}
+
 	// Start the SRT listener (binds a UDP socket and starts the read loop)
 	ln, err := srt.Listen(cfg.ListenAddr, cfg)
 	if err != nil {

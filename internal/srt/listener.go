@@ -250,6 +250,11 @@ type Listener struct {
 //
 // The returned Listener is ready to accept connections via Accept().
 func Listen(addr string, cfg Config) (*Listener, error) {
+	// Validate configuration before proceeding.
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	// Fill in defaults for any fields the caller didn't set.
 	cfg.applyDefaults()
 

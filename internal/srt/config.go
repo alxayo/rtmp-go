@@ -1,5 +1,7 @@
 package srt
 
+import "fmt"
+
 // Config holds all SRT-specific listener configuration settings.
 // These values control how the SRT listener behaves, including
 // network parameters, latency buffering, and optional encryption.
@@ -37,6 +39,30 @@ type Config struct {
 	// Valid values: 0 (no encryption), 16 (AES-128), 24 (AES-192),
 	// or 32 (AES-256). Default: 0 (no encryption).
 	PbKeyLen int
+}
+
+// Validate checks the Config for invalid or unsupported values.
+// Call this before creating a listener to get clear error messages
+// instead of cryptic failures later.
+func (c *Config) Validate() error {
+	// SRT spec recommends passphrases be 10-79 characters.
+	// libsrt enforces a minimum of 10 characters. We follow the same rule
+	// so operators get a clear error instead of a silent mismatch.
+	if c.Passphrase != "" {
+		if len(c.Passphrase) < 10 {
+			return fmt.Errorf("srt passphrase too short: %d characters (minimum 10)", len(c.Passphrase))
+		}
+		if len(c.Passphrase) > 79 {
+			return fmt.Errorf("srt passphrase too long: %d characters (maximum 79)", len(c.Passphrase))
+		}
+	}
+
+	// PbKeyLen must be a valid AES key size or 0 (no encryption).
+	if c.PbKeyLen != 0 && c.PbKeyLen != 16 && c.PbKeyLen != 24 && c.PbKeyLen != 32 {
+		return fmt.Errorf("srt pbkeylen must be 0, 16, 24, or 32, got %d", c.PbKeyLen)
+	}
+
+	return nil
 }
 
 // applyDefaults fills in zero-valued fields with sensible default values.
