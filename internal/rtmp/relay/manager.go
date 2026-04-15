@@ -1,6 +1,6 @@
 // File: manager.go
-// Purpose: Manages multiple RTMP relay destinations. When a stream is published,
-// the relay manager optionally forwards media to external RTMP servers for
+// Purpose: Manages multiple RTMP/RTMPS relay destinations. When a stream is published,
+// the relay manager optionally forwards media to external RTMP or RTMPS servers for
 // cross-organization delivery or backup archival.
 //
 // Key Types:

@@ -54,10 +54,11 @@ func (s DestinationStatus) String() string {
 	}
 }
 
-// Destination represents a single relay target — a remote RTMP server that
-// receives a copy of the publisher's audio/video stream.
+// Destination represents a single relay target — a remote RTMP or RTMPS server
+// that receives a copy of the publisher's audio/video stream. Both plaintext
+// (rtmp://) and TLS-encrypted (rtmps://) destinations are supported.
 type Destination struct {
-	URL           string              // Full RTMP URL (e.g. rtmp://cdn.example.com/live/key)
+	URL           string              // Full RTMP/RTMPS URL (e.g. rtmp://cdn.example.com/live/key or rtmps://cdn.example.com/live/key)
 	Client        RTMPClient          // Active RTMP client connection to the destination
 	Status        DestinationStatus   // Current connection state
 	LastError     error               // Most recent error (nil if healthy)
@@ -89,8 +90,8 @@ func NewDestination(rawURL string, logger *slog.Logger, clientFactory RTMPClient
 		return nil, fmt.Errorf("invalid destination URL: %w", err)
 	}
 
-	if parsedURL.Scheme != "rtmp" {
-		return nil, fmt.Errorf("destination URL must use rtmp:// scheme, got %s", parsedURL.Scheme)
+	if parsedURL.Scheme != "rtmp" && parsedURL.Scheme != "rtmps" {
+		return nil, fmt.Errorf("destination URL must use rtmp:// or rtmps:// scheme, got %s", parsedURL.Scheme)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
