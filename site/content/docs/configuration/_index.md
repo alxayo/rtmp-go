@@ -78,10 +78,12 @@ The minimum TLS version is 1.2.
 |------|---------|-------------|
 | `-srt-listen` | *(disabled)* | UDP address for SRT ingest connections |
 | `-srt-latency` | `120ms` | TSBPD jitter buffer latency |
-| `-srt-passphrase` | *(none)* | Shared secret for AES encryption |
+| `-srt-passphrase` | *(none)* | Shared secret for AES encryption (10-79 chars) |
 | `-srt-pbkeylen` | `16` | AES key length in bytes: 16, 24, or 32 |
 
 When `-srt-listen` is set, the server starts a UDP listener for SRT publishers. SRT streams are automatically converted to RTMP format and injected into the stream registry — existing RTMP subscribers can watch SRT sources transparently.
+
+When `-srt-passphrase` is set, all SRT connections require AES encryption. Clients must provide the matching passphrase. Connections with wrong or missing passphrases are rejected during the handshake.
 
 ---
 

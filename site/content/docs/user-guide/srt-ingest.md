@@ -52,16 +52,62 @@ SRT uses the Stream ID to identify the target stream key. Three formats are supp
 
 ## SRT Encryption
 
-> **Status: Not Yet Functional** — The encryption infrastructure (PBKDF2 key derivation, AES Key Wrap) is implemented, but the key exchange (KMREQ/KMRSP) is not yet integrated into the SRT handshake. The `-srt-passphrase` and `-srt-pbkeylen` flags are accepted but have no effect.
->
-> **Workaround**: Use [RTMPS (TLS)]({{< relref "rtmps" >}}) for encrypted transport. RTMPS encrypts the entire connection including all media data.
+SRT encryption provides end-to-end AES-CTR encryption of all media data using a shared passphrase. When enabled, clients must provide the correct passphrase during the SRT handshake — connections with wrong or missing passphrases are rejected.
 
-The following flags are reserved for future SRT encryption support:
+**Server setup:**
+
+```bash
+# AES-128 (default key length)
+./rtmp-server -listen :1935 -srt-listen :4200 -srt-passphrase "my-secret-key"
+
+# AES-256 (recommended for maximum security)
+./rtmp-server -listen :1935 -srt-listen :4200 -srt-passphrase "my-secret-key" -srt-pbkeylen 32
+```
+
+**Publisher (FFmpeg):**
+
+```bash
+ffmpeg -re -i test.mp4 -c copy -f mpegts \
+  "srt://localhost:4200?streamid=publish:live/test&passphrase=my-secret-key&pbkeylen=32"
+```
+
+**Publisher (OBS Studio):**
+
+In OBS, set the Stream URL to `srt://server:4200?streamid=publish:live/test&passphrase=my-secret-key`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-srt-passphrase` | *(none)* | Shared secret for AES encryption (not yet enforced) |
+| `-srt-passphrase` | *(none)* | Shared secret for AES encryption (10-79 characters) |
 | `-srt-pbkeylen` | `16` | Key length in bytes: 16 (AES-128), 24 (AES-192), or 32 (AES-256) |
+
+#### How It Works
+
+During the SRT handshake, the client and server exchange encryption keys:
+
+1. The client generates a random Stream Encrypting Key (SEK) and salt
+2. The SEK is wrapped using a Key Encrypting Key (KEK) derived from the shared passphrase via PBKDF2
+3. The wrapped key is sent to the server in a KMREQ extension
+4. The server derives the same KEK, unwraps the SEK, and confirms with KMRSP
+5. All subsequent data packets are encrypted with AES-CTR
+
+#### Key Rotation
+
+For long-running streams, the client automatically rotates the encryption key (typically every ~6-7 hours). SRT uses a hitless dual-key model — both the old and new keys are active during the transition, so no packets are lost.
+
+#### Supported Key Lengths
+
+| Key Length | `-srt-pbkeylen` | Notes |
+|-----------|-----------------|-------|
+| AES-128 | `16` (default) | Standard security |
+| AES-192 | `24` | Enhanced security |
+| AES-256 | `32` | Maximum security (recommended) |
+
+#### Security Notes
+
+- The passphrase must be 10-79 characters (enforced by the SRT specification)
+- Connections without a passphrase are rejected when encryption is configured
+- Plaintext packets on encrypted connections are dropped
+- The server validates all crypto parameters and rejects unsupported configurations
 
 ## Latency Tuning
 

@@ -9,6 +9,20 @@ All notable changes to go-rtmp are documented here.
 
 ---
 
+## Unreleased
+
+### Added
+- **SRT Encryption** — Full AES-CTR encryption with passphrase-based key exchange (KMREQ/KMRSP), supporting AES-128/192/256 with PBKDF2 key derivation
+- **SRT Key Rotation** — Hitless even/odd key rekeying via post-handshake KMREQ control packets for long-running encrypted streams
+- **SRT Reconnection Fix** — Second SRT connection with same stream key no longer fails after first disconnects
+
+### Security
+- Passphrase validation (10-79 characters per SRT specification)
+- Plaintext packets dropped on encrypted connections
+- Strict crypto profile validation (rejects unsupported cipher types)
+
+---
+
 ## v0.2.0 (2026-04-12)
 
 ### Added

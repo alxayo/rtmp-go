@@ -23,6 +23,7 @@ weight: 2
 - ✅ **Codec converters** — H.264/H.265/AAC format converters for protocol bridging *(v0.2.0)*
 - ✅ **Codec-aware recording** — automatic FLV/MP4 container selection based on codec *(v0.2.0)*
 - ✅ **Comprehensive E2E test suite** — 25+ tests covering all features with cross-platform runners *(v0.2.0)*
+- ✅ **SRT Encryption** — AES-CTR encryption with passphrase, key rotation *(v0.4.0)*
 
 ## In Progress
 
