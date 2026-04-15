@@ -46,6 +46,17 @@ ffplay rtmp://localhost:1935/live/test
 
 SRT streams carry MPEG-TS, which is automatically demuxed and converted to RTMP format (H.264/H.265 Annex B→AVCC, AAC ADTS→raw). SRT publishers appear identical to RTMP publishers from the subscriber's perspective.
 
+#### SRT with Encryption (AES-256)
+
+```bash
+# Run with SRT encryption enabled
+./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "my-secret-key" -srt-pbkeylen 32
+
+# Publisher must provide matching passphrase
+ffmpeg -re -i test.mp4 -c copy -f mpegts \
+  "srt://localhost:10080?streamid=publish:live/test&passphrase=my-secret-key&pbkeylen=32"
+```
+
 **H.265 Testing**: Use `./scripts/test-srt-h265.sh` to validate H.265 ingest with your camera. See [docs/H265_SUPPORT.md](docs/H265_SUPPORT.md) for details.
 
 See [docs/getting-started.md](docs/getting-started.md) for the full guide with CLI flags, OBS setup, and troubleshooting.
@@ -168,8 +179,8 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -tls-key             Path to PEM-encoded TLS private key file
 -srt-listen          SRT UDP listen address (e.g. :10080). Empty = disabled
 -srt-latency         SRT buffer latency in milliseconds (default 120)
--srt-passphrase      SRT encryption passphrase (empty = no encryption) ⚠️ not yet enforced
--srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16) ⚠️ not yet enforced
+-srt-passphrase      SRT encryption passphrase (10-79 chars, empty = no encryption)
+-srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16)
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)
 -record-dir          Recording directory (default recordings)
@@ -322,7 +333,7 @@ dlv debug ./cmd/rtmp-server -- -listen :1935 -log-level debug
 - SRT v5 handshake with Stream ID access control
 - TSBPD (Timestamp-Based Packet Delivery) with configurable latency
 - ACK/NAK reliability with RTT measurement
-- Optional AES encryption (128/192/256-bit)
+- AES encryption (128/192/256-bit) with PBKDF2 key derivation and key rotation
 - CLI flags: `-srt-listen`, `-srt-latency`, `-srt-passphrase`, `-srt-pbkeylen`
 - SRT-specific expvar metrics
 

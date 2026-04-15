@@ -5,6 +5,31 @@ All notable changes to go-rtmp are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **SRT Encryption**: Full AES-CTR encryption for SRT ingest streams with passphrase-based authentication
+  - KMREQ/KMRSP key exchange during SRT handshake (KM message parser per SRT RFC §3.2.2)
+  - AES-128, AES-192, and AES-256 support with PBKDF2-HMAC-SHA1 key derivation
+  - Packet-level AES-CTR encryption/decryption with per-packet IV construction
+  - Passphrase validation (10-79 characters per SRT specification)
+  - PBKDF2 uses LSB 64-bit salt per SRT spec §6.2.1 for libsrt interoperability
+- **SRT Key Rotation**: Hitless even/odd key rekeying for long-running encrypted streams
+  - Dual-key KeySet with thread-safe even/odd cipher slots
+  - Post-handshake KMREQ control packets (type 0x7FFF) for mid-stream key refresh
+  - KKBoth support — both even and odd keys can be pre-announced in a single KMREQ
+  - Automatic KMRSP acknowledgment sent back to the sender after key installation
+  - Strict KM crypto profile validation (rejects unsupported cipher types, auth, KEKI)
+
+### Fixed
+- **SRT reconnection**: Second SRT connection with same stream key no longer fails after first disconnects (EvictPublisher fallback, identity-aware cleanup)
+
+### Security
+- Drop plaintext data packets on encrypted SRT connections (enforces security contract)
+- Drop odd-key packets when only even key is installed (prevents wrong-key decryption)
+- Reject KMREQ with key length mismatch during post-handshake rekeying
+- Reject KMREQ with unsupported crypto parameters (non-AES-CTR cipher, non-zero auth/KEKI)
+
 ## [v0.3.0] — 2026-04-13
 
 ### Added

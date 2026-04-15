@@ -280,13 +280,17 @@ ffplay rtmp://localhost:1935/live/test
 
 ### SRT with Encryption
 
+SRT encryption uses AES-CTR with PBKDF2 key derivation. The passphrase must be 10-79 characters.
+Supported key lengths: 16 (AES-128), 24 (AES-192), or 32 (AES-256, recommended).
+Key rotation happens automatically for long-running streams.
+
 ```bash
-# Server with encryption
-./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "mysecretkey"
+# Server with encryption (AES-256)
+./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "mysecretkey" -srt-pbkeylen 32
 
 # Publisher must use same passphrase
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
-  "srt://localhost:10080?streamid=publish:live/test&passphrase=mysecretkey"
+  "srt://localhost:10080?streamid=publish:live/test&passphrase=mysecretkey&pbkeylen=32"
 ```
 
 ### SRT + RTMP Simultaneously
