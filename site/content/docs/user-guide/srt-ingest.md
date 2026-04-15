@@ -109,6 +109,48 @@ For long-running streams, the client automatically rotates the encryption key (t
 - Plaintext packets on encrypted connections are dropped
 - The server validates all crypto parameters and rejects unsupported configurations
 
+### Per-Stream Encryption
+
+Instead of a single passphrase for all streams, you can assign each stream its own passphrase using a JSON file. This is useful when different publishers need independent credentials.
+
+**1. Create a passphrase file** (e.g. `/etc/rtmp/srt-keys.json`):
+
+```json
+{
+  "live/stream1": "passphrase-at-least-10-chars",
+  "live/stream2": "another-secret-key-here"
+}
+```
+
+Each key is a stream key and each value is the passphrase (10-79 characters per the SRT spec). Passphrases are validated at load time — the server refuses to start if any are out of range.
+
+**2. Start the server with `-srt-passphrase-file`:**
+
+```bash
+./rtmp-server -srt-listen :10080 -srt-passphrase-file /etc/rtmp/srt-keys.json -srt-pbkeylen 16
+```
+
+**3. Publish with the stream's passphrase:**
+
+```bash
+ffmpeg -re -i input.mp4 -c copy -f mpegts \
+  "srt://server:10080?streamid=publish:live/stream1&passphrase=passphrase-at-least-10-chars&pbkeylen=16"
+```
+
+Each client provides the passphrase assigned to its stream key — exactly the same syntax as single-passphrase mode.
+
+**4. Hot reload via SIGHUP:**
+
+You can update the passphrase file and apply changes without restarting the server:
+
+```bash
+kill -HUP $(pidof rtmp-server)
+```
+
+The server re-reads the file and swaps in the new passphrases. If the file contains errors (invalid JSON, out-of-range passphrases), the reload is rejected and the previous valid passphrases are preserved.
+
+> **Note:** `-srt-passphrase` and `-srt-passphrase-file` are mutually exclusive. The server will refuse to start if both are set. Use `-srt-passphrase` for a single global passphrase or `-srt-passphrase-file` for per-stream passphrases.
+
 ## Latency Tuning
 
 The `-srt-latency` flag controls the TSBPD (Timestamp-Based Packet Delivery) jitter buffer:

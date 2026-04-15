@@ -57,6 +57,19 @@ ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=publish:live/test&passphrase=my-secret-key&pbkeylen=32"
 ```
 
+#### Per-Stream SRT Encryption
+
+```bash
+# Assign each stream its own passphrase via JSON file
+./rtmp-server -srt-listen :10080 -srt-passphrase-file /etc/rtmp/srt-keys.json -srt-pbkeylen 16
+
+# Publisher uses the passphrase for its stream key
+ffmpeg -re -i test.mp4 -c copy -f mpegts \
+  "srt://localhost:10080?streamid=publish:live/stream1&passphrase=passphrase-at-least-10-chars&pbkeylen=16"
+```
+
+Send `SIGHUP` to reload the passphrase file without restarting the server.
+
 **H.265 Testing**: Use `./scripts/test-srt-h265.sh` to validate H.265 ingest with your camera. See [docs/H265_SUPPORT.md](docs/H265_SUPPORT.md) for details.
 
 See [docs/getting-started.md](docs/getting-started.md) for the full guide with CLI flags, OBS setup, and troubleshooting.
@@ -83,6 +96,7 @@ ffplay rtmps://localhost:443/live/test
 | Feature | Description |
 |---------|-------------|
 | **SRT Ingest** | Accept SRT (UDP) streams alongside RTMP — automatic MPEG-TS→RTMP conversion |
+| **SRT Per-Stream Encryption** | Per-stream encryption via JSON passphrase file (`-srt-passphrase-file`), hot-reloadable via SIGHUP |
 | **RTMPS (TLS)** | Encrypted RTMP via TLS termination (`-tls-listen`, `-tls-cert`, `-tls-key`) |
 | **RTMP v3 Handshake** | C0/C1/C2 ↔ S0/S1/S2 with 5s timeouts |
 | **Enhanced RTMP** | H.265 (HEVC), AV1, VP9 via E-RTMP v2 FourCC signaling |
@@ -180,6 +194,7 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -srt-listen          SRT UDP listen address (e.g. :10080). Empty = disabled
 -srt-latency         SRT buffer latency in milliseconds (default 120)
 -srt-passphrase      SRT encryption passphrase (10-79 chars, empty = no encryption)
+-srt-passphrase-file SRT per-stream passphrase JSON file (mutually exclusive with -srt-passphrase)
 -srt-pbkeylen        SRT AES key length: 16, 24, or 32 (default 16)
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)

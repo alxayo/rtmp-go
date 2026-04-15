@@ -79,11 +79,14 @@ The minimum TLS version is 1.2.
 | `-srt-listen` | *(disabled)* | UDP address for SRT ingest connections |
 | `-srt-latency` | `120ms` | TSBPD jitter buffer latency |
 | `-srt-passphrase` | *(none)* | Shared secret for AES encryption (10-79 chars) |
+| `-srt-passphrase-file` | `""` | Path to JSON file mapping stream keys to passphrases for per-stream SRT encryption. Mutually exclusive with `-srt-passphrase`. Supports hot reload via SIGHUP. |
 | `-srt-pbkeylen` | `16` | AES key length in bytes: 16, 24, or 32 |
 
 When `-srt-listen` is set, the server starts a UDP listener for SRT publishers. SRT streams are automatically converted to RTMP format and injected into the stream registry — existing RTMP subscribers can watch SRT sources transparently.
 
 When `-srt-passphrase` is set, all SRT connections require AES encryption. Clients must provide the matching passphrase. Connections with wrong or missing passphrases are rejected during the handshake.
+
+When `-srt-passphrase-file` is set, each stream key can have its own passphrase loaded from a JSON file. The file maps stream keys to passphrases (e.g. `{"live/stream1": "secret1"}`). Send SIGHUP to reload the file without restarting. Mutually exclusive with `-srt-passphrase`.
 
 ---
 
