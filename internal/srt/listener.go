@@ -546,6 +546,10 @@ func (l *Listener) handleInduction(hs *packet.HandshakeCIF, _ *packet.ControlPac
 		localSID := l.nextSocketID.Add(1)
 
 		// Create a per-connection handshake FSM with our assigned socket ID.
+		// The PassphraseResolver (if non-nil) is passed through so the
+		// handshake can resolve per-stream passphrases during the Conclusion
+		// phase, after the Stream ID extension has been parsed. When nil,
+		// the static Passphrase is used for all connections instead.
 		hsListener := handshake.NewListener(
 			localSID,
 			uint16(l.config.Latency),
@@ -553,6 +557,7 @@ func (l *Listener) handleInduction(hs *packet.HandshakeCIF, _ *packet.ControlPac
 			uint32(l.config.FlowWindow),
 			l.config.Passphrase,
 			l.config.PbKeyLen,
+			l.config.PassphraseResolver,
 			l.log,
 		)
 
@@ -692,6 +697,9 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 	}
 
 	// Build the connection configuration from the negotiated handshake result.
+	// Use the passphrase from the handshake result (which may be per-stream
+	// resolved) rather than l.config.Passphrase, so post-handshake key
+	// rotation (KMREQ) uses the correct per-stream passphrase.
 	connCfg := srtconn.ConnConfig{
 		MTU:            result.MTU,
 		FlowWindow:     result.FlowWindow,
@@ -699,7 +707,7 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 		PeerTSBPDDelay: uint32(result.PeerTSBPD),
 		InitialSeqNum:  result.InitialSeqNum,
 		PayloadSize:    result.MTU - 16, // SRT header is 16 bytes
-		Passphrase: l.config.Passphrase,
+		Passphrase: result.Passphrase,
 		PbKeyLen:   l.config.PbKeyLen,
 	}
 

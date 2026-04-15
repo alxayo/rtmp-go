@@ -15,6 +15,8 @@ import (
 	_ "github.com/alxayo/go-rtmp/internal/rtmp/metrics" // Register expvar RTMP counters
 	srv "github.com/alxayo/go-rtmp/internal/rtmp/server"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
+	"github.com/alxayo/go-rtmp/internal/srt"
+	srtauth "github.com/alxayo/go-rtmp/internal/srt/auth" // Per-stream SRT passphrase resolution
 )
 
 func main() {
@@ -43,27 +45,39 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Build SRT passphrase resolver from CLI flags.
+	// srtResolver is the function the server calls during each SRT handshake.
+	// srtFileResolver is non-nil only in file mode — we keep a reference to it
+	// so the SIGHUP handler below can call Reload() to pick up file changes.
+	srtResolver, srtFileResolver, err := buildSRTResolver(cfg)
+	if err != nil {
+		log.Error("failed to initialize SRT passphrase resolver", "error", err)
+		os.Exit(2)
+	}
+
 	server := srv.New(srv.Config{
-		ListenAddr:        cfg.listenAddr,
-		ChunkSize:         uint32(cfg.chunkSize),
-		WindowAckSize:     2_500_000,
-		RecordAll:         cfg.recordAll,
-		RecordDir:         cfg.recordDir,
-		LogLevel:          cfg.logLevel,
-		RelayDestinations: cfg.relayDestinations,
-		HookScripts:       cfg.hookScripts,
-		HookWebhooks:      cfg.hookWebhooks,
-		HookStdioFormat:   cfg.hookStdioFormat,
-		HookTimeout:       cfg.hookTimeout,
-		HookConcurrency:   cfg.hookConcurrency,
-		AuthValidator:     authValidator,
-		TLSListenAddr:     cfg.tlsListenAddr,
-		TLSCertFile:       cfg.tlsCertFile,
-		TLSKeyFile:        cfg.tlsKeyFile,
-		SRTListenAddr:     cfg.srtListenAddr,
-		SRTLatency:        cfg.srtLatency,
-		SRTPassphrase:     cfg.srtPassphrase,
-		SRTPbKeyLen:       cfg.srtPbKeyLen,
+		ListenAddr:            cfg.listenAddr,
+		ChunkSize:             uint32(cfg.chunkSize),
+		WindowAckSize:         2_500_000,
+		RecordAll:             cfg.recordAll,
+		RecordDir:             cfg.recordDir,
+		LogLevel:              cfg.logLevel,
+		RelayDestinations:     cfg.relayDestinations,
+		HookScripts:           cfg.hookScripts,
+		HookWebhooks:          cfg.hookWebhooks,
+		HookStdioFormat:       cfg.hookStdioFormat,
+		HookTimeout:           cfg.hookTimeout,
+		HookConcurrency:       cfg.hookConcurrency,
+		AuthValidator:         authValidator,
+		TLSListenAddr:         cfg.tlsListenAddr,
+		TLSCertFile:           cfg.tlsCertFile,
+		TLSKeyFile:            cfg.tlsKeyFile,
+		SRTListenAddr:         cfg.srtListenAddr,
+		SRTLatency:            cfg.srtLatency,
+		SRTPassphrase:         cfg.srtPassphrase,
+		SRTPbKeyLen:            cfg.srtPbKeyLen,
+		SRTPassphraseFile:     cfg.srtPassphraseFile,
+		SRTPassphraseResolver: srtResolver,
 	})
 
 	if err := server.Start(); err != nil {
@@ -89,21 +103,39 @@ func main() {
 		}()
 	}
 
-	// If using file-based auth, listen for SIGHUP to reload the token file
-	if cfg.authMode == "file" {
-		if fv, ok := authValidator.(*auth.FileValidator); ok {
-			sighup := make(chan os.Signal, 1)
-			signal.Notify(sighup, syscall.SIGHUP)
-			go func() {
-				for range sighup {
-					if err := fv.Reload(); err != nil {
-						log.Error("auth file reload failed", "error", err)
-					} else {
-						log.Info("auth file reloaded")
+	// Register a SIGHUP handler for live configuration reload without restart.
+	// A single handler covers both features because they share the same reload
+	// pattern: re-read a JSON file from disk and atomically swap the in-memory
+	// map. Each reload is independent — if the auth file reload fails, the SRT
+	// passphrase file reload still runs (and vice versa).
+	needSighup := cfg.authMode == "file" || srtFileResolver != nil
+	if needSighup {
+		sighup := make(chan os.Signal, 1)
+		signal.Notify(sighup, syscall.SIGHUP)
+		go func() {
+			for range sighup {
+				// Reload RTMP auth tokens (if using file-based auth)
+				if cfg.authMode == "file" {
+					if fv, ok := authValidator.(*auth.FileValidator); ok {
+						if err := fv.Reload(); err != nil {
+							log.Error("auth file reload failed", "error", err)
+						} else {
+							log.Info("auth file reloaded")
+						}
 					}
 				}
-			}()
-		}
+				// Reload SRT per-stream passphrases (if using file-based resolver).
+				// The resolver's Reload() re-reads the JSON file and validates all
+				// passphrases; on failure, the previous valid map is preserved.
+				if srtFileResolver != nil {
+					if err := srtFileResolver.Reload(); err != nil {
+						log.Error("SRT passphrase file reload failed", "error", err)
+					} else {
+						log.Info("SRT passphrase file reloaded")
+					}
+				}
+			}
+		}()
 	}
 
 	// Set up signal handling for graceful shutdown.
@@ -157,5 +189,63 @@ func buildAuthValidator(cfg *cliConfig, log interface{ Info(string, ...any) }) (
 		return auth.NewCallbackValidator(cfg.authCallbackURL, timeout), nil
 	default: // "none"
 		return &auth.AllowAllValidator{}, nil
+	}
+}
+
+// buildSRTResolver creates the SRT passphrase resolver from CLI flags.
+//
+// The resolver is the bridge between the CLI configuration layer and the SRT
+// handshake engine. It translates the user's chosen encryption mode into a
+// function that the handshake calls during the Conclusion phase to look up
+// the passphrase for each incoming connection.
+//
+// Three modes are supported (mutually exclusive, enforced in parseFlags):
+//
+//  1. File mode (-srt-passphrase-file): loads a JSON map of stream key →
+//     passphrase. Returns both a resolver function and a *FileResolver handle
+//     so the SIGHUP handler can call Reload() for live updates.
+//
+//  2. Static mode (-srt-passphrase): a single passphrase for all streams.
+//     No resolver is needed because the handshake layer uses the static
+//     passphrase from srt.Config.Passphrase directly.
+//
+//  3. No encryption (neither flag): returns nil for both values.
+//
+// Returns:
+//   - resolver: the function to pass to srv.Config.SRTPassphraseResolver (nil if static or none)
+//   - fileResolver: the FileResolver handle for SIGHUP reload (nil unless file mode)
+//   - err: any configuration error (e.g., bad JSON, invalid passphrase)
+func buildSRTResolver(cfg *cliConfig) (func(string) (string, error), *srtauth.FileResolver, error) {
+	switch {
+	case cfg.srtPassphraseFile != "":
+		// Per-stream encryption from JSON file.
+		// NewFileResolver reads the file, parses JSON, and validates every
+		// passphrase against SRT spec constraints (10–79 chars).
+		fr, err := srtauth.NewFileResolver(cfg.srtPassphraseFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load SRT passphrase file: %w", err)
+		}
+		// Wrap the FileResolver into a closure that normalizes the raw Stream ID
+		// before looking up the passphrase. This is necessary because the handshake
+		// layer passes the raw Stream ID string (e.g., "#!::r=live/test,m=publish"),
+		// but the JSON file uses normalized stream keys (e.g., "live/test").
+		// ParseStreamID handles all supported formats (structured and simple).
+		resolverFunc := func(rawStreamID string) (string, error) {
+			info := srt.ParseStreamID(rawStreamID)
+			streamKey := info.StreamKey()
+			return fr.ResolvePassphrase(streamKey)
+		}
+		return resolverFunc, fr, nil
+
+	case cfg.srtPassphrase != "":
+		// Single passphrase for all streams (backward compatible).
+		// No resolver needed — the static passphrase is passed via
+		// srv.Config.SRTPassphrase and used by the handshake listener
+		// directly without any per-stream lookup.
+		return nil, nil, nil
+
+	default:
+		// No SRT encryption configured.
+		return nil, nil, nil
 	}
 }

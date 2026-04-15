@@ -29,23 +29,33 @@ import (
 // startSRTListener creates and starts the SRT UDP listener.
 // It's called from Server.Start() when SRTListenAddr is configured.
 func (s *Server) startSRTListener() error {
-	// Build SRT configuration from server config
+	// Build SRT configuration from server config.
+	// PassphraseResolver and Passphrase are mutually exclusive at the CLI
+	// level, but both are passed here because the srt.Config layer handles
+	// the precedence: resolver wins if set, static passphrase is the fallback.
 	cfg := srt.Config{
-		ListenAddr: s.cfg.SRTListenAddr,
-		Latency:    s.cfg.SRTLatency,
-		Passphrase: s.cfg.SRTPassphrase,
-		PbKeyLen:   s.cfg.SRTPbKeyLen,
+		ListenAddr:         s.cfg.SRTListenAddr,
+		Latency:            s.cfg.SRTLatency,
+		Passphrase:         s.cfg.SRTPassphrase,
+		PbKeyLen:           s.cfg.SRTPbKeyLen,
+		PassphraseResolver: s.cfg.SRTPassphraseResolver,
 	}
 
 	s.log.Debug("SRT listener starting",
 		"requested_addr", cfg.ListenAddr,
 		"latency_ms", cfg.Latency,
-		"encryption", cfg.Passphrase != "",
+		"encryption", cfg.Passphrase != "" || cfg.PassphraseResolver != nil,
 		"pb_key_len", cfg.PbKeyLen,
+		"per_stream", cfg.PassphraseResolver != nil, // true when using -srt-passphrase-file
 	)
 
-	// Log encryption status at Info level so operators can confirm the config.
-	if cfg.Passphrase != "" {
+	// Log the active encryption mode at Info level so operators can confirm
+	// the config at startup. Three modes: per-stream resolver, single static
+	// passphrase, or no encryption at all.
+	if cfg.PassphraseResolver != nil {
+		aesLabel := map[int]string{16: "AES-128", 24: "AES-192", 32: "AES-256"}[cfg.PbKeyLen]
+		s.log.Info("SRT per-stream encryption enabled", "key_length", aesLabel)
+	} else if cfg.Passphrase != "" {
 		aesLabel := map[int]string{16: "AES-128", 24: "AES-192", 32: "AES-256"}[cfg.PbKeyLen]
 		s.log.Info("SRT encryption enabled", "key_length", aesLabel)
 	} else {

@@ -62,6 +62,26 @@ type Config struct {
 	SRTLatency    int    // SRT buffer latency in milliseconds (default 120)
 	SRTPassphrase string // SRT encryption passphrase (empty = plaintext)
 	SRTPbKeyLen   int    // AES key length: 16, 24, or 32 (default 16)
+
+	// SRTPassphraseFile is the path to a JSON file mapping stream keys to
+	// passphrases for per-stream SRT encryption. Mutually exclusive with
+	// SRTPassphrase — you can use one or the other, not both. The file is
+	// hot-reloaded on SIGHUP (Unix only), so you can update passphrases
+	// without restarting the server.
+	//
+	// Example JSON file:
+	//   {"live/stream1": "secret-pass-1", "live/stream2": "secret-pass-2"}
+	SRTPassphraseFile string
+
+	// SRTPassphraseResolver enables per-stream SRT encryption with a custom
+	// passphrase lookup function. When set, takes precedence over SRTPassphrase.
+	// The function receives the raw Stream ID from the SRT handshake and must
+	// return the passphrase for that stream, or an error to reject it.
+	//
+	// Precedence chain: SRTPassphraseResolver > SRTPassphrase > no encryption.
+	// This is populated by main.go's buildSRTResolver() — the server itself
+	// never reads SRTPassphraseFile directly; it only uses this function.
+	SRTPassphraseResolver func(rawStreamID string) (string, error)
 }
 
 // applyDefaults fills zero values with sensible defaults.

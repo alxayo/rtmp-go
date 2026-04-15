@@ -33,27 +33,50 @@ type Config struct {
 	// Passphrase is the encryption passphrase. When non-empty, SRT will
 	// use AES encryption to protect the media stream. Both sides must
 	// use the same passphrase. Empty string means no encryption.
+	// When PassphraseResolver is also set, this field is ignored.
 	Passphrase string
 
 	// PbKeyLen is the AES key size in bytes for encryption.
 	// Valid values: 0 (no encryption), 16 (AES-128), 24 (AES-192),
 	// or 32 (AES-256). Default: 0 (no encryption).
 	PbKeyLen int
+
+	// PassphraseResolver is a function that looks up the encryption passphrase
+	// for a given SRT stream. When set, it takes precedence over the static
+	// Passphrase field, enabling per-stream encryption where different streams
+	// can use different passphrases.
+	//
+	// The function receives the raw Stream ID string from the SRT handshake
+	// (e.g., "publish:live/mystream" or "#!::r=live/test,m=publish") and
+	// returns the passphrase for that stream, or an error to reject it.
+	// The caller is responsible for normalizing the stream ID before lookup.
+	//
+	// Why a function instead of an interface: the server's main.go wraps
+	// the srtauth.FileResolver (which implements a full interface) into a
+	// closure that first normalizes the raw Stream ID to a stream key.
+	// A plain function keeps Config decoupled from the srtauth package.
+	PassphraseResolver func(rawStreamID string) (string, error)
 }
 
 // Validate checks the Config for invalid or unsupported values.
 // Call this before creating a listener to get clear error messages
 // instead of cryptic failures later.
 func (c *Config) Validate() error {
-	// SRT spec recommends passphrases be 10-79 characters.
-	// libsrt enforces a minimum of 10 characters. We follow the same rule
-	// so operators get a clear error instead of a silent mismatch.
-	if c.Passphrase != "" {
-		if len(c.Passphrase) < 10 {
-			return fmt.Errorf("srt passphrase too short: %d characters (minimum 10)", len(c.Passphrase))
-		}
-		if len(c.Passphrase) > 79 {
-			return fmt.Errorf("srt passphrase too long: %d characters (maximum 79)", len(c.Passphrase))
+	// When a resolver is set, skip static passphrase validation entirely.
+	// The resolver validates passphrases at load time (e.g., FileResolver
+	// checks each entry on Reload()), so re-checking here would be wrong
+	// because there's no single passphrase to validate.
+	if c.PassphraseResolver == nil {
+		// SRT spec recommends passphrases be 10-79 characters.
+		// libsrt enforces a minimum of 10 characters. We follow the same rule
+		// so operators get a clear error instead of a silent mismatch.
+		if c.Passphrase != "" {
+			if len(c.Passphrase) < 10 {
+				return fmt.Errorf("srt passphrase too short: %d characters (minimum 10)", len(c.Passphrase))
+			}
+			if len(c.Passphrase) > 79 {
+				return fmt.Errorf("srt passphrase too long: %d characters (maximum 79)", len(c.Passphrase))
+			}
 		}
 	}
 

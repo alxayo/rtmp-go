@@ -47,10 +47,11 @@ type cliConfig struct {
 	authCallbackTimeout string   // callback HTTP timeout (default "5s")
 
 	// SRT configuration
-	srtListenAddr string // SRT UDP listen address (e.g. ":10080"). Empty = disabled
-	srtLatency    int    // SRT buffer latency in milliseconds (default 120)
-	srtPassphrase string // SRT encryption passphrase (empty = no encryption)
-	srtPbKeyLen   int    // AES key length: 16, 24, or 32 (default 16)
+	srtListenAddr     string // SRT UDP listen address (e.g. ":10080"). Empty = disabled
+	srtLatency        int    // SRT buffer latency in milliseconds (default 120)
+	srtPassphrase     string // SRT encryption passphrase (empty = no encryption)
+	srtPbKeyLen       int    // AES key length: 16, 24, or 32 (default 16)
+	srtPassphraseFile string // path to JSON file mapping stream keys → passphrases (per-stream encryption; mutually exclusive with srtPassphrase)
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -97,6 +98,7 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.IntVar(&cfg.srtLatency, "srt-latency", 120, "SRT buffer latency in milliseconds")
 	fs.StringVar(&cfg.srtPassphrase, "srt-passphrase", "", "SRT encryption passphrase (empty = no encryption)")
 	fs.IntVar(&cfg.srtPbKeyLen, "srt-pbkeylen", 16, "SRT AES key length: 16, 24, or 32")
+	fs.StringVar(&cfg.srtPassphraseFile, "srt-passphrase-file", "", "Path to JSON file mapping stream keys to passphrases (per-stream encryption)")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -163,12 +165,29 @@ func parseFlags(args []string) (*cliConfig, error) {
 	if cfg.srtPbKeyLen != 0 && cfg.srtPbKeyLen != 16 && cfg.srtPbKeyLen != 24 && cfg.srtPbKeyLen != 32 {
 		return nil, fmt.Errorf("-srt-pbkeylen must be 16, 24, or 32, got %d", cfg.srtPbKeyLen)
 	}
+	// -srt-passphrase sets one passphrase for ALL streams; -srt-passphrase-file
+	// sets per-stream passphrases from a JSON file. Allowing both would be
+	// ambiguous (which passphrase wins for a given stream?), so we reject it.
+	if cfg.srtPassphrase != "" && cfg.srtPassphraseFile != "" {
+		return nil, errors.New("-srt-passphrase and -srt-passphrase-file are mutually exclusive")
+	}
+	// libsrt enforces passphrase length of 10–79 characters (derived from
+	// the SRT spec). We validate early here to give a clear CLI error rather
+	// than a cryptic handshake failure at runtime.
 	if cfg.srtPassphrase != "" {
 		if len(cfg.srtPassphrase) < 10 {
 			return nil, fmt.Errorf("-srt-passphrase too short: %d characters (minimum 10, per SRT spec)", len(cfg.srtPassphrase))
 		}
 		if len(cfg.srtPassphrase) > 79 {
 			return nil, fmt.Errorf("-srt-passphrase too long: %d characters (maximum 79, per SRT spec)", len(cfg.srtPassphrase))
+		}
+	}
+	// Verify the passphrase file exists at startup so operators get an
+	// immediate error instead of discovering it later when the first SRT
+	// connection arrives. The file's contents are validated by buildSRTResolver().
+	if cfg.srtPassphraseFile != "" {
+		if _, err := os.Stat(cfg.srtPassphraseFile); err != nil {
+			return nil, fmt.Errorf("-srt-passphrase-file %q: %w", cfg.srtPassphraseFile, err)
 		}
 	}
 
