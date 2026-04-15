@@ -699,27 +699,33 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 		PeerTSBPDDelay: uint32(result.PeerTSBPD),
 		InitialSeqNum:  result.InitialSeqNum,
 		PayloadSize:    result.MTU - 16, // SRT header is 16 bytes
-		Encrypted:      result.Encrypted,
+		Passphrase: l.config.Passphrase,
+		PbKeyLen:   l.config.PbKeyLen,
 	}
 
-	// If encryption was negotiated during the handshake, create the
-	// AES-CTR cipher from the unwrapped SEK and salt. This cipher
-	// will be used to decrypt every incoming data packet.
-	//
-	// When KKBoth is negotiated, both even and odd keys are available.
-	// For now we extract the primary (even-preferred) key into a single
-	// PacketCipher for ConnConfig. Full KeySet integration with dual-key
-	// decryption comes in a later todo.
+	// If encryption was negotiated during the handshake, build a KeySet
+	// from the unwrapped SEK(s) and salt. The KeySet holds both even and
+	// odd key slots, enabling hitless key rotation later without any
+	// changes to the data path.
 	if result.Encrypted {
-		var primarySEK []byte
-		if result.EvenSEK != nil {
-			primarySEK = result.EvenSEK
-		} else {
-			primarySEK = result.OddSEK
+		// Concatenate SEK(s) for NewKeySetFromSEK. The KK flag tells us
+		// which keys are present:
+		//   KKEven  → EvenSEK only
+		//   KKOdd   → OddSEK only
+		//   KKBoth  → EvenSEK + OddSEK concatenated
+		var sek []byte
+		switch result.KK {
+		case crypto.KKEven:
+			sek = result.EvenSEK
+		case crypto.KKOdd:
+			sek = result.OddSEK
+		case crypto.KKBoth:
+			sek = append(append([]byte{}, result.EvenSEK...), result.OddSEK...)
 		}
-		pktCipher, err := crypto.NewPacketCipher(primarySEK, result.Salt)
+
+		keySet, err := crypto.NewKeySetFromSEK(result.KK, sek, result.Salt, result.KeyLen)
 		if err != nil {
-			l.log.Warn("SRT failed to create packet cipher",
+			l.log.Warn("SRT failed to create key set",
 				"remote", remoteAddr,
 				"error", err,
 			)
@@ -730,7 +736,7 @@ func (l *Listener) handleConclusion(data []byte, from *net.UDPAddr, ph *pendingH
 			l.connsMu.Unlock()
 			return
 		}
-		connCfg.Cipher = pktCipher
+		connCfg.KeySet = keySet
 		l.log.Info("SRT encryption enabled for connection",
 			"remote", remoteAddr,
 			"key_len", result.KeyLen,

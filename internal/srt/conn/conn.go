@@ -75,15 +75,20 @@ type ConnConfig struct {
 	// Calculated as MTU - 16 (SRT data header size).
 	PayloadSize uint32
 
-	// Cipher is the AES-CTR cipher for decrypting incoming data packet
-	// payloads and encrypting outgoing ones. nil means no encryption —
-	// the connection operates in plaintext mode.
-	Cipher *crypto.PacketCipher
+	// KeySet holds the even/odd AES-CTR ciphers for decrypting incoming
+	// data packets. nil means no encryption (plaintext mode). During key
+	// rotation, both even and odd slots may be populated simultaneously.
+	KeySet *crypto.KeySet
 
-	// Encrypted indicates whether this connection uses encryption.
-	// When true, incoming data packets with the KK encryption flag set
-	// will be decrypted using Cipher before delivery to the application.
-	Encrypted bool
+	// Passphrase is the shared secret used for PBKDF2 key derivation.
+	// Stored here so post-handshake KMREQ messages (key rotation) can
+	// derive new KEKs from new salts using the same passphrase.
+	// Empty string means no encryption.
+	Passphrase string
+
+	// PbKeyLen is the expected AES key length in bytes (16/24/32) for
+	// post-handshake key rotation. Matches the initial handshake key size.
+	PbKeyLen int
 }
 
 // Conn represents an established SRT connection.
@@ -359,11 +364,19 @@ func (c *Conn) handleDataPacket(data []byte) {
 		return
 	}
 
-	// If this connection uses encryption, decrypt the payload before
-	// delivering it to the application. The KK field in the packet header
-	// tells us whether (and with which key) the payload is encrypted.
-	if c.config.Cipher != nil && pkt.Encryption != packet.EncryptionNone {
-		if err := c.config.Cipher.DecryptPayload(pkt.Payload, pkt.SequenceNumber); err != nil {
+	// If this connection uses encryption, decrypt the payload using the
+	// appropriate key (even or odd) from the KeySet. The KK field in the
+	// data packet header tells us which key was used to encrypt.
+	if c.config.KeySet != nil {
+		if pkt.Encryption == packet.EncryptionNone {
+			// Plaintext packet on an encrypted connection — drop it.
+			// Accepting plaintext would weaken the security contract.
+			c.log.Warn("dropping unencrypted packet on encrypted connection",
+				"seq", pkt.SequenceNumber,
+			)
+			return
+		}
+		if err := c.config.KeySet.DecryptPayload(pkt.Payload, pkt.SequenceNumber, uint8(pkt.Encryption)); err != nil {
 			c.log.Warn("failed to decrypt data packet",
 				"seq", pkt.SequenceNumber,
 				"encryption", pkt.Encryption,
@@ -371,22 +384,6 @@ func (c *Conn) handleDataPacket(data []byte) {
 			)
 			return // Drop packets that fail decryption
 		}
-	} else if c.config.Encrypted && pkt.Encryption == packet.EncryptionNone {
-		// Connection is encrypted but this packet isn't — drop it.
-		// Accepting plaintext on an encrypted connection would weaken
-		// the security contract and mask protocol bugs.
-		c.log.Warn("dropping unencrypted packet on encrypted connection",
-			"seq", pkt.SequenceNumber,
-		)
-		return
-	} else if c.config.Cipher != nil && pkt.Encryption == packet.EncryptionOdd {
-		// We only support the even key slot in the initial implementation.
-		// Odd-key packets arrive during key rotation (rekeying), which is
-		// not yet implemented. Drop rather than decrypt with wrong key.
-		c.log.Warn("dropping odd-key packet (key rotation not supported)",
-			"seq", pkt.SequenceNumber,
-		)
-		return
 	}
 
 	// Hand it off to the receiver for buffering and delivery.
