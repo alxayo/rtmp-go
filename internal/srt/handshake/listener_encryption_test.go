@@ -3,6 +3,7 @@ package handshake
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -136,7 +137,7 @@ func TestEncryptionHappyPath(t *testing.T) {
 	passphrase := "test-secret-123"
 	keyLen := 16 // AES-128
 
-	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, originalSEK, originalSalt := buildKMREQExtension(t, passphrase, keyLen)
@@ -200,7 +201,7 @@ func TestEncryptionAES256(t *testing.T) {
 	passphrase := "strong-passphrase-256"
 	keyLen := 32 // AES-256
 
-	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, originalSEK, _ := buildKMREQExtension(t, passphrase, keyLen)
@@ -226,7 +227,7 @@ func TestEncryptionAES256(t *testing.T) {
 // TestEncryptionRequiredButNoKMREQ verifies that the server rejects a client
 // that does not send a KMREQ extension when the server requires encryption.
 func TestEncryptionRequiredButNoKMREQ(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, "my-secret", 16, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "my-secret", 16, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Send Conclusion without KMREQ.
@@ -243,7 +244,7 @@ func TestEncryptionRequiredButNoKMREQ(t *testing.T) {
 // the server rejects a client that sends KMREQ when the server has no
 // passphrase configured.
 func TestEncryptionClientSendsKMREQButServerHasNoPassphrase(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Build a KMREQ extension with some passphrase.
@@ -265,7 +266,7 @@ func TestEncryptionWrongPassphrase(t *testing.T) {
 	clientPassphrase := "wrong-secret"
 	keyLen := 16
 
-	l := NewListener(42, 120, 1500, 8192, serverPassphrase, keyLen, testLogger())
+	l := NewListener(42, 120, 1500, 8192, serverPassphrase, keyLen, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Build KMREQ with the client's (wrong) passphrase.
@@ -286,7 +287,7 @@ func TestEncryptionKeyLengthMismatch(t *testing.T) {
 	passphrase := "my-secret"
 
 	// Server expects AES-256 (32 bytes), client sends AES-128 (16 bytes).
-	l := NewListener(42, 120, 1500, 8192, passphrase, 32, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, 32, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, _, _ := buildKMREQExtension(t, passphrase, 16)
@@ -303,7 +304,7 @@ func TestEncryptionKeyLengthMismatch(t *testing.T) {
 // TestNoEncryptionBackwardCompatible verifies that a handshake without
 // encryption still works when the server has no passphrase configured.
 func TestNoEncryptionBackwardCompatible(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	resp, result, err := doConclusionWithKMREQ(t, l, from, nil)
@@ -354,7 +355,7 @@ func TestEncryptionPbKeyLenZeroAcceptsAny(t *testing.T) {
 	passphrase := "flexible-server"
 
 	// Server has pbKeyLen=0, client sends AES-192 (24 bytes).
-	l := NewListener(42, 120, 1500, 8192, passphrase, 0, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, 0, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, originalSEK, _ := buildKMREQExtension(t, passphrase, 24)
@@ -442,7 +443,7 @@ func TestEncryptionKKBoth(t *testing.T) {
 	passphrase := "dual-key-secret"
 	keyLen := 16 // AES-128
 
-	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, originalEvenSEK, originalOddSEK, originalSalt := buildDualKMREQExtension(t, passphrase, keyLen)
@@ -495,7 +496,7 @@ func TestEncryptionKKBothAES256(t *testing.T) {
 	passphrase := "dual-key-256"
 	keyLen := 32 // AES-256
 
-	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, testLogger())
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, nil, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	kmContent, originalEvenSEK, originalOddSEK, _ := buildDualKMREQExtension(t, passphrase, keyLen)
@@ -521,5 +522,273 @@ func TestEncryptionKKBothAES256(t *testing.T) {
 	}
 	if !bytes.Equal(result.OddSEK, originalOddSEK) {
 		t.Error("result.OddSEK does not match the original odd SEK")
+	}
+}
+
+// --- Per-Stream Passphrase Resolver Tests ---
+//
+// These tests verify the per-stream passphrase resolution feature,
+// where different streams can have different encryption passphrases.
+
+// doConclusionWithSIDAndKMREQ performs a full handshake (Induction + Conclusion)
+// including a Stream ID extension alongside the optional KMREQ. This is the
+// per-stream counterpart of doConclusionWithKMREQ — it adds the SID extension
+// that the passphraseResolver needs to look up a stream-specific passphrase.
+// Pass an empty streamID to simulate a client that omits the SID extension.
+func doConclusionWithSIDAndKMREQ(t *testing.T, l *Listener, from *net.UDPAddr, streamID string, kmContent []byte) (*packet.HandshakeCIF, *HandshakeResult, error) {
+	t.Helper()
+
+	// Phase 1: Induction
+	induction := &packet.HandshakeCIF{
+		Version:          4,
+		InitialSeqNumber: 1000,
+		MTU:              1500,
+		FlowWindow:       8192,
+		Type:             packet.HSTypeInduction,
+		SocketID:         99,
+		SYNCookie:        0,
+	}
+
+	inductionResp, err := l.HandleInduction(induction, from)
+	if err != nil {
+		t.Fatalf("HandleInduction failed: %v", err)
+	}
+
+	hsReqContent := BuildHSRsp(
+		0x00010500,
+		FlagTSBPDSND|FlagTSBPDRCV|FlagCRYPT|FlagTLPKTDROP|FlagPERIODICNAK|FlagREXMITFLG,
+		120, 120,
+	)
+
+	extensions := []packet.HSExtension{
+		{Type: ExtTypeHSREQ, Length: uint16(len(hsReqContent) / 4), Content: hsReqContent},
+	}
+
+	if streamID != "" {
+		sidContent := BuildStreamIDExtension(streamID)
+		extensions = append(extensions, packet.HSExtension{
+			Type: ExtTypeSID, Length: uint16(len(sidContent) / 4), Content: sidContent,
+		})
+	}
+
+	if kmContent != nil {
+		extensions = append(extensions, packet.HSExtension{
+			Type: ExtTypeKMREQ, Length: uint16(len(kmContent) / 4), Content: kmContent,
+		})
+	}
+
+	conclusion := &packet.HandshakeCIF{
+		Version:          5,
+		InitialSeqNumber: 1000,
+		MTU:              1500,
+		FlowWindow:       8192,
+		Type:             packet.HSTypeConclusion,
+		SocketID:         99,
+		SYNCookie:        inductionResp.SYNCookie,
+		Extensions:       extensions,
+	}
+
+	return l.HandleConclusion(conclusion, from)
+}
+
+// TestPerStreamResolverHappyPath verifies that when a passphrase resolver is
+// configured, different streams get different passphrases. Two streams
+// ("live/stream1" and "live/stream2") connect with their own unique
+// passphrases. Each must independently succeed and produce the correct
+// unwrapped SEK, proving the resolver is called per-connection rather than
+// using a single global passphrase.
+func TestPerStreamResolverHappyPath(t *testing.T) {
+	keyLen := 16
+
+	resolver := func(rawStreamID string) (string, error) {
+		passphrases := map[string]string{
+			"live/stream1": "passphrase-stream-1",
+			"live/stream2": "passphrase-stream-2",
+		}
+		if pp, ok := passphrases[rawStreamID]; ok {
+			return pp, nil
+		}
+		return "", errors.New("stream not found")
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+
+	// Stream 1
+	from1 := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+	kmContent1, originalSEK1, _ := buildKMREQExtension(t, "passphrase-stream-1", keyLen)
+	_, result1, err := doConclusionWithSIDAndKMREQ(t, l, from1, "live/stream1", kmContent1)
+	if err != nil {
+		t.Fatalf("stream1 handshake failed: %v", err)
+	}
+	if !result1.Encrypted {
+		t.Error("stream1: expected encrypted connection")
+	}
+	if !bytes.Equal(result1.EvenSEK, originalSEK1) {
+		t.Error("stream1: unwrapped SEK does not match original")
+	}
+	if result1.Passphrase != "passphrase-stream-1" {
+		t.Errorf("stream1: result.Passphrase = %q, want %q", result1.Passphrase, "passphrase-stream-1")
+	}
+
+	// Stream 2 (different address to avoid cookie collision)
+	from2 := &net.UDPAddr{IP: net.ParseIP("192.168.1.11"), Port: 9001}
+	kmContent2, originalSEK2, _ := buildKMREQExtension(t, "passphrase-stream-2", keyLen)
+	_, result2, err := doConclusionWithSIDAndKMREQ(t, l, from2, "live/stream2", kmContent2)
+	if err != nil {
+		t.Fatalf("stream2 handshake failed: %v", err)
+	}
+	if !result2.Encrypted {
+		t.Error("stream2: expected encrypted connection")
+	}
+	if !bytes.Equal(result2.EvenSEK, originalSEK2) {
+		t.Error("stream2: unwrapped SEK does not match original")
+	}
+	if result2.Passphrase != "passphrase-stream-2" {
+		t.Errorf("stream2: result.Passphrase = %q, want %q", result2.Passphrase, "passphrase-stream-2")
+	}
+}
+
+// TestPerStreamResolverUnknownStream verifies that an unknown stream ID
+// is rejected when a resolver is configured. This is the authorization
+// boundary — if the resolver doesn't recognize a stream, the handshake
+// must fail before any crypto derivation occurs.
+func TestPerStreamResolverUnknownStream(t *testing.T) {
+	keyLen := 16
+	resolver := func(rawStreamID string) (string, error) {
+		return "", errors.New("stream not found")
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, _, _ := buildKMREQExtension(t, "any-passphrase", keyLen)
+	_, _, err := doConclusionWithSIDAndKMREQ(t, l, from, "live/unknown", kmContent)
+	if err == nil {
+		t.Fatal("expected error for unknown stream, got nil")
+	}
+	if !strings.Contains(err.Error(), "passphrase lookup failed") {
+		t.Errorf("error should mention passphrase lookup: %v", err)
+	}
+}
+
+// TestPerStreamResolverNoStreamID verifies that a missing Stream ID
+// is rejected when a resolver is configured. The resolver needs a stream
+// ID to look up the passphrase, so a client that omits the SID extension
+// must be rejected with a clear error — not silently fall through to an
+// empty-string lookup.
+func TestPerStreamResolverNoStreamID(t *testing.T) {
+	keyLen := 16
+	resolver := func(rawStreamID string) (string, error) {
+		return "some-passphrase", nil
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, _, _ := buildKMREQExtension(t, "some-passphrase", keyLen)
+	_, _, err := doConclusionWithSIDAndKMREQ(t, l, from, "", kmContent)
+	if err == nil {
+		t.Fatal("expected error for missing stream ID, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream ID required") {
+		t.Errorf("error should mention stream ID required: %v", err)
+	}
+}
+
+// TestPerStreamResolverWrongPassphrase verifies that a client using the
+// wrong passphrase for a known stream is rejected during SEK unwrap. The
+// resolver returns the correct passphrase, but the client encrypted its
+// KMREQ with a different one — so the AES Key Unwrap integrity check
+// (RFC 3394 §2.2.2) must fail, proving the server-side KEK derivation
+// uses the resolver's passphrase, not the client's.
+func TestPerStreamResolverWrongPassphrase(t *testing.T) {
+	keyLen := 16
+	resolver := func(rawStreamID string) (string, error) {
+		if rawStreamID == "live/mystream" {
+			return "correct-passphrase", nil
+		}
+		return "", errors.New("stream not found")
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, _, _ := buildKMREQExtension(t, "wrong-passphrase!", keyLen)
+	_, _, err := doConclusionWithSIDAndKMREQ(t, l, from, "live/mystream", kmContent)
+	if err == nil {
+		t.Fatal("expected error for wrong passphrase, got nil")
+	}
+	if !strings.Contains(err.Error(), "unwrap SEK") {
+		t.Errorf("error should mention unwrap SEK: %v", err)
+	}
+}
+
+// TestPerStreamResolverEncryptionRequiredNoKMREQ verifies that when the
+// resolver returns a passphrase but the client sends no KMREQ, the
+// handshake is rejected. This covers the case where a stream is configured
+// to require encryption but the client connects in plaintext mode.
+func TestPerStreamResolverEncryptionRequiredNoKMREQ(t *testing.T) {
+	keyLen := 16
+	resolver := func(rawStreamID string) (string, error) {
+		return "stream-passphrase", nil
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	_, _, err := doConclusionWithSIDAndKMREQ(t, l, from, "live/mystream", nil)
+	if err == nil {
+		t.Fatal("expected error when no KMREQ but encryption required, got nil")
+	}
+	if !strings.Contains(err.Error(), "encryption required") {
+		t.Errorf("error should mention encryption required: %v", err)
+	}
+}
+
+// TestPerStreamResolverPassphraseInResult verifies that the resolved
+// passphrase is correctly propagated into HandshakeResult.Passphrase.
+// This is critical because the connection needs the passphrase later for
+// post-handshake key rotation (rekeying) — without it, the connection
+// cannot derive a new KEK when the peer sends a rotated KMREQ.
+func TestPerStreamResolverPassphraseInResult(t *testing.T) {
+	keyLen := 16
+	expectedPassphrase := "per-stream-secret"
+	resolver := func(rawStreamID string) (string, error) {
+		return expectedPassphrase, nil
+	}
+
+	l := NewListener(42, 120, 1500, 8192, "", keyLen, resolver, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, _, _ := buildKMREQExtension(t, expectedPassphrase, keyLen)
+	_, result, err := doConclusionWithSIDAndKMREQ(t, l, from, "live/test", kmContent)
+	if err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+	if result.Passphrase != expectedPassphrase {
+		t.Errorf("result.Passphrase = %q, want %q", result.Passphrase, expectedPassphrase)
+	}
+}
+
+// TestStaticPassphraseResultPropagation verifies backward compatibility: when
+// no resolver is configured and a static passphrase is used, the Passphrase
+// field in the HandshakeResult is still populated. This ensures that
+// connections using the legacy single-passphrase mode also support
+// post-handshake rekeying, because the rekeying path reads Passphrase from
+// the result regardless of how it was resolved.
+func TestStaticPassphraseResultPropagation(t *testing.T) {
+	passphrase := "static-passphrase"
+	keyLen := 16
+
+	l := NewListener(42, 120, 1500, 8192, passphrase, keyLen, nil, testLogger())
+	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
+
+	kmContent, _, _ := buildKMREQExtension(t, passphrase, keyLen)
+	_, result, err := doConclusionWithKMREQ(t, l, from, kmContent)
+	if err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+	if result.Passphrase != passphrase {
+		t.Errorf("result.Passphrase = %q, want %q", result.Passphrase, passphrase)
 	}
 }

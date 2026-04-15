@@ -112,6 +112,20 @@ type HandshakeResult struct {
 
 	// Encrypted indicates whether this connection uses encryption.
 	Encrypted bool
+
+	// Passphrase is the passphrase used for this connection's encryption.
+	// This may come from either the static server passphrase or a per-stream
+	// resolver — HandleConclusion resolves which one applies and stores it here.
+	//
+	// Why store it? After the handshake, the SRT spec allows in-band key
+	// rotation via new KMREQ control messages. To unwrap a rotated SEK the
+	// connection needs to re-derive a KEK using PBKDF2, which requires the
+	// original passphrase. By propagating it through HandshakeResult into
+	// ConnConfig, the connection has everything it needs for rekeying without
+	// calling back into the handshake layer.
+	//
+	// Empty if the connection is not encrypted.
+	Passphrase string
 }
 
 // Listener handles the server-side SRT handshake v5 protocol.
@@ -137,7 +151,18 @@ type Listener struct {
 	// passphrase is the server's encryption passphrase. When non-empty,
 	// the server expects clients to send a KMREQ extension with matching
 	// encryption parameters. Empty means no encryption required.
+	// Deprecated: Use passphraseResolver for per-stream passphrases.
 	passphrase string
+
+	// passphraseResolver is a function that looks up the passphrase for
+	// a given SRT stream ID. When set, it takes precedence over the static
+	// passphrase field. The function receives the raw Stream ID string
+	// from the handshake extension (e.g., "publish:live/mystream") and
+	// returns the passphrase or an error. The caller is responsible for
+	// normalizing the stream ID before lookup.
+	// This enables per-stream encryption where different streams can
+	// use different passphrases.
+	passphraseResolver func(rawStreamID string) (string, error)
 
 	// pbKeyLen is the expected AES key length in bytes: 16 (AES-128),
 	// 24 (AES-192), or 32 (AES-256). Only used when passphrase is set.
@@ -151,16 +176,19 @@ type Listener struct {
 // The listener will use the provided socket ID, latency, MTU, and flow
 // window when responding to handshakes. When passphrase is non-empty,
 // the listener requires clients to present a valid KMREQ extension.
-func NewListener(localSocketID uint32, latency uint16, mtu, flowWindow uint32, passphrase string, pbKeyLen int, log *slog.Logger) *Listener {
+// When passphraseResolver is non-nil, it takes precedence over the static
+// passphrase — each connection's passphrase is looked up by stream key.
+func NewListener(localSocketID uint32, latency uint16, mtu, flowWindow uint32, passphrase string, pbKeyLen int, passphraseResolver func(string) (string, error), log *slog.Logger) *Listener {
 	return &Listener{
-		cookie:     NewCookieGenerator(),
-		localSID:   localSocketID,
-		latency:    latency,
-		mtu:        mtu,
-		flowWindow: flowWindow,
-		passphrase: passphrase,
-		pbKeyLen:   pbKeyLen,
-		log:        log,
+		cookie:             NewCookieGenerator(),
+		localSID:           localSocketID,
+		latency:            latency,
+		mtu:                mtu,
+		flowWindow:         flowWindow,
+		passphrase:         passphrase,
+		pbKeyLen:           pbKeyLen,
+		passphraseResolver: passphraseResolver,
+		log:                log,
 	}
 }
 
@@ -321,11 +349,42 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		return nil, nil, fmt.Errorf("missing HSREQ extension in Conclusion from %s", from.String())
 	}
 
-	// Encryption validation: check that passphrase expectations match.
-	if l.passphrase != "" && kmReq == nil {
+	// Encryption validation: determine the effective passphrase for this connection.
+	//
+	// The server supports two passphrase modes:
+	//   1. Static — a single passphrase shared by all streams (legacy).
+	//   2. Per-stream — a resolver function maps each Stream ID to its own
+	//      passphrase, allowing multi-tenant setups where each publisher has
+	//      a unique encryption key.
+	//
+	// When a resolver is configured it takes precedence over the static value,
+	// because per-stream is strictly more specific. We start with the static
+	// passphrase as the default and override it if the resolver is present.
+	effectivePassphrase := l.passphrase
+	if l.passphraseResolver != nil {
+		// Per-stream mode: the client MUST include a Stream ID extension so
+		// we know which passphrase to look up. Without it, we cannot derive
+		// the correct KEK and must reject the handshake.
+		if streamID == "" {
+			return nil, nil, fmt.Errorf("stream ID required for per-stream encryption but client sent no SID from %s", from.String())
+		}
+		// Ask the resolver for this stream's passphrase. The resolver may
+		// return an error if the stream is unknown or not authorized,
+		// which rejects the handshake before any crypto work is done.
+		resolved, err := l.passphraseResolver(streamID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("passphrase lookup failed for stream %q from %s: %w", streamID, from.String(), err)
+		}
+		effectivePassphrase = resolved
+	}
+
+	// Mutual agreement check: both sides must agree on whether encryption is
+	// used. A mismatch (one side expects encryption, the other doesn't) is a
+	// configuration error that must be caught early.
+	if effectivePassphrase != "" && kmReq == nil {
 		return nil, nil, fmt.Errorf("encryption required but client sent no KMREQ from %s", from.String())
 	}
-	if kmReq != nil && l.passphrase == "" {
+	if kmReq != nil && effectivePassphrase == "" {
 		return nil, nil, fmt.Errorf("client sent KMREQ but server has no passphrase configured")
 	}
 
@@ -363,7 +422,7 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		// Per the SRT spec (§6.2.1), only the LSB 64 bits (last 8 bytes)
 		// of the 16-byte salt are used for PBKDF2 derivation. This matches
 		// the libsrt reference implementation for interoperability.
-		kek, err := crypto.DeriveKey(l.passphrase, kmReq.Salt[len(kmReq.Salt)-8:], keyLen)
+		kek, err := crypto.DeriveKey(effectivePassphrase, kmReq.Salt[len(kmReq.Salt)-8:], keyLen)
 		if err != nil {
 			return nil, nil, fmt.Errorf("derive KEK: %w", err)
 		}
@@ -536,6 +595,8 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 	}
 
 	// Set encryption fields on the result if encryption was negotiated.
+	// The Passphrase is stored so the connection can re-derive KEKs during
+	// post-handshake key rotation (see HandshakeResult.Passphrase doc).
 	if kmReq != nil {
 		result.EvenSEK = evenSEK
 		result.OddSEK = oddSEK
@@ -543,6 +604,7 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		result.Salt = kmReq.Salt
 		result.KeyLen = int(kmReq.KLen)
 		result.Encrypted = true
+		result.Passphrase = effectivePassphrase
 	}
 
 	l.log.Info("handshake concluded",
