@@ -23,6 +23,7 @@ import (
 	"math/big"
 	"net"
 
+	"github.com/alxayo/go-rtmp/internal/srt/crypto"
 	"github.com/alxayo/go-rtmp/internal/srt/packet"
 )
 
@@ -34,7 +35,7 @@ const SRTVersion = 0x00010500
 // DefaultFlags is the set of SRT features this listener supports by default.
 // These are the flags we advertise during the handshake, and the final
 // negotiated flags will be the intersection of ours and the peer's.
-const DefaultFlags = FlagTSBPDSND | FlagTSBPDRCV | FlagTLPKTDROP | FlagPERIODICNAK | FlagREXMITFLG
+const DefaultFlags = FlagTSBPDSND | FlagTSBPDRCV | FlagCRYPT | FlagTLPKTDROP | FlagPERIODICNAK | FlagREXMITFLG
 
 // srtMagic is the magic value placed in the ExtensionField of the Induction
 // response. It tells the caller that this is an SRT v5 listener (not a
@@ -45,6 +46,10 @@ const srtMagic uint16 = 0x4A17
 // extensionFlagHSREQ is the bit set in the Conclusion's ExtensionField
 // to indicate that HSREQ/HSRSP extensions are present.
 const extensionFlagHSREQ uint16 = 0x0001
+
+// extensionFlagKMREQ is the bit set in the Conclusion's ExtensionField
+// to indicate that KMREQ/KMRSP extensions are present.
+const extensionFlagKMREQ uint16 = 0x0002
 
 // extensionFlagSID is the bit set in the Conclusion's ExtensionField
 // to indicate that a Stream ID extension is present.
@@ -84,6 +89,21 @@ type HandshakeResult struct {
 	// Flags is the negotiated feature flag bitmask (intersection of
 	// our flags and the peer's flags).
 	Flags uint32
+
+	// SEK is the unwrapped Stream Encrypting Key, ready for use with
+	// AES-CTR encryption/decryption. Nil if the connection is not encrypted.
+	SEK []byte
+
+	// Salt is the salt from the client's KMREQ, needed to construct
+	// the AES-CTR IV. Nil if the connection is not encrypted.
+	Salt []byte
+
+	// KeyLen is the negotiated AES key length in bytes (16/24/32).
+	// Zero if the connection is not encrypted.
+	KeyLen int
+
+	// Encrypted indicates whether this connection uses encryption.
+	Encrypted bool
 }
 
 // Listener handles the server-side SRT handshake v5 protocol.
@@ -106,20 +126,32 @@ type Listener struct {
 	// flowWindow is our configured flow window size in packets.
 	flowWindow uint32
 
+	// passphrase is the server's encryption passphrase. When non-empty,
+	// the server expects clients to send a KMREQ extension with matching
+	// encryption parameters. Empty means no encryption required.
+	passphrase string
+
+	// pbKeyLen is the expected AES key length in bytes: 16 (AES-128),
+	// 24 (AES-192), or 32 (AES-256). Only used when passphrase is set.
+	pbKeyLen int
+
 	// log is the structured logger for handshake events.
 	log *slog.Logger
 }
 
 // NewListener creates a handshake listener with the given parameters.
 // The listener will use the provided socket ID, latency, MTU, and flow
-// window when responding to handshakes.
-func NewListener(localSocketID uint32, latency uint16, mtu, flowWindow uint32, log *slog.Logger) *Listener {
+// window when responding to handshakes. When passphrase is non-empty,
+// the listener requires clients to present a valid KMREQ extension.
+func NewListener(localSocketID uint32, latency uint16, mtu, flowWindow uint32, passphrase string, pbKeyLen int, log *slog.Logger) *Listener {
 	return &Listener{
 		cookie:     NewCookieGenerator(),
 		localSID:   localSocketID,
 		latency:    latency,
 		mtu:        mtu,
 		flowWindow: flowWindow,
+		passphrase: passphrase,
+		pbKeyLen:   pbKeyLen,
 		log:        log,
 	}
 }
@@ -230,9 +262,11 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 	)
 
 	// Step 2: Parse the extensions from the caller's Conclusion CIF.
-	// We need HSREQ (for version/flags/TSBPD) and optionally SID (stream ID).
+	// We need HSREQ (for version/flags/TSBPD), optionally SID (stream ID),
+	// and optionally KMREQ (for encryption key exchange).
 	var hsReq *HSReqData
 	var streamID string
+	var kmReq *crypto.KMMsg
 
 	for _, ext := range hs.Extensions {
 		switch ext.Type {
@@ -251,6 +285,21 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 				"sender_tsbpd", hsReq.SenderTSBPD,
 			)
 
+		case ExtTypeKMREQ:
+			// Parse the KMREQ extension to get encryption parameters
+			// and the wrapped Stream Encrypting Key(s).
+			var err error
+			kmReq, err = crypto.ParseKMMsg(ext.Content)
+			if err != nil {
+				return nil, nil, fmt.Errorf("parse KMREQ extension: %w", err)
+			}
+			l.log.Debug("parsed KMREQ",
+				"cipher", kmReq.Cipher,
+				"kk", kmReq.KK,
+				"key_len", kmReq.KLen,
+				"salt_len", kmReq.SLen,
+			)
+
 		case ExtTypeSID:
 			// Parse the Stream ID extension. This is the SRT equivalent
 			// of an RTMP stream key (e.g., "live/mystream").
@@ -262,6 +311,45 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 	// HSREQ is required — without it we can't negotiate TSBPD and flags.
 	if hsReq == nil {
 		return nil, nil, fmt.Errorf("missing HSREQ extension in Conclusion from %s", from.String())
+	}
+
+	// Encryption validation: check that passphrase expectations match.
+	if l.passphrase != "" && kmReq == nil {
+		return nil, nil, fmt.Errorf("encryption required but client sent no KMREQ from %s", from.String())
+	}
+	if kmReq != nil && l.passphrase == "" {
+		return nil, nil, fmt.Errorf("client sent KMREQ but server has no passphrase configured")
+	}
+
+	// If encryption is negotiated, derive KEK and unwrap the SEK.
+	var sek []byte
+	if kmReq != nil {
+		keyLen := int(kmReq.KLen)
+
+		// Validate the key length matches our configuration.
+		if l.pbKeyLen != 0 && keyLen != l.pbKeyLen {
+			return nil, nil, fmt.Errorf("key length mismatch: client sent %d, server expects %d", keyLen, l.pbKeyLen)
+		}
+
+		// Derive the Key Encrypting Key (KEK) from our passphrase and the
+		// client's salt using PBKDF2-HMAC-SHA1 with 2048 iterations.
+		kek, err := crypto.DeriveKey(l.passphrase, kmReq.Salt, keyLen)
+		if err != nil {
+			return nil, nil, fmt.Errorf("derive KEK: %w", err)
+		}
+
+		// Unwrap the Stream Encrypting Key (SEK) using AES Key Wrap (RFC 3394).
+		// If the passphrase is wrong, the integrity check will fail here.
+		sek, err = crypto.Unwrap(kek, kmReq.WrappedKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("unwrap SEK (wrong passphrase?): %w", err)
+		}
+
+		l.log.Info("encryption negotiated",
+			"cipher", "AES-CTR",
+			"key_len", keyLen,
+			"from", from.String(),
+		)
 	}
 
 	// Step 3: Negotiate TSBPD delays.
@@ -307,12 +395,32 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 	// This tells the caller what we negotiated.
 	hsRspContent := BuildHSRsp(SRTVersion, negotiatedFlags, peerTSBPD, localTSBPD)
 
-	// Step 7: Build the Conclusion response CIF.
+	// Step 7: Determine encryption field value for the response CIF.
+	// 0=none, 2=AES-128, 3=AES-192, 4=AES-256.
+	encryptionField := uint16(0)
+	if kmReq != nil {
+		switch kmReq.KLen {
+		case 16:
+			encryptionField = 2
+		case 24:
+			encryptionField = 3
+		case 32:
+			encryptionField = 4
+		}
+	}
+
+	// Include the KMREQ flag in the extension field when encryption is used.
+	extensionField := extensionFlagHSREQ
+	if kmReq != nil {
+		extensionField |= extensionFlagKMREQ
+	}
+
+	// Step 8: Build the Conclusion response CIF.
 	// We include the HSRSP extension and echo back the negotiated parameters.
 	resp := &packet.HandshakeCIF{
 		Version:          5,
-		EncryptionField:  0,
-		ExtensionField:   extensionFlagHSREQ, // Indicates HSRSP is present
+		EncryptionField:  encryptionField,
+		ExtensionField:   extensionField,
 		InitialSeqNumber: hs.InitialSeqNumber,
 		MTU:              negotiatedMTU,
 		FlowWindow:       negotiatedFlowWindow,
@@ -328,7 +436,36 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		Content: hsRspContent,
 	})
 
-	// Step 8: Build the result containing all negotiated parameters.
+	// If encryption was negotiated, build and append a KMRSP extension.
+	// The KMRSP mirrors the client's KM message back to confirm that we
+	// accepted the encryption parameters and successfully unwrapped the SEK.
+	if kmReq != nil {
+		kmRsp := &crypto.KMMsg{
+			Version:    crypto.KMVersion,
+			PacketType: crypto.KMPacketType,
+			Sign:       crypto.KMSignature,
+			KK:         kmReq.KK,
+			KEKI:       kmReq.KEKI,
+			Cipher:     kmReq.Cipher,
+			Auth:       kmReq.Auth,
+			SE:         kmReq.SE,
+			SLen:       kmReq.SLen,
+			KLen:       kmReq.KLen,
+			Salt:       kmReq.Salt,
+			WrappedKey: kmReq.WrappedKey,
+		}
+		kmRspContent, err := kmRsp.Marshal()
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal KMRSP: %w", err)
+		}
+		resp.Extensions = append(resp.Extensions, packet.HSExtension{
+			Type:    ExtTypeKMRSP,
+			Length:  uint16(len(kmRspContent) / 4),
+			Content: kmRspContent,
+		})
+	}
+
+	// Step 9: Build the result containing all negotiated parameters.
 	result := &HandshakeResult{
 		PeerSocketID:  hs.SocketID,
 		StreamID:      streamID,
@@ -338,6 +475,14 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 		PeerTSBPD:     peerTSBPD,
 		LocalTSBPD:    localTSBPD,
 		Flags:         negotiatedFlags,
+	}
+
+	// Set encryption fields on the result if encryption was negotiated.
+	if kmReq != nil {
+		result.SEK = sek
+		result.Salt = kmReq.Salt
+		result.KeyLen = int(kmReq.KLen)
+		result.Encrypted = true
 	}
 
 	l.log.Info("handshake concluded",

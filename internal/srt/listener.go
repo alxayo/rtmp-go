@@ -545,6 +545,8 @@ func (l *Listener) handleInduction(hs *packet.HandshakeCIF, _ *packet.ControlPac
 			uint16(l.config.Latency),
 			uint32(l.config.MTU),
 			uint32(l.config.FlowWindow),
+			l.config.Passphrase,
+			l.config.PbKeyLen,
 			l.log,
 		)
 

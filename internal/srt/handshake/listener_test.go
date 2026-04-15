@@ -16,7 +16,7 @@ func testLogger() *slog.Logger {
 // TestHandleInductionValid verifies that a valid Induction handshake
 // produces a correct response with a SYN cookie and version 5.
 func TestHandleInductionValid(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Build a caller's Induction request (v4 format, cookie=0).
@@ -71,7 +71,7 @@ func TestHandleInductionValid(t *testing.T) {
 // TestHandleInductionWrongType verifies that HandleInduction rejects a
 // handshake that is not of type Induction (e.g., Conclusion).
 func TestHandleInductionWrongType(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Send a Conclusion instead of Induction — should be rejected.
@@ -88,7 +88,7 @@ func TestHandleInductionWrongType(t *testing.T) {
 // TestHandleConclusionValid verifies that a valid Conclusion handshake
 // (with correct cookie and extensions) produces the expected result.
 func TestHandleConclusionValid(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// First, do Induction to get a valid cookie.
@@ -194,7 +194,7 @@ func TestHandleConclusionValid(t *testing.T) {
 // TestHandleConclusionInvalidCookie verifies that a Conclusion with the
 // wrong SYN cookie is rejected.
 func TestHandleConclusionInvalidCookie(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Build HSREQ extension.
@@ -226,7 +226,7 @@ func TestHandleConclusionInvalidCookie(t *testing.T) {
 // TestHandleConclusionMissingHSREQ verifies that a Conclusion without an
 // HSREQ extension is rejected (HSREQ is mandatory).
 func TestHandleConclusionMissingHSREQ(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("192.168.1.10"), Port: 9000}
 
 	// Do Induction to get a valid cookie.
@@ -262,7 +262,7 @@ func TestHandleConclusionMissingHSREQ(t *testing.T) {
 // TestFullInductionConclusionExchange simulates a complete two-phase handshake:
 // Induction → Conclusion, verifying the full flow works end-to-end.
 func TestFullInductionConclusionExchange(t *testing.T) {
-	l := NewListener(42, 150, 1400, 4096, testLogger())
+	l := NewListener(42, 150, 1400, 4096, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("10.0.0.5"), Port: 3000}
 
 	// --- Phase 1: Induction ---
@@ -373,7 +373,7 @@ func TestFullInductionConclusionExchange(t *testing.T) {
 // TestHandleConclusionNoStreamID verifies that the handshake succeeds even
 // when no Stream ID extension is present (stream ID is optional).
 func TestHandleConclusionNoStreamID(t *testing.T) {
-	l := NewListener(42, 120, 1500, 8192, testLogger())
+	l := NewListener(42, 120, 1500, 8192, "", 0, testLogger())
 	from := &net.UDPAddr{IP: net.ParseIP("10.0.0.1"), Port: 5000}
 
 	// Induction first.
