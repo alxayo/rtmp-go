@@ -498,14 +498,78 @@ func (c *Conn) handleNAK(ctrl *packet.ControlPacket) {
 
 // handleKMREQ processes a post-handshake Key Material Request from the peer.
 // The sender sends this during key rotation to deliver a new Stream Encrypting
-// Key (SEK). We unwrap it, install it in the KeySet, and send back a KMRSP.
-//
-// This is a stub — full implementation comes in the post-handshake-rekey todo.
+// Key (SEK). We derive the KEK from our passphrase and the new salt, unwrap
+// the SEK(s), install them in the KeySet, and send back a KMRSP to confirm.
 func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
-	c.log.Info("received post-handshake KMREQ (key rotation)",
-		"cif_len", len(ctrl.CIF),
+	// 1. Verify we have encryption configured. If the connection was
+	//    established without a passphrase, we can't process key material.
+	if c.config.KeySet == nil || c.config.Passphrase == "" {
+		c.log.Warn("received KMREQ but connection is not encrypted")
+		return
+	}
+
+	// 2. Parse the KM message from the control packet's CIF.
+	km, err := crypto.ParseKMMsg(ctrl.CIF)
+	if err != nil {
+		c.log.Warn("failed to parse post-handshake KMREQ", "error", err)
+		return
+	}
+
+	// 3. Determine the key length from the KM message.
+	keyLen := int(km.KLen)
+
+	// 4. Derive the KEK using PBKDF2 with the new salt from this KMREQ.
+	//    Per SRT spec §6.2.1, only the last 8 bytes (LSB 64 bits) of the
+	//    16-byte salt are used for PBKDF2 derivation.
+	kek, err := crypto.DeriveKey(c.config.Passphrase, km.Salt[len(km.Salt)-8:], keyLen)
+	if err != nil {
+		c.log.Warn("failed to derive KEK for key rotation", "error", err)
+		return
+	}
+
+	// 5. Unwrap the SEK(s) using AES Key Wrap (RFC 3394). If the passphrase
+	//    is wrong, Unwrap returns an integrity check error.
+	plaintext, err := crypto.Unwrap(kek, km.WrappedKey)
+	if err != nil {
+		c.log.Warn("failed to unwrap SEK during key rotation (wrong passphrase?)", "error", err)
+		return
+	}
+
+	// 6. Install the unwrapped SEK(s) into the KeySet. For KKEven or KKOdd
+	//    the plaintext is a single key; for KKBoth it's even||odd concatenated.
+	if err := c.config.KeySet.InstallKey(km.KK, plaintext, km.Salt, keyLen); err != nil {
+		c.log.Warn("failed to install rotated key", "kk", km.KK, "error", err)
+		return
+	}
+
+	c.log.Info("key rotation completed",
+		"kk", km.KK,
+		"key_len", keyLen,
+		"cipher", "AES-CTR",
 	)
-	// TODO: Parse KM message, derive KEK, unwrap SEK, install in KeySet, send KMRSP
+
+	// 7. Send KMRSP back to the peer to confirm receipt.
+	//    The response echoes the same KM message content.
+	c.sendKMRSP(ctrl.CIF)
+}
+
+// sendKMRSP sends a Key Material Response back to the peer, confirming
+// that we received and installed the new encryption key(s). The response
+// echoes the KMREQ content to indicate success.
+func (c *Conn) sendKMRSP(kmData []byte) {
+	resp := &packet.ControlPacket{
+		Header: packet.Header{
+			IsControl:    true,
+			DestSocketID: c.peerSocketID,
+		},
+		Type:         packet.CtrlUserDefined,
+		TypeSpecific: packet.UserSubtypeKMRSP,
+		CIF:          kmData,
+	}
+
+	if err := c.sendControl(resp); err != nil {
+		c.log.Warn("failed to send KMRSP", "error", err)
+	}
 }
 
 // sendPacket sends raw bytes to the peer via the shared UDP socket.
