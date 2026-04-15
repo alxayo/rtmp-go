@@ -30,7 +30,8 @@ func buildKMREQExtension(t *testing.T, passphrase string, keyLen int) (kmContent
 	}
 
 	// Derive the KEK from the passphrase and salt.
-	kek, err := crypto.DeriveKey(passphrase, salt, keyLen)
+	// Per SRT spec, only the LSB 64 bits (last 8 bytes) of salt are used.
+	kek, err := crypto.DeriveKey(passphrase, salt[len(salt)-8:], keyLen)
 	if err != nil {
 		t.Fatalf("derive KEK: %v", err)
 	}

@@ -372,12 +372,21 @@ func (c *Conn) handleDataPacket(data []byte) {
 			return // Drop packets that fail decryption
 		}
 	} else if c.config.Encrypted && pkt.Encryption == packet.EncryptionNone {
-		// Connection is encrypted but this packet isn't — this shouldn't
-		// happen in normal operation. Log it but still deliver (some
-		// implementations send unencrypted control-like data packets).
-		c.log.Debug("unencrypted packet on encrypted connection",
+		// Connection is encrypted but this packet isn't — drop it.
+		// Accepting plaintext on an encrypted connection would weaken
+		// the security contract and mask protocol bugs.
+		c.log.Warn("dropping unencrypted packet on encrypted connection",
 			"seq", pkt.SequenceNumber,
 		)
+		return
+	} else if c.config.Cipher != nil && pkt.Encryption == packet.EncryptionOdd {
+		// We only support the even key slot in the initial implementation.
+		// Odd-key packets arrive during key rotation (rekeying), which is
+		// not yet implemented. Drop rather than decrypt with wrong key.
+		c.log.Warn("dropping odd-key packet (key rotation not supported)",
+			"seq", pkt.SequenceNumber,
+		)
+		return
 	}
 
 	// Hand it off to the receiver for buffering and delivery.

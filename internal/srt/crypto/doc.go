@@ -17,7 +17,9 @@
 // # Encryption Flow
 //
 //  1. Caller generates a random 16-byte salt and a random SEK
-//  2. Caller derives KEK = PBKDF2(passphrase, salt, 2048, SHA-1, keyLen)
+//  2. Caller derives KEK = PBKDF2(passphrase, LSB64(salt), 2048, SHA-1, keyLen)
+//     Note: per SRT spec §6.2.1, only the last 8 bytes (LSB 64 bits)
+//     of the 16-byte salt are used for PBKDF2 derivation.
 //  3. Caller wraps SEK with KEK using AES Key Wrap (RFC 3394)
 //  4. Caller sends KMREQ extension in the Conclusion handshake packet
 //  5. Listener derives the same KEK, unwraps SEK, sends KMRSP

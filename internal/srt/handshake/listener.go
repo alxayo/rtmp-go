@@ -333,7 +333,10 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 
 		// Derive the Key Encrypting Key (KEK) from our passphrase and the
 		// client's salt using PBKDF2-HMAC-SHA1 with 2048 iterations.
-		kek, err := crypto.DeriveKey(l.passphrase, kmReq.Salt, keyLen)
+		// Per the SRT spec (§6.2.1), only the LSB 64 bits (last 8 bytes)
+		// of the 16-byte salt are used for PBKDF2 derivation. This matches
+		// the libsrt reference implementation for interoperability.
+		kek, err := crypto.DeriveKey(l.passphrase, kmReq.Salt[len(kmReq.Salt)-8:], keyLen)
 		if err != nil {
 			return nil, nil, fmt.Errorf("derive KEK: %w", err)
 		}
