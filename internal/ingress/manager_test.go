@@ -257,3 +257,59 @@ func TestConcurrentPublishers(t *testing.T) {
 		t.Fatalf("expected 0 active sessions after concurrent test, got %d", m.ActiveSessions())
 	}
 }
+
+// TestForceEvictStaleSession verifies the SRT reconnection pattern:
+// force-remove a stale session via EndPublish, then re-register with
+// a new publisher on the same stream key.
+func TestForceEvictStaleSession(t *testing.T) {
+	m := newTestManager()
+	pub1 := &mockPublisher{id: "srt-1", protocol: "srt", addr: "10.0.0.1:5000", key: "live/reconnect"}
+	pub2 := &mockPublisher{id: "srt-2", protocol: "srt", addr: "10.0.0.1:5001", key: "live/reconnect"}
+
+	// First publisher registers successfully.
+	session1, err := m.BeginPublish(pub1)
+	if err != nil {
+		t.Fatalf("first BeginPublish failed: %v", err)
+	}
+
+	// Second publisher for the same key fails.
+	_, err = m.BeginPublish(pub2)
+	if err == nil {
+		t.Fatal("expected error for duplicate stream key, got nil")
+	}
+
+	// Force-evict the stale session (simulates SRT reconnection eviction).
+	m.EndPublish("live/reconnect")
+
+	// Now the second publisher should succeed.
+	session2, err := m.BeginPublish(pub2)
+	if err != nil {
+		t.Fatalf("re-publish after forced eviction failed: %v", err)
+	}
+	if session2.Publisher().ID() != "srt-2" {
+		t.Fatalf("expected publisher ID %q, got %q", "srt-2", session2.Publisher().ID())
+	}
+
+	// Old session's EndPublish is a no-op (already removed).
+	session1.EndPublish() // must not panic or corrupt state
+
+	if m.ActiveSessions() != 1 {
+		t.Fatalf("expected 1 active session, got %d", m.ActiveSessions())
+	}
+}
+
+// TestDoubleEndPublishIsNoop verifies that calling EndPublish twice on
+// the same session is safe (idempotent no-op).
+func TestDoubleEndPublishIsNoop(t *testing.T) {
+	m := newTestManager()
+	pub := &mockPublisher{id: "srt-1", protocol: "srt", addr: "10.0.0.1:5000", key: "live/double"}
+
+	session, _ := m.BeginPublish(pub)
+
+	session.EndPublish()
+	session.EndPublish() // must not panic
+
+	if m.ActiveSessions() != 0 {
+		t.Fatalf("expected 0 active sessions, got %d", m.ActiveSessions())
+	}
+}

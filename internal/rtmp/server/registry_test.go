@@ -323,3 +323,75 @@ func TestEvictPublisher_ThenOldDisconnectIsNoOp(t *testing.T) {
 	}
 	s.mu.RUnlock()
 }
+
+// mockRecorder is a minimal MediaWriter stub for testing recorder cleanup.
+type mockRecorder struct {
+	closed bool
+}
+
+func (r *mockRecorder) WriteMessage(_ *chunk.Message) { /* no-op */ }
+func (r *mockRecorder) Close() error {
+	r.closed = true
+	return nil
+}
+func (r *mockRecorder) Disabled() bool { return false }
+
+var _ media.MediaWriter = (*mockRecorder)(nil)
+
+// TestEvictedPublisherCleanupSkipsRecorder verifies that when an evicted
+// publisher's cleanup runs, it does NOT close the recorder that belongs
+// to the new publisher. This guards against the race where old SRT cleanup
+// runs after eviction and could destroy the new publisher's recorder.
+func TestEvictedPublisherCleanupSkipsRecorder(t *testing.T) {
+	reg := NewRegistry()
+	s, _ := reg.CreateStream("app/evict_recorder")
+
+	oldPub := &stubConn{}
+	newPub := &stubConn{}
+
+	if err := s.SetPublisher(oldPub); err != nil {
+		t.Fatalf("set publisher: %v", err)
+	}
+
+	// Simulate recorder created by old publisher.
+	oldRec := &mockRecorder{}
+	s.mu.Lock()
+	s.Recorder = oldRec
+	s.mu.Unlock()
+
+	// Evict old publisher with new one.
+	s.EvictPublisher(newPub)
+
+	// Simulate new publisher creating a new recorder.
+	newRec := &mockRecorder{}
+	s.mu.Lock()
+	s.Recorder = newRec
+	s.mu.Unlock()
+
+	// Simulate old publisher's cleanup running (identity-guarded pattern).
+	// This mirrors the fix in srt_accept.go cleanup section.
+	s.mu.Lock()
+	if s.Publisher == oldPub {
+		// This block should NOT execute since publisher was evicted.
+		if s.Recorder != nil {
+			s.Recorder.Close()
+			s.Recorder = nil
+		}
+		s.Publisher = nil
+	}
+	s.mu.Unlock()
+
+	// Verify: new publisher and recorder are untouched.
+	s.mu.RLock()
+	if s.Publisher != newPub {
+		t.Fatal("new publisher was incorrectly cleared by old cleanup")
+	}
+	if s.Recorder != newRec {
+		t.Fatal("new recorder was incorrectly closed/cleared by old cleanup")
+	}
+	s.mu.RUnlock()
+
+	if newRec.closed {
+		t.Fatal("new recorder was closed by old publisher's cleanup")
+	}
+}

@@ -89,6 +89,10 @@ func (m *Manager) BeginPublish(pub Publisher) (*PublishSession, error) {
 // It removes the session from the map so another publisher can take
 // over the stream key in the future. It is safe to call EndPublish for
 // a key that has already been removed (it is a no-op).
+//
+// Note: This removes by key unconditionally — use for force-eviction.
+// For normal session cleanup, use PublishSession.EndPublish() which
+// checks identity to avoid removing a replacement session.
 func (m *Manager) EndPublish(key string) {
 	m.mu.Lock()
 	// Look up and delete in one critical section to avoid races.
@@ -101,6 +105,23 @@ func (m *Manager) EndPublish(key string) {
 	// Log outside the lock to avoid holding it while doing I/O.
 	if exists && session != nil {
 		session.log.Info("publish session ended")
+	}
+}
+
+// endPublishIfCurrent removes the session only if it's still the active
+// one for its stream key. If another session has replaced it (via
+// force-eviction + re-registration), this is a no-op so the new
+// session is not accidentally removed.
+func (m *Manager) endPublishIfCurrent(key string, sess *PublishSession) {
+	m.mu.Lock()
+	current, exists := m.sessions[key]
+	if exists && current == sess {
+		delete(m.sessions, key)
+	}
+	m.mu.Unlock()
+
+	if exists && current == sess {
+		sess.log.Info("publish session ended")
 	}
 }
 
@@ -175,8 +196,10 @@ func (s *PublishSession) PushMedia(msg *chunk.Message) {
 }
 
 // EndPublish cleans up this publish session by delegating to the
-// Manager. After this call the session is removed from the Manager's
-// map and the stream key becomes available for a new publisher.
+// Manager. Only removes the session if it's still the active one for
+// the stream key — if a new session has taken over (via eviction),
+// this is a safe no-op. This prevents an old session's deferred cleanup
+// from accidentally removing a newly registered session.
 func (s *PublishSession) EndPublish() {
-	s.manager.EndPublish(s.streamKey)
+	s.manager.endPublishIfCurrent(s.streamKey, s)
 }

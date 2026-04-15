@@ -248,6 +248,18 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	// will timeout after ~5 seconds because it never receives any ACKs.
 	conn.StartReliability()
 
+	// Install disconnect handler to clean up the listener's connection
+	// registry when the SRT connection closes. Without this, closed
+	// connections leak in the listener's conns map forever.
+	// Capture the listener pointer now — s.srtListener may be nilled
+	// during server shutdown before this handler fires.
+	ln := s.srtListener
+	conn.SetDisconnectHandler(func() {
+		if ln != nil {
+			ln.RemoveConn(conn.LocalSocketID())
+		}
+	})
+
 	// Generate a unique connection ID for logging and tracking.
 	connID := fmt.Sprintf("srt-%d", conn.LocalSocketID())
 
@@ -295,15 +307,27 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	)
 	session, err := s.ingressManager.BeginPublish(pub)
 	if err != nil {
-		s.log.Error("SRT publish rejected",
-			"error", err,
+		// Stream key in use — evict the stale session and retry.
+		// This handles the common case where a streamer disconnects
+		// (OBS crash, network loss) and reconnects before the old
+		// session's cleanup has finished running EndPublish().
+		s.log.Warn("SRT evicting stale publish session",
 			"stream_key", info.StreamKey(),
 			"conn_id", connID,
-			"stage", "publish-rejected",
 		)
-		conn.Close()
-		metrics.SRTConnectionsActive.Add(-1)
-		return
+		s.ingressManager.EndPublish(info.StreamKey())
+		session, err = s.ingressManager.BeginPublish(pub)
+		if err != nil {
+			s.log.Error("SRT publish rejected after eviction attempt",
+				"error", err,
+				"stream_key", info.StreamKey(),
+				"conn_id", connID,
+				"stage", "publish-rejected",
+			)
+			conn.Close()
+			metrics.SRTConnectionsActive.Add(-1)
+			return
+		}
 	}
 
 	// Create or get the stream in the registry. This is the same structure
@@ -326,16 +350,21 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	// This enforces single-publisher-per-stream and allows RTMP play
 	// clients to detect that a publisher is active.
 	if err := stream.SetPublisher(pub); err != nil {
-		s.log.Error("SRT publish rejected: stream already has publisher",
-			"error", err,
+		// Publisher already exists — evict the stale one. This mirrors
+		// the RTMP eviction pattern in command_integration.go and handles
+		// reconnection after unclean disconnect (zombie connection).
+		s.log.Warn("SRT evicting stale publisher",
 			"stream_key", info.StreamKey(),
 			"conn_id", connID,
-			"stage", "publish-rejected",
 		)
-		session.EndPublish()
-		conn.Close()
-		metrics.SRTConnectionsActive.Add(-1)
-		return
+		oldPub := stream.EvictPublisher(pub)
+		if closer, ok := oldPub.(interface{ Close() error }); ok {
+			go func() {
+				if err := closer.Close(); err != nil {
+					s.log.Debug("error closing evicted SRT publisher", "error", err)
+				}
+			}()
+		}
 	}
 
 	// Mark stream for recording — actual recorder creation is deferred to the
@@ -403,34 +432,34 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 
 	// Clean up: close recorder, clear publisher, end session, close connection.
 	// This mirrors the RTMP publisher disconnect cleanup in command_integration.go.
-
-	// Close the recorder (if active) under lock to avoid races
-	// with the media handler callback that writes to it.
+	//
+	// Guard all cleanup with a publisher identity check: if we were evicted
+	// by a new publisher (via EvictPublisher), the identity check fails and
+	// we skip recorder/publisher cleanup to avoid interfering with the new
+	// publisher's state.
 	if stream != nil {
 		stream.mu.Lock()
-		if stream.Recorder != nil {
-			if err := stream.Recorder.Close(); err != nil {
-				s.log.Error("recorder close error on SRT disconnect",
-					"error", err,
-					"stream_key", info.StreamKey(),
-					"conn_id", connID,
-				)
-				metrics.RecordingErrorsTotal.Add(1)
-			} else {
-				s.log.Info("recording stopped",
-					"stream_key", info.StreamKey(),
-					"conn_id", connID,
-				)
-			}
-			stream.Recorder = nil
-			metrics.RecordingsActive.Add(-1)
-		}
-		stream.mu.Unlock()
-
-		// Clear the publisher so another client can publish to this key.
-		stream.mu.Lock()
 		if stream.Publisher == pub {
+			// We're still the active publisher — clean up fully.
+			if stream.Recorder != nil {
+				if err := stream.Recorder.Close(); err != nil {
+					s.log.Error("recorder close error on SRT disconnect",
+						"error", err,
+						"stream_key", info.StreamKey(),
+						"conn_id", connID,
+					)
+					metrics.RecordingErrorsTotal.Add(1)
+				} else {
+					s.log.Info("recording stopped",
+						"stream_key", info.StreamKey(),
+						"conn_id", connID,
+					)
+				}
+				stream.Recorder = nil
+				metrics.RecordingsActive.Add(-1)
+			}
 			stream.Publisher = nil
+			metrics.PublishersActive.Add(-1)
 		}
 		stream.mu.Unlock()
 	}
