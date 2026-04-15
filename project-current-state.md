@@ -375,7 +375,7 @@ UDP Socket → Listener (multiplexed by remoteAddr+socketID)
 - **Connection** (`conn/`): Full state machine (Connected → Closing → Closed) with Sender (retransmit buffer, RTT EWMA), Receiver (reorder buffer, loss detection), TSBPD (jitter buffer), and Reliability loop (ACK 10ms, NAK 20ms, delivery 1ms, keepalive 1s)[^43].
 - **Packets** (`packet/`): 16-byte header + payload. Control types: Handshake, KeepAlive, ACK, NAK, ACKACK, Shutdown[^44].
 - **Circular arithmetic** (`circular/`): 31-bit sequence numbers with wraparound-safe comparisons (half-space rule)[^45].
-- **Crypto** (`crypto/`): AES Key Wrap (RFC 3394) + PBKDF2 key derivation for optional AES-128/192/256 encryption[^46].
+- **Crypto** (`crypto/`): AES-CTR cipher, even/odd KeySet, KM message parser, PBKDF2-HMAC-SHA1 key derivation, AES Key Wrap (RFC 3394). Supports AES-128/192/256 with post-handshake key rotation[^46].
 
 **Bridge** (`bridge.go`): The SRT→RTMP conversion pipeline. Reads from SRT connection, feeds bytes to MPEG-TS demuxer, receives `MediaFrame` callbacks, converts H.264 (Annex B→AVCC), H.265 (Annex B→HEVCDecoderConfigurationRecord), AAC (ADTS→raw), and produces `chunk.Message` objects for the ingress manager[^47].
 

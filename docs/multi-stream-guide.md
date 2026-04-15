@@ -235,7 +235,7 @@ After conversion, the SRT stream is indistinguishable from an RTMP stream inside
 
 ### SRT Authentication
 
-> **Current Limitation**: SRT streams have no per-stream authentication. The `-srt-passphrase` flag exists but encryption is not yet functional (see [SRT Ingest](../site/content/docs/user-guide/srt-ingest.md) for details). SRT publishers are accepted based solely on the stream key in the Stream ID. Security relies on stream key obscurity and network-level controls (firewalls, VPNs). For authenticated ingest, use RTMP with token auth or RTMPS.
+> **SRT Authentication**: SRT uses passphrase-based encryption for stream security. Set `-srt-passphrase` to require all SRT publishers to provide a matching passphrase. Connections with wrong or missing passphrases are rejected during the handshake. For per-stream authentication (different credentials per stream key), use RTMP with token auth.
 
 ## Scaling Considerations
 

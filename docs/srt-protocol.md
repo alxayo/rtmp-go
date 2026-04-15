@@ -51,7 +51,7 @@ SRT Publisher (FFmpeg/OBS)
 # Run with both RTMP and SRT
 ./rtmp-server -listen :1935 -srt-listen :10080
 
-# With SRT encryption (NOT YET FUNCTIONAL — flag is accepted but has no effect)
+# With SRT encryption (AES-256)
 ./rtmp-server -listen :1935 -srt-listen :10080 -srt-passphrase "mysecret"
 
 # With custom latency (default 120ms)
@@ -69,7 +69,7 @@ ffmpeg -re -i test.mp4 -c copy -f mpegts \
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=#!::r=live/test,m=publish"
 
-# With encryption (NOT YET FUNCTIONAL — see note below)
+# With SRT encryption
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=publish:live/test&passphrase=mysecret"
 ```
@@ -92,21 +92,37 @@ ffplay rtmps://localhost:443/live/test
 |------|---------|-------------|
 | `-srt-listen` | (disabled) | SRT UDP listen address (e.g., `:10080`) |
 | `-srt-latency` | `120` | TSBPD buffer latency in milliseconds |
-| `-srt-passphrase` | (none) | AES encryption passphrase (not yet enforced — see below) |
+| `-srt-passphrase` | (none) | AES encryption passphrase (10-79 chars; empty = no encryption) |
 | `-srt-pbkeylen` | `16` | AES key length: 16 (AES-128), 24 (AES-192), or 32 (AES-256) |
 
-> **⚠️ SRT Encryption: Not Yet Functional**
->
-> The encryption primitives are implemented (PBKDF2 key derivation in `crypto/pbkdf2.go`, AES Key Wrap/Unwrap in `crypto/keywrap.go`, KMREQ/KMRSP extension types in `handshake/extensions.go`), but the key exchange is **not wired into the handshake**. Specifically:
->
-> - The listener does not read `config.Passphrase` during the handshake
-> - The Conclusion handler only processes HSREQ and SID extensions — no KMREQ/KMRSP exchange occurs
-> - The handshake always sets `EncryptionField: 0` (no encryption)
-> - No packet-level encryption or decryption is performed
->
-> **Impact**: The `-srt-passphrase` flag is accepted but silently ignored. Clients connecting without a passphrase will succeed. Clients connecting *with* a passphrase will likely fail because the server never responds with KMRSP.
->
-> For encrypted transport, use RTMPS (TLS) which encrypts the entire connection.
+### SRT Encryption
+
+SRT encryption provides end-to-end AES-CTR encryption of media data using a shared passphrase. The implementation follows the [Haivision SRT encryption specification](https://github.com/Haivision/srt/blob/master/docs/features/encryption.md).
+
+**Key Exchange Flow:**
+1. Client generates a random 16-byte salt and Stream Encrypting Key (SEK)
+2. Client derives a Key Encrypting Key (KEK) via PBKDF2-HMAC-SHA1 from passphrase + LSB 64 bits of salt (2048 iterations)
+3. Client wraps SEK with KEK using AES Key Wrap (RFC 3394)
+4. Client sends wrapped key in KMREQ extension during Conclusion handshake
+5. Server derives same KEK, unwraps SEK, sends KMRSP to confirm
+6. All data packets are encrypted/decrypted with AES-CTR using the SEK
+
+**Key Rotation:**
+For long-running streams, the sender periodically rotates the SEK (typically every ~2^24 packets / ~6-7 hours). SRT uses an even/odd dual-key model:
+- Both even and odd key slots are maintained simultaneously
+- The sender pre-announces the new key via a post-handshake KMREQ control packet
+- Data packets carry a KK flag (2 bits) indicating which key encrypted the payload
+- The receiver installs the new key and acknowledges with KMRSP
+- Transition is hitless — no packets are lost during rekeying
+
+**Supported configurations:**
+| Key Length | Flag Value | Security Level |
+|-----------|-----------|----------------|
+| AES-128 | `-srt-pbkeylen 16` | Standard |
+| AES-192 | `-srt-pbkeylen 24` | Enhanced |
+| AES-256 | `-srt-pbkeylen 32` | Maximum (recommended) |
+
+**Crypto profile requirements:** Only AES-CTR cipher, no authentication (beyond key wrap integrity), MPEG-TS/SRT encapsulation, and passphrase-derived KEK (KEKI=0) are supported. Unsupported configurations are rejected with clear error messages.
 
 ## Stream ID Format
 
@@ -157,7 +173,7 @@ When the metrics endpoint is enabled (`-metrics-addr :8080`), SRT-specific count
 internal/srt/
 ├── packet/       SRT wire protocol: headers, data, control, ACK, NAK
 ├── circular/     31-bit sequence number arithmetic with wraparound
-├── crypto/       AES Key Wrap (RFC 3394) and PBKDF2 for encryption
+├── crypto/       AES-CTR cipher, KeySet (even/odd), KM parser, PBKDF2, AES Key Wrap
 ├── handshake/    SRT v5 handshake FSM with SYN cookies
 ├── conn/         Connection state machine with reliability
 │   ├── sender    Send buffer, retransmission queue, RTT tracking
@@ -182,7 +198,7 @@ internal/ingress/   Protocol-agnostic publish lifecycle manager
 
 3. **Protocol Transparency**: SRT streams are converted to standard `chunk.Message` format before entering the stream registry. Subscribers cannot distinguish SRT from RTMP sources.
 
-4. **Zero Dependencies**: The entire SRT stack — including AES encryption, PBKDF2, MPEG-TS demuxing, and codec conversion — is implemented in pure Go using only the standard library.
+4. **Zero Dependencies**: The entire SRT stack — including AES-CTR encryption, PBKDF2 key derivation, AES Key Wrap, KM parsing, MPEG-TS demuxing, and codec conversion — is implemented in pure Go using only the standard library.
 
 ## Codec Conversion
 
