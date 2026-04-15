@@ -337,6 +337,22 @@ func (l *Listener) HandleConclusion(hs *packet.HandshakeCIF, from *net.UDPAddr) 
 	if kmReq != nil {
 		keyLen := int(kmReq.KLen)
 
+		// Validate that the KMREQ carries a supported crypto profile.
+		// We only support AES-CTR, no authentication, MPEG-TS/SRT
+		// encapsulation, and the default passphrase-derived KEK.
+		if kmReq.Cipher != crypto.CipherAESCTR {
+			return nil, nil, fmt.Errorf("unsupported cipher type: %d (only AES-CTR supported)", kmReq.Cipher)
+		}
+		if kmReq.Auth != 0 {
+			return nil, nil, fmt.Errorf("unsupported auth type: %d (only none supported)", kmReq.Auth)
+		}
+		if kmReq.SE != crypto.SELiveSRT {
+			return nil, nil, fmt.Errorf("unsupported stream encapsulation: %d (only MPEG-TS/SRT supported)", kmReq.SE)
+		}
+		if kmReq.KEKI != 0 {
+			return nil, nil, fmt.Errorf("unsupported KEKI: %d (only passphrase-derived KEK supported)", kmReq.KEKI)
+		}
+
 		// Validate the key length matches our configuration.
 		if l.pbKeyLen != 0 && keyLen != l.pbKeyLen {
 			return nil, nil, fmt.Errorf("key length mismatch: client sent %d, server expects %d", keyLen, l.pbKeyLen)

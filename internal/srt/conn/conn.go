@@ -515,10 +515,37 @@ func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
 		return
 	}
 
-	// 3. Determine the key length from the KM message.
-	keyLen := int(km.KLen)
+	// 3. Validate the KM message carries a supported crypto profile.
+	//    We only support AES-CTR with no authentication, MPEG-TS/SRT
+	//    encapsulation, and the default passphrase-derived KEK (KEKI=0).
+	if km.Cipher != crypto.CipherAESCTR {
+		c.log.Warn("rejecting KMREQ: unsupported cipher", "cipher", km.Cipher)
+		return
+	}
+	if km.Auth != 0 {
+		c.log.Warn("rejecting KMREQ: unsupported auth type", "auth", km.Auth)
+		return
+	}
+	if km.SE != crypto.SELiveSRT {
+		c.log.Warn("rejecting KMREQ: unsupported stream encapsulation", "se", km.SE)
+		return
+	}
+	if km.KEKI != 0 {
+		c.log.Warn("rejecting KMREQ: unsupported KEKI (only passphrase-derived KEK supported)", "keki", km.KEKI)
+		return
+	}
 
-	// 4. Derive the KEK using PBKDF2 with the new salt from this KMREQ.
+	// 4. Validate the key length matches the negotiated size.
+	keyLen := int(km.KLen)
+	if c.config.PbKeyLen != 0 && keyLen != c.config.PbKeyLen {
+		c.log.Warn("rejecting KMREQ: key length mismatch",
+			"km_key_len", keyLen,
+			"negotiated_key_len", c.config.PbKeyLen,
+		)
+		return
+	}
+
+	// 5. Derive the KEK using PBKDF2 with the new salt from this KMREQ.
 	//    Per SRT spec §6.2.1, only the last 8 bytes (LSB 64 bits) of the
 	//    16-byte salt are used for PBKDF2 derivation.
 	kek, err := crypto.DeriveKey(c.config.Passphrase, km.Salt[len(km.Salt)-8:], keyLen)
@@ -527,7 +554,7 @@ func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
 		return
 	}
 
-	// 5. Unwrap the SEK(s) using AES Key Wrap (RFC 3394). If the passphrase
+	// 6. Unwrap the SEK(s) using AES Key Wrap (RFC 3394). If the passphrase
 	//    is wrong, Unwrap returns an integrity check error.
 	plaintext, err := crypto.Unwrap(kek, km.WrappedKey)
 	if err != nil {
@@ -535,7 +562,7 @@ func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
 		return
 	}
 
-	// 6. Install the unwrapped SEK(s) into the KeySet. For KKEven or KKOdd
+	// 7. Install the unwrapped SEK(s) into the KeySet. For KKEven or KKOdd
 	//    the plaintext is a single key; for KKBoth it's even||odd concatenated.
 	if err := c.config.KeySet.InstallKey(km.KK, plaintext, km.Salt, keyLen); err != nil {
 		c.log.Warn("failed to install rotated key", "kk", km.KK, "error", err)
@@ -548,7 +575,7 @@ func (c *Conn) handleKMREQ(ctrl *packet.ControlPacket) {
 		"cipher", "AES-CTR",
 	)
 
-	// 7. Send KMRSP back to the peer to confirm receipt.
+	// 8. Send KMRSP back to the peer to confirm receipt.
 	//    The response echoes the same KM message content.
 	c.sendKMRSP(ctrl.CIF)
 }
