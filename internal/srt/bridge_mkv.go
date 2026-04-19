@@ -73,6 +73,12 @@ func (b *Bridge) handleMKVAudio(frame *mkv.Frame) {
 		b.handleMKVEAC3(frame)
 	case "MP3":
 		b.handleMKVMP3(frame)
+	case "Vorbis":
+		if !b.vorbisWarned {
+			b.log.Warn("Vorbis audio not supported (no RTMP representation), use Opus instead",
+				"codec", frame.Codec)
+			b.vorbisWarned = true
+		}
 	default:
 		b.log.Debug("unsupported MKV audio codec", "codec", frame.Codec)
 	}

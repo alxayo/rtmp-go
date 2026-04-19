@@ -87,6 +87,7 @@ var codecMap = map[string]string{
 	"A_EAC3":           "EAC3",
 	"A_AAC":            "AAC",
 	"A_MP3":            "MP3",
+	"A_VORBIS":         "Vorbis",
 }
 
 // ─── Frame ──────────────────────────────────────────────────────────────────

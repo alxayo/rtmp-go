@@ -54,6 +54,7 @@ videoCodec   string           // detected video codec: "H265", "H264", "AV1", "V
 audioCodec   string           // detected audio codec: "AAC", "Opus", "FLAC", "AC3", "EAC3", "MP3"
 mdatStart    int64            // file offset where mdat box begins
 mdatDataSize int64            // total bytes written to mdat so far
+speexWarned  bool             // flag to warn only once about Speex not being supported
 }
 
 // mp4VideoSample stores per-frame metadata for the video track.
@@ -303,6 +304,16 @@ r.handleEnhancedAudio(msg, data)
 } else if soundFormat == 10 {
 // Legacy AAC
 r.handleLegacyAAC(msg, data)
+} else if soundFormat == 2 {
+// Legacy MP3 (SoundFormat=2) — no sequence header needed, self-describing
+r.audioCodec = "MP3"
+r.writeAudioSample(data[1:], msg.Timestamp)
+} else if soundFormat == 11 {
+// Speex has no standard MP4 representation
+if !r.speexWarned {
+r.logger.Warn("Speex audio not supported in MP4 recording; consider using Opus")
+r.speexWarned = true
+}
 }
 // Other audio codecs not using enhanced RTMP are not supported in MP4 recorder
 }

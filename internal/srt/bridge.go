@@ -113,6 +113,9 @@ type Bridge struct {
 	// We delay sending it until we see all three parameter sets (VPS, SPS, PPS).
 	vvcSeqHeaderSent bool
 
+	// mpeg2VideoWarned is true once we've logged a warning for unsupported MPEG-2 video.
+	mpeg2VideoWarned bool
+
 	// videoCodec tracks which codec is in use: "H264" or "H265"
 	// This tells us which parameter sets and sequence header builder to use.
 	videoCodec string
@@ -147,6 +150,19 @@ type Bridge struct {
 	// mp3Logged is true once we've logged the MP3 audio parameters.
 	// MP3 doesn't need a sequence header (it's self-describing), so we just log once.
 	mp3Logged bool
+
+	// vorbisWarned is true once we've logged a warning for unsupported Vorbis audio.
+	vorbisWarned bool
+
+	// --- Audio state (AAC-LATM, TS path) ---
+
+	// latmConfigSent is true once we've sent the AAC sequence header
+	// derived from the LATM StreamMuxConfig.
+	latmConfigSent bool
+
+	// latmASC caches the AudioSpecificConfig extracted from LATM frames.
+	// This is needed because not every LATM frame carries the config.
+	latmASC []byte
 
 	// audioTSBase is the PTS of the first audio frame (in 90kHz units).
 	// All subsequent audio timestamps are relative to this base.
@@ -336,15 +352,22 @@ func (b *Bridge) onFrame(frame *ts.MediaFrame) {
 		b.handleVVCFrame(frame)
 	case ts.StreamTypeAAC_ADTS:
 		b.handleAACFrame(frame)
+	case ts.StreamTypeAAC_LATM:
+		b.handleAACLATMFrame(frame)
 	case ts.StreamTypeAC3:
 		b.handleAC3Frame(frame)
 	case ts.StreamTypeEAC3:
 		b.handleEAC3Frame(frame)
 	case ts.StreamTypeMPEG1Audio, ts.StreamTypeMPEG2Audio:
 		b.handleMP3Frame(frame)
+	case ts.StreamTypeMPEG2Video:
+		if !b.mpeg2VideoWarned {
+			b.log.Warn("MPEG-2 video not supported (no RTMP representation), frames will be dropped",
+				"stream_type", frame.Stream.StreamType)
+			b.mpeg2VideoWarned = true
+		}
 	default:
-		// We support H.264, H.265, AAC, AC-3, E-AC-3, and MP3 for now.
-		// Other codecs (MPEG-2 video, etc.) are silently ignored.
+		// Other unsupported stream types are silently ignored.
 	}
 }
 
@@ -661,6 +684,66 @@ func (b *Bridge) handleAACFrame(frame *ts.MediaFrame) {
 
 	// Build the RTMP audio frame payload (raw AAC without ADTS)
 	payload := codec.BuildAACFrame(rawFrame)
+	b.pushAudio(payload, rtmpTS)
+}
+
+// handleAACLATMFrame converts an AAC-LATM frame (stream type 0x11) to an
+// RTMP audio message. LATM is an alternative framing to ADTS, used by some
+// broadcast encoders (e.g., Japanese ISDB, some DVB systems).
+//
+// The conversion strips the LATM encapsulation to get raw AAC, then uses
+// the same RTMP AAC path as ADTS streams (BuildAACSequenceHeaderFromConfig
+// + BuildAACFrame).
+func (b *Bridge) handleAACLATMFrame(frame *ts.MediaFrame) {
+	if len(frame.Data) < 3 {
+		b.log.Debug("AAC-LATM frame too short", "len", len(frame.Data))
+		return
+	}
+
+	// Strip LATM framing to get raw AAC + AudioSpecificConfig
+	rawAAC, asc, err := codec.StripLATM(frame.Data, b.latmASC)
+	if err != nil {
+		b.log.Debug("failed to strip LATM", "error", err)
+		return
+	}
+
+	// Cache the ASC for future frames that use useSameStreamMux=1
+	if asc != nil && len(asc) > 0 {
+		b.latmASC = asc
+	}
+
+	// Send the AAC sequence header on first config or config change
+	if b.latmASC != nil && !b.latmConfigSent {
+		seqHeader := codec.BuildAACSequenceHeaderFromConfig(b.latmASC)
+		b.pushAudio(seqHeader, 0)
+		b.latmConfigSent = true
+
+		b.log.Info("sent AAC sequence header (from LATM)",
+			"asc_len", len(b.latmASC),
+			"asc_hex", fmt.Sprintf("%X", b.latmASC),
+		)
+	}
+
+	// Can't send audio frames until we have the sequence header
+	if !b.latmConfigSent {
+		return
+	}
+
+	// Convert PTS from 90kHz to milliseconds
+	pts := frame.PTS
+	if pts < 0 {
+		return
+	}
+
+	if !b.audioTSSet {
+		b.audioTSBase = pts
+		b.audioTSSet = true
+	}
+
+	rtmpTS := uint32((pts - b.audioTSBase) / 90)
+
+	// Build the RTMP audio frame payload (raw AAC)
+	payload := codec.BuildAACFrame(rawAAC)
 	b.pushAudio(payload, rtmpTS)
 }
 
