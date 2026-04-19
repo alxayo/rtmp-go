@@ -6,12 +6,14 @@ Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording +
 **Now with SRT ingest** — accept both RTMP and SRT streams simultaneously.
 
 > **Status:** ✅ Core features operational  
-> **Protocols:** ✅ RTMP, RTMPS (TLS), SRT (UDP ingest)  
-> **Codecs:** ✅ H.264, H.265/HEVC, AV1, VP8, VP9, Opus, FLAC, AC-3, E-AC-3 via Enhanced RTMP  
-> **SRT Ingest:** ✅ MPEG-TS + Matroska/WebM containers (auto-detected)  
-> **Recording:** ✅ Automatic FLV/MP4 recording with codec preservation  
-> **Relay:** ✅ Multi-subscriber with late-join support  
-> **Tested with:** OBS Studio, FFmpeg, ffplay, VLC
+> **Protocols:** ✅ RTMP, Enhanced RTMP, RTMPS (TLS), SRT (UDP)  
+> **Video:** ✅ H.264, H.265/HEVC, AV1, VP9, VP8, VVC/H.266  
+> **Audio:** ✅ AAC, MP3, Opus, FLAC, AC-3, E-AC-3  
+> **SRT Ingest:** ✅ MPEG-TS + Matroska/WebM (auto-detected), AAC-LATM support  
+> **Recording:** ✅ Automatic FLV (H.264) / MP4 (all modern codecs)  
+> **Relay:** ✅ Pure passthrough with late-join support  
+> **Tested with:** OBS Studio, FFmpeg, ffplay, VLC  
+> **Docs:** See [Codec Support Matrix](docs/codec-support.md) for full compatibility details
 
 ## Quick Start
 
@@ -386,6 +388,27 @@ dlv debug ./cmd/rtmp-server -- -listen :1935 -log-level debug
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of all releases and changes.
+
+## Supported Codecs
+
+See the full [Codec Support Matrix](docs/codec-support.md) for detailed compatibility tables.
+
+**Quick overview:**
+
+| | RTMP | Enhanced RTMP | SRT (TS) | SRT (MKV) | FLV Rec | MP4 Rec |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| H.264 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| H.265 | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| AV1 | — | ✅ | — | ✅ | — | ✅ |
+| VP9 | — | ✅ | — | ✅ | — | ✅ |
+| VP8 | — | ✅ | — | ✅ | — | ✅ |
+| VVC | — | ✅ | ✅ | ✅ | — | ✅ |
+| AAC | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MP3 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Opus | — | ✅ | — | ✅ | — | ✅ |
+| FLAC | — | ✅ | — | ✅ | — | ✅ |
+| AC-3 | — | ✅ | ✅ | ✅ | — | ✅ |
+| E-AC-3 | — | ✅ | ✅ | ✅ | — | ✅ |
 
 ## License
 
