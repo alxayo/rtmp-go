@@ -82,6 +82,19 @@ The minimum TLS version is 1.2.
 | `-srt-passphrase-file` | `""` | Path to JSON file mapping stream keys to passphrases for per-stream SRT encryption. Mutually exclusive with `-srt-passphrase`. Supports hot reload via SIGHUP. |
 | `-srt-pbkeylen` | `16` | AES key length in bytes: 16, 24, or 32 |
 
+## Reconnect (E-RTMP v2)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-reconnect-url` | *(none)* | URL to redirect clients to when SIGUSR1 triggers a reconnect-all request |
+
+When `SIGUSR1` is sent to the server process (`kill -USR1 <pid>`), all connected clients receive an E-RTMP v2 `NetConnection.Connect.ReconnectRequest` message asking them to gracefully disconnect and reconnect. If `-reconnect-url` is set, clients are redirected to that URL; otherwise, they reconnect to the same server.
+
+This is useful for:
+- **Server maintenance**: drain all clients before shutting down
+- **Load balancing**: redirect clients to a different server
+- **Graceful restarts**: clients reconnect automatically after the server restarts
+
 When `-srt-listen` is set, the server starts a UDP listener for SRT publishers. SRT streams are automatically converted to RTMP format and injected into the stream registry — existing RTMP subscribers can watch SRT sources transparently.
 
 When `-srt-passphrase` is set, all SRT connections require AES encryption. Clients must provide the matching passphrase. Connections with wrong or missing passphrases are rejected during the handshake.

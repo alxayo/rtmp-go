@@ -52,6 +52,9 @@ type cliConfig struct {
 	srtPassphrase     string // SRT encryption passphrase (empty = no encryption)
 	srtPbKeyLen       int    // AES key length: 16, 24, or 32 (default 16)
 	srtPassphraseFile string // path to JSON file mapping stream keys → passphrases (per-stream encryption; mutually exclusive with srtPassphrase)
+
+	// Reconnect
+	reconnectURL string // URL to redirect clients to when SIGUSR1 triggers a reconnect-all request
 }
 
 func parseFlags(args []string) (*cliConfig, error) {
@@ -99,6 +102,9 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.srtPassphrase, "srt-passphrase", "", "SRT encryption passphrase (empty = no encryption)")
 	fs.IntVar(&cfg.srtPbKeyLen, "srt-pbkeylen", 16, "SRT AES key length: 16, 24, or 32")
 	fs.StringVar(&cfg.srtPassphraseFile, "srt-passphrase-file", "", "Path to JSON file mapping stream keys to passphrases (per-stream encryption)")
+
+	// Reconnect (E-RTMP v2)
+	fs.StringVar(&cfg.reconnectURL, "reconnect-url", "", "URL to redirect clients to on SIGUSR1 reconnect request")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **E-RTMP v2 ModEx support**: Parse ModEx (Modifier Extension) packets for both video and audio, including nanosecond timestamp offset extraction
+- **E-RTMP v2 Multitrack support**: Parse multitrack video/audio packets (OneTrack, ManyTracks, ManyTracksManyCodecs)
+- **E-RTMP v2 additional packet types**: Handle AudioPacketType.SequenceEnd (4), MultichannelConfig (5), VideoPacketType.MPEG2TSSequenceStart (5)
+- **Reconnect Request (E-RTMP v2)**: Server-initiated client reconnection via `NetConnection.Connect.ReconnectRequest`
+  - `RequestReconnect(connID, tcUrl, description)` for single-connection redirect
+  - `RequestReconnectAll(tcUrl, description)` for server-wide maintenance
+  - `Connection.SendReconnectRequest(tcUrl, description)` for connection-level API
+  - SIGUSR1 signal handler triggers reconnect-all (with optional `-reconnect-url` redirect)
 - **VP8 E-RTMP support**: Added VP8 video codec (FourCC `vp08`) for Enhanced RTMP, completing full E-RTMP v2 video codec parity (H.264, H.265, AV1, VP8, VP9, VVC)
 - **SRT Encryption**: Full AES-CTR encryption for SRT ingest streams with passphrase-based authentication
   - KMREQ/KMRSP key exchange during SRT handshake (KM message parser per SRT RFC §3.2.2)

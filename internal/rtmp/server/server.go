@@ -24,6 +24,7 @@ import (
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
+	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/hooks"
 	"github.com/alxayo/go-rtmp/internal/srt"
@@ -693,6 +694,80 @@ func (s *Server) RemoveConnection(id string) {
 	delete(s.conns, id)
 	s.mu.Unlock()
 	metrics.ConnectionsActive.Add(-1)
+}
+
+// RequestReconnect sends an E-RTMP v2 reconnect request to a specific
+// connection identified by connID. The client is asked to gracefully
+// disconnect and reconnect, optionally to a different URL specified by tcUrl.
+//
+// This is useful for targeted load balancing — redirect specific clients
+// to different servers without affecting other connections.
+//
+// Parameters:
+//   - connID: the unique connection ID (returned by Connection.ID())
+//   - tcUrl: optional redirect URL (empty string = reconnect to same server)
+//   - description: human-readable reason for the reconnect
+func (s *Server) RequestReconnect(connID string, tcUrl string, description string) error {
+	// Look up the connection by ID under a read lock. The connection map
+	// is protected by s.mu to allow concurrent reads while preventing
+	// modification during lookup.
+	s.mu.RLock()
+	conn, ok := s.conns[connID]
+	s.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("connection %s not found", connID)
+	}
+
+	// Delegate to the connection's SendReconnectRequest method, which
+	// builds the AMF0 onStatus message and enqueues it for transmission.
+	return conn.SendReconnectRequest(tcUrl, description)
+}
+
+// RequestReconnectAll sends an E-RTMP v2 reconnect request to ALL active
+// connections. This is useful for graceful server maintenance — all clients
+// are asked to reconnect (optionally to a different server via tcUrl).
+//
+// Returns the number of connections that were successfully sent the request.
+// Connections that fail to receive the message (e.g., already disconnecting)
+// are logged as warnings but do not stop the broadcast to other connections.
+//
+// Parameters:
+//   - tcUrl: optional redirect URL (empty string = reconnect to same server)
+//   - description: human-readable reason for the reconnect
+func (s *Server) RequestReconnectAll(tcUrl string, description string) int {
+	// Build the reconnect message once and reuse it for all connections.
+	// This avoids re-encoding the same AMF0 payload for every connection.
+	msg, err := rpc.BuildReconnectRequest(tcUrl, description)
+	if err != nil {
+		s.log.Error("failed to build reconnect request", "error", err)
+		return 0
+	}
+
+	// Snapshot the connection list under a read lock, then release the lock
+	// before sending messages. This prevents holding the lock during I/O
+	// (SendMessage may block briefly if the outbound queue is full).
+	s.mu.RLock()
+	conns := make([]*iconn.Connection, 0, len(s.conns))
+	for _, c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.RUnlock()
+
+	// Send the reconnect request to each connection. Count successes and
+	// log failures as warnings (a failing send typically means the connection
+	// is already closing, which is fine).
+	count := 0
+	for _, c := range conns {
+		if err := c.SendMessage(msg); err != nil {
+			s.log.Warn("reconnect request send failed", "conn_id", c.ID(), "error", err)
+		} else {
+			count++
+		}
+	}
+
+	s.log.Info("reconnect request sent to all connections", "count", count, "tcUrl", tcUrl)
+	return count
 }
 
 // singleConnListener wraps a single pre-accepted net.Conn as a net.Listener.

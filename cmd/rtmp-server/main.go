@@ -138,6 +138,24 @@ func main() {
 		}()
 	}
 
+	// Register SIGUSR1 handler for E-RTMP v2 reconnect-all.
+	// Sending SIGUSR1 to the process asks ALL connected clients to gracefully
+	// disconnect and reconnect. If -reconnect-url is set, clients are redirected
+	// to that URL; otherwise, they reconnect to the same server.
+	// Usage: kill -USR1 <pid>
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGUSR1)
+		for range sigCh {
+			desc := "Server maintenance — please reconnect"
+			if cfg.reconnectURL != "" {
+				desc = fmt.Sprintf("Server maintenance — please reconnect to %s", cfg.reconnectURL)
+			}
+			count := server.RequestReconnectAll(cfg.reconnectURL, desc)
+			log.Info("SIGUSR1: reconnect request sent", "count", count, "redirect", cfg.reconnectURL)
+		}
+	}()
+
 	// Set up signal handling for graceful shutdown.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

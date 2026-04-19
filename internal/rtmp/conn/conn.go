@@ -15,9 +15,10 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/logger"
-	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/handshake"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
+	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 )
 
 const (
@@ -130,6 +131,23 @@ func (c *Connection) SendMessage(msg *chunk.Message) error {
 	case <-deadline.C:
 		return fmt.Errorf("send queue full (len=%d)", len(c.outboundQueue))
 	}
+}
+
+// SendReconnectRequest sends an E-RTMP v2 reconnect request to this connection,
+// asking the client to gracefully disconnect and reconnect. If tcUrl is non-empty,
+// the client should reconnect to that URL instead of the original server.
+//
+// Parameters:
+//   - tcUrl: optional redirect URL (empty string = reconnect to same server)
+//   - description: human-readable reason for the reconnect (e.g., "Server maintenance")
+func (c *Connection) SendReconnectRequest(tcUrl, description string) error {
+	// Build the onStatus AMF0 command message with the reconnect code
+	msg, err := rpc.BuildReconnectRequest(tcUrl, description)
+	if err != nil {
+		return fmt.Errorf("build reconnect request: %w", err)
+	}
+	// Enqueue the message for transmission via the connection's write loop
+	return c.SendMessage(msg)
 }
 
 // startReadLoop begins the dechunk → dispatch loop.

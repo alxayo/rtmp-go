@@ -245,6 +245,68 @@ Enhanced RTMP is fully backward compatible:
 - The server auto-detects enhanced packets — no configuration needed
 - Compatible with FFmpeg 6.1+, OBS 29.1+, and SRS 6.0+
 
+### ModEx (Modifier Extension)
+
+VideoPacketType 7 and AudioPacketType 7 signal a ModEx wrapper. ModEx adds modifier extensions to another packet, enabling features like sub-millisecond timestamp precision:
+
+```
+[ModExType:4bits][DataSize:4bits][ModExData:1-4 bytes][WrappedPacket...]
+```
+
+| ModExType | Name | Description |
+|-----------|------|-------------|
+| 0 | TimestampOffsetNano | Nanosecond offset (0–999999) added to the base RTMP millisecond timestamp |
+
+DataSize encoding: 0=1 byte, 1=2 bytes, 2=3 bytes, 3=4 bytes. Values 4+ are reserved.
+
+Use `ParseModEx()` on the payload to extract the modifier data and wrapped packet.
+
+### Multitrack
+
+VideoPacketType 6 and AudioPacketType 6 signal multitrack content — multiple audio or video tracks in a single RTMP stream:
+
+```
+[AvMultitrackType:4bits][InnerPacketType:4bits][TrackData...]
+```
+
+| AvMultitrackType | Name | Description |
+|-----------------|------|-------------|
+| 0 | OneTrack | Single track with explicit track ID |
+| 1 | ManyTracks | Multiple tracks, same codec |
+| 2 | ManyTracksManyCodecs | Multiple tracks, different codecs per track |
+
+Use `ParseMultitrack()` on the payload to extract individual tracks.
+
+### Additional Packet Types
+
+| Type | Value | Name | Description |
+|------|-------|------|-------------|
+| Video | 5 | MPEG2TSSequenceStart | MPEG-2 TS sequence start (recognized, passed through) |
+| Audio | 4 | SequenceEnd | Signals end of audio stream |
+| Audio | 5 | MultichannelConfig | Multichannel audio layout configuration |
+
+### Reconnect Request (E-RTMP v2)
+
+The server can request clients to gracefully disconnect and reconnect by sending an `onStatus` command with the status code `NetConnection.Connect.ReconnectRequest`. This is useful for server maintenance, load balancing, and graceful shutdown.
+
+```
+Server → Client: onStatus(0, null, {
+    level: "status",
+    code: "NetConnection.Connect.ReconnectRequest",
+    description: "Server maintenance",
+    tcUrl: "rtmp://new-server/live"  // optional redirect
+})
+```
+
+- **Transaction ID**: Always 0 (no response expected from the client)
+- **tcUrl**: Optional. When present, the client should reconnect to this URL instead of the original. When absent, the client reconnects to the same server.
+- **description**: Human-readable reason for the reconnect request
+
+Clients supporting E-RTMP v2 will disconnect and reconnect to the specified URL (or the original URL if no `tcUrl` is provided). The server exposes this via:
+- `Server.RequestReconnect(connID, tcUrl, description)` — target a single connection
+- `Server.RequestReconnectAll(tcUrl, description)` — broadcast to all connections
+- `SIGUSR1` signal — triggers `RequestReconnectAll` with the optional `-reconnect-url` flag
+
 ## Sequence Headers
 
 The first audio and video messages from a publisher are typically **sequence headers** — they contain codec configuration data that decoders need before processing any media frames:
