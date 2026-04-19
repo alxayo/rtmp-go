@@ -51,6 +51,8 @@ func (b *Bridge) handleMKVVideo(frame *mkv.Frame) {
 		b.handleMKVH264(frame)
 	case "H265":
 		b.handleMKVH265(frame)
+	case "VVC":
+		b.handleMKVVVC(frame)
 	default:
 		b.log.Debug("unsupported MKV video codec", "codec", frame.Codec)
 	}
@@ -69,6 +71,8 @@ func (b *Bridge) handleMKVAudio(frame *mkv.Frame) {
 		b.handleMKVAC3(frame)
 	case "EAC3":
 		b.handleMKVEAC3(frame)
+	case "MP3":
+		b.handleMKVMP3(frame)
 	default:
 		b.log.Debug("unsupported MKV audio codec", "codec", frame.Codec)
 	}
@@ -298,6 +302,68 @@ func (b *Bridge) handleMKVH265(frame *mkv.Frame) {
 	b.pushVideo(payload, rtmpTS)
 }
 
+// handleMKVVVC processes VVC/H.266 video frames from MKV.
+// VVC uses a VVCDecoderConfigurationRecord in CodecPrivate (same concept as
+// HEVCDecoderConfigurationRecord) and length-prefixed NALUs in frame data.
+func (b *Bridge) handleMKVVVC(frame *mkv.Frame) {
+	// Send VVC sequence header on first frame using CodecPrivate
+	if !b.mkvVideoSeqSent {
+		if frame.CodecPrivate == nil {
+			b.log.Warn("VVC frame without CodecPrivate, waiting for config")
+			return
+		}
+
+		config, err := codec.ParseVVCDecoderConfig(frame.CodecPrivate)
+		if err != nil {
+			b.log.Warn("failed to parse VVC decoder config", "error", err)
+			return
+		}
+
+		b.mkvNALULenSize = config.NALULengthSize
+
+		seqHeader := codec.BuildVVCSequenceHeader(config.VPS, config.SPS, config.PPS)
+		b.pushVideo(seqHeader, 0)
+		b.mkvVideoSeqSent = true
+		b.videoCodec = "VVC"
+
+		b.log.Info("sent VVC sequence header (MKV)",
+			"vps_len", len(config.VPS),
+			"sps_len", len(config.SPS),
+			"pps_len", len(config.PPS),
+			"nalu_len_size", config.NALULengthSize,
+		)
+	}
+
+	if b.mkvNALULenSize == 0 {
+		return
+	}
+
+	// Split the length-prefixed frame data into individual NALUs
+	nalus := codec.SplitLengthPrefixed(frame.Data, b.mkvNALULenSize)
+	if len(nalus) == 0 {
+		return
+	}
+
+	// Filter out parameter sets and delimiters
+	var frameNalus [][]byte
+	for _, nalu := range nalus {
+		naluType := codec.VVCNALUType(nalu)
+		// Skip VPS=32, SPS=33, PPS=34, APS=35, AUD=38
+		if naluType >= 32 && naluType <= 35 || naluType == 38 {
+			continue
+		}
+		frameNalus = append(frameNalus, nalu)
+	}
+
+	if len(frameNalus) == 0 {
+		return
+	}
+
+	rtmpTS := b.mkvVideoTimestamp(frame.Timestamp)
+	payload := codec.BuildVVCVideoFrame(frameNalus, frame.IsKey, 0)
+	b.pushVideo(payload, rtmpTS)
+}
+
 // ─── Audio codec handlers ───────────────────────────────────────────────────
 
 // handleMKVOpus processes Opus audio frames from MKV.
@@ -446,6 +512,34 @@ func (b *Bridge) handleMKVEAC3(frame *mkv.Frame) {
 
 	rtmpTS := b.mkvAudioTimestamp(frame.Timestamp)
 	payload := codec.BuildEAC3AudioFrame(frame.Data)
+	b.pushAudio(payload, rtmpTS)
+}
+
+// handleMKVMP3 processes MP3 audio frames from MKV.
+// MP3 uses legacy RTMP format (SoundFormat=2) — no sequence header needed.
+// Each MP3 frame is self-describing with its own sync word and parameters.
+func (b *Bridge) handleMKVMP3(frame *mkv.Frame) {
+	// MP3 frames need at least 4 bytes for the frame header
+	if len(frame.Data) < 4 {
+		b.log.Debug("MP3 frame too short (MKV)", "len", len(frame.Data))
+		return
+	}
+
+	// Log info on first MP3 frame for diagnostics
+	if !b.mp3Logged {
+		info, err := codec.ParseMP3FrameHeader(frame.Data)
+		if err == nil {
+			b.log.Info("receiving MP3 audio (MKV)",
+				"sample_rate", info.SampleRate,
+				"channels", info.Channels,
+				"bitrate_kbps", info.Bitrate,
+			)
+		}
+		b.mp3Logged = true
+	}
+
+	rtmpTS := b.mkvAudioTimestamp(frame.Timestamp)
+	payload := codec.BuildMP3AudioTag(frame.Data)
 	b.pushAudio(payload, rtmpTS)
 }
 

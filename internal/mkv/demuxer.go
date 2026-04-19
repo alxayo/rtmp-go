@@ -80,6 +80,7 @@ var codecMap = map[string]string{
 	"V_AV1":            "AV1",
 	"V_MPEG4/ISO/AVC":  "H264",
 	"V_MPEGH/ISO/HEVC": "H265",
+	"V_MPEGH/ISO/VVC":  "VVC",
 	"A_OPUS":           "Opus",
 	"A_FLAC":           "FLAC",
 	"A_AC3":            "AC3",

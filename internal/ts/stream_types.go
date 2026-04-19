@@ -45,6 +45,10 @@ const (
 	// StreamTypeEAC3 identifies an E-AC-3 (Dolby Digital Plus) audio stream.
 	// This uses the ATSC registration descriptor value (0x87).
 	StreamTypeEAC3 uint8 = 0x87
+
+	// StreamTypeVVC identifies a VVC/H.266 video elementary stream.
+	// Registered in ISO/IEC 13818-1 Table 2-29.
+	StreamTypeVVC uint8 = 0x33
 )
 
 // StreamTypeName returns a human-readable name for a stream type constant.
@@ -70,6 +74,8 @@ func StreamTypeName(st uint8) string {
 		return "AC-3"
 	case StreamTypeEAC3:
 		return "E-AC-3"
+	case StreamTypeVVC:
+		return "VVC"
 	default:
 		return "Unknown"
 	}

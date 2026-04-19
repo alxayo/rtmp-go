@@ -100,6 +100,19 @@ type Bridge struct {
 	// We delay sending it until we see all three parameter sets (VPS, SPS, PPS).
 	h265SeqHeaderSent bool
 
+	// --- Video state (VVC, TS path) ---
+
+	// vvcVPS, vvcSPS, and vvcPPS cache the most recent VVC Video Parameter Set,
+	// Sequence Parameter Set, and Picture Parameter Set. Like H.265, VVC requires
+	// all three to build the decoder configuration record.
+	vvcVPS []byte
+	vvcSPS []byte
+	vvcPPS []byte
+
+	// vvcSeqHeaderSent is true once we've sent the VVC video sequence header.
+	// We delay sending it until we see all three parameter sets (VPS, SPS, PPS).
+	vvcSeqHeaderSent bool
+
 	// videoCodec tracks which codec is in use: "H264" or "H265"
 	// This tells us which parameter sets and sequence header builder to use.
 	videoCodec string
@@ -130,6 +143,10 @@ type Bridge struct {
 	// eac3ConfigSent is true once we've sent the E-AC-3 Enhanced RTMP sequence header.
 	// We delay sending it until we parse the first E-AC-3 syncframe header.
 	eac3ConfigSent bool
+
+	// mp3Logged is true once we've logged the MP3 audio parameters.
+	// MP3 doesn't need a sequence header (it's self-describing), so we just log once.
+	mp3Logged bool
 
 	// audioTSBase is the PTS of the first audio frame (in 90kHz units).
 	// All subsequent audio timestamps are relative to this base.
@@ -314,15 +331,20 @@ func (b *Bridge) onFrame(frame *ts.MediaFrame) {
 	case ts.StreamTypeH265:
 		b.videoCodec = "H265"
 		b.handleH265Frame(frame)
+	case ts.StreamTypeVVC:
+		b.videoCodec = "VVC"
+		b.handleVVCFrame(frame)
 	case ts.StreamTypeAAC_ADTS:
 		b.handleAACFrame(frame)
 	case ts.StreamTypeAC3:
 		b.handleAC3Frame(frame)
 	case ts.StreamTypeEAC3:
 		b.handleEAC3Frame(frame)
+	case ts.StreamTypeMPEG1Audio, ts.StreamTypeMPEG2Audio:
+		b.handleMP3Frame(frame)
 	default:
-		// We support H.264, H.265, AAC, AC-3, and E-AC-3 for now.
-		// Other codecs (MPEG-2, MP3, etc.) are silently ignored.
+		// We support H.264, H.265, AAC, AC-3, E-AC-3, and MP3 for now.
+		// Other codecs (MPEG-2 video, etc.) are silently ignored.
 	}
 }
 
@@ -519,6 +541,86 @@ func (b *Bridge) handleH265Frame(frame *ts.MediaFrame) {
 	b.pushVideo(payload, rtmpTS)
 }
 
+// handleVVCFrame converts a VVC (H.266) access unit from Annex B format
+// (as carried in MPEG-TS) to RTMP's AVCC format and pushes it.
+// VVC uses the same parameter set structure as H.265 (VPS, SPS, PPS).
+func (b *Bridge) handleVVCFrame(frame *ts.MediaFrame) {
+	// Split the raw data into individual VVC NAL units.
+	nalus := codec.SplitVVCAnnexB(frame.Data)
+	if len(nalus) == 0 {
+		return
+	}
+
+	// Look for VPS, SPS, and PPS NALUs
+	vps, sps, pps, found := codec.ExtractVVCVPSSPSPPS(nalus)
+	if found {
+		if !b.vvcSeqHeaderSent ||
+			!bytes.Equal(b.vvcVPS, vps) ||
+			!bytes.Equal(b.vvcSPS, sps) ||
+			!bytes.Equal(b.vvcPPS, pps) {
+
+			b.vvcVPS = bytes.Clone(vps)
+			b.vvcSPS = bytes.Clone(sps)
+			b.vvcPPS = bytes.Clone(pps)
+
+			seqHeader := codec.BuildVVCSequenceHeader(b.vvcVPS, b.vvcSPS, b.vvcPPS)
+			b.pushVideo(seqHeader, 0)
+			b.vvcSeqHeaderSent = true
+
+			b.log.Info("sent VVC sequence header",
+				"vps_len", len(vps),
+				"sps_len", len(sps),
+				"pps_len", len(pps),
+			)
+		}
+	}
+
+	if !b.vvcSeqHeaderSent {
+		return
+	}
+
+	// Convert timestamps from MPEG-TS (90kHz) to RTMP (milliseconds)
+	dts := frame.DTS
+	if dts < 0 {
+		dts = frame.PTS
+	}
+	if dts < 0 {
+		return
+	}
+
+	if !b.videoTSSet {
+		b.videoTSBase = dts
+		b.videoTSSet = true
+	}
+
+	rtmpTS := uint32((dts - b.videoTSBase) / 90)
+
+	// Calculate CTS for B-frame support
+	cts := int32(0)
+	if frame.PTS >= 0 && frame.DTS >= 0 {
+		cts = int32((frame.PTS - frame.DTS) / 90)
+	}
+
+	// Filter out parameter sets and delimiters from frame data
+	var frameNalus [][]byte
+	for _, nalu := range nalus {
+		naluType := codec.VVCNALUType(nalu)
+		// Skip VPS=32, SPS=33, PPS=34, APS=35, AUD=38
+		if naluType >= 32 && naluType <= 35 || naluType == 38 {
+			continue
+		}
+		frameNalus = append(frameNalus, nalu)
+	}
+
+	if len(frameNalus) == 0 {
+		return
+	}
+
+	isKey := codec.IsVVCKeyframeNALU(frameNalus[0])
+	payload := codec.BuildVVCVideoFrame(frameNalus, isKey, cts)
+	b.pushVideo(payload, rtmpTS)
+}
+
 // handleAACFrame converts an AAC ADTS frame to RTMP's raw AAC format
 // and pushes it.
 func (b *Bridge) handleAACFrame(frame *ts.MediaFrame) {
@@ -656,6 +758,49 @@ func (b *Bridge) handleEAC3Frame(frame *ts.MediaFrame) {
 
 	// Build the Enhanced RTMP audio frame with the complete E-AC-3 syncframe
 	payload := codec.BuildEAC3AudioFrame(frame.Data)
+	b.pushAudio(payload, rtmpTS)
+}
+
+// handleMP3Frame converts an MP3 frame from MPEG-TS to a legacy RTMP audio message.
+// MP3 uses legacy FLV format (SoundFormat=2) — no sequence header is needed since
+// every MP3 frame is self-describing (contains its own sync word + parameters).
+func (b *Bridge) handleMP3Frame(frame *ts.MediaFrame) {
+	// MP3 frames need at least 4 bytes for the frame header
+	if len(frame.Data) < 4 {
+		b.log.Debug("MP3 frame too short", "len", len(frame.Data))
+		return
+	}
+
+	// Log info on first MP3 frame for diagnostics
+	if !b.mp3Logged {
+		info, err := codec.ParseMP3FrameHeader(frame.Data)
+		if err == nil {
+			b.log.Info("receiving MP3 audio",
+				"sample_rate", info.SampleRate,
+				"channels", info.Channels,
+				"bitrate_kbps", info.Bitrate,
+				"layer", info.Layer,
+				"version", info.Version,
+			)
+		}
+		b.mp3Logged = true
+	}
+
+	// Convert PTS from 90kHz to milliseconds
+	pts := frame.PTS
+	if pts < 0 {
+		return
+	}
+
+	if !b.audioTSSet {
+		b.audioTSBase = pts
+		b.audioTSSet = true
+	}
+
+	rtmpTS := uint32((pts - b.audioTSBase) / 90)
+
+	// Build legacy RTMP audio tag (SoundFormat=2, no sequence header)
+	payload := codec.BuildMP3AudioTag(frame.Data)
 	b.pushAudio(payload, rtmpTS)
 }
 
