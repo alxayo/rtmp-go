@@ -11,7 +11,8 @@ package srt
 //   2. Feeds them to the TS demuxer, which extracts elementary streams
 //   3. Converts H.264 video from Annex B to AVCC format (what RTMP expects)
 //   4. Converts AAC audio from ADTS to raw format (what RTMP expects)
-//   5. Wraps everything in chunk.Message and pushes it to the ingress manager
+//   5. Converts AC-3/E-AC-3 audio to Enhanced RTMP format (FourCC-based tags)
+//   6. Wraps everything in chunk.Message and pushes it to the ingress manager
 //
 // From the RTMP server's perspective, SRT streams look identical to native
 // RTMP publishes — same internal data format, same routing, same subscribers.
@@ -80,11 +81,23 @@ type Bridge struct {
 	// videoTSSet is true once we've recorded the first video timestamp.
 	videoTSSet bool
 
-	// --- Audio state ---
+	// --- Audio state (AAC) ---
 
 	// aacConfigSent is true once we've sent the AAC sequence header.
 	// We delay sending it until we parse the first ADTS header.
 	aacConfigSent bool
+
+	// --- Audio state (AC-3) ---
+
+	// ac3ConfigSent is true once we've sent the AC-3 Enhanced RTMP sequence header.
+	// We delay sending it until we parse the first AC-3 syncframe header.
+	ac3ConfigSent bool
+
+	// --- Audio state (E-AC-3) ---
+
+	// eac3ConfigSent is true once we've sent the E-AC-3 Enhanced RTMP sequence header.
+	// We delay sending it until we parse the first E-AC-3 syncframe header.
+	eac3ConfigSent bool
 
 	// audioTSBase is the PTS of the first audio frame (in 90kHz units).
 	// All subsequent audio timestamps are relative to this base.
@@ -162,8 +175,12 @@ func (b *Bridge) onFrame(frame *ts.MediaFrame) {
 		b.handleH265Frame(frame)
 	case ts.StreamTypeAAC_ADTS:
 		b.handleAACFrame(frame)
+	case ts.StreamTypeAC3:
+		b.handleAC3Frame(frame)
+	case ts.StreamTypeEAC3:
+		b.handleEAC3Frame(frame)
 	default:
-		// We support H.264, H.265, and AAC for now.
+		// We support H.264, H.265, AAC, AC-3, and E-AC-3 for now.
 		// Other codecs (MPEG-2, MP3, etc.) are silently ignored.
 	}
 }
@@ -401,6 +418,103 @@ func (b *Bridge) handleAACFrame(frame *ts.MediaFrame) {
 
 	// Build the RTMP audio frame payload (raw AAC without ADTS)
 	payload := codec.BuildAACFrame(rawFrame)
+	b.pushAudio(payload, rtmpTS)
+}
+
+// handleAC3Frame converts an AC-3 syncframe to an Enhanced RTMP audio message
+// and pushes it. AC-3 (Dolby Digital) uses Enhanced RTMP tags with FourCC 'ac-3'.
+func (b *Bridge) handleAC3Frame(frame *ts.MediaFrame) {
+	// Validate the syncframe — we need at least 8 bytes for the AC-3 header.
+	if len(frame.Data) < 8 {
+		b.log.Debug("AC-3 frame too short", "len", len(frame.Data))
+		return
+	}
+
+	// Send the sequence header on the first frame.
+	// Parse the syncframe header to extract sample rate, channels, etc.
+	if !b.ac3ConfigSent {
+		info, err := codec.ParseAC3SyncFrame(frame.Data)
+		if err != nil {
+			b.log.Debug("failed to parse AC-3 syncframe", "error", err)
+			return
+		}
+
+		seqHeader := codec.BuildAC3SequenceHeader(info)
+		b.pushAudio(seqHeader, 0)
+		b.ac3ConfigSent = true
+
+		b.log.Info("sent AC-3 sequence header",
+			"sample_rate", info.SampleRate,
+			"channels", info.Channels,
+			"bsid", info.Bsid,
+			"acmod", info.Acmod,
+		)
+	}
+
+	// Convert PTS from 90kHz to milliseconds (same pattern as AAC)
+	pts := frame.PTS
+	if pts < 0 {
+		return // No valid timestamp
+	}
+
+	if !b.audioTSSet {
+		b.audioTSBase = pts
+		b.audioTSSet = true
+	}
+
+	rtmpTS := uint32((pts - b.audioTSBase) / 90)
+
+	// Build the Enhanced RTMP audio frame with the complete AC-3 syncframe
+	payload := codec.BuildAC3AudioFrame(frame.Data)
+	b.pushAudio(payload, rtmpTS)
+}
+
+// handleEAC3Frame converts an E-AC-3 syncframe to an Enhanced RTMP audio message
+// and pushes it. E-AC-3 (Dolby Digital Plus) uses Enhanced RTMP tags with FourCC 'ec-3'.
+func (b *Bridge) handleEAC3Frame(frame *ts.MediaFrame) {
+	// Validate the syncframe — we need at least 6 bytes for the E-AC-3 header.
+	if len(frame.Data) < 6 {
+		b.log.Debug("E-AC-3 frame too short", "len", len(frame.Data))
+		return
+	}
+
+	// Send the sequence header on the first frame.
+	// Parse the syncframe header to extract sample rate, channels, etc.
+	if !b.eac3ConfigSent {
+		info, err := codec.ParseEAC3SyncFrame(frame.Data)
+		if err != nil {
+			b.log.Debug("failed to parse E-AC-3 syncframe", "error", err)
+			return
+		}
+
+		seqHeader := codec.BuildEAC3SequenceHeader(info)
+		b.pushAudio(seqHeader, 0)
+		b.eac3ConfigSent = true
+
+		b.log.Info("sent E-AC-3 sequence header",
+			"sample_rate", info.SampleRate,
+			"channels", info.Channels,
+			"bsid", info.Bsid,
+			"acmod", info.Acmod,
+			"lfeon", info.Lfeon,
+		)
+	}
+
+	// Convert PTS from 90kHz to milliseconds (same pattern as AAC)
+	pts := frame.PTS
+	if pts < 0 {
+		return // No valid timestamp
+	}
+
+	if !b.audioTSSet {
+		b.audioTSBase = pts
+		b.audioTSSet = true
+	}
+
+	rtmpTS := uint32((pts - b.audioTSBase) / 90)
+
+	// Build the Enhanced RTMP audio frame with the complete E-AC-3 syncframe
+	payload := codec.BuildEAC3AudioFrame(frame.Data)
 	b.pushAudio(payload, rtmpTS)
 }
 

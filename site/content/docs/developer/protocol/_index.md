@@ -327,6 +327,27 @@ AudioPacketType 5 carries multichannel layout configuration:
 
 Use `ParseMultichannelConfig()` on the payload to extract channel layout details.
 
+### SRT AC-3/E-AC-3 Audio Bridge
+
+The SRT-to-RTMP bridge supports AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) audio carried in MPEG-TS. These codecs use Enhanced RTMP audio tags with FourCC identifiers:
+
+| Codec | MPEG-TS StreamType | FourCC | Config Box |
+|-------|-------------------|--------|------------|
+| AC-3 | `0x81` | `ac-3` | dac3 (3 bytes) |
+| E-AC-3 | `0x87` | `ec-3` | dec3 (3 bytes) |
+
+**Wire format for Enhanced RTMP audio tags:**
+
+```
+Sequence header: [0x90][FourCC:4B][AudioSpecificConfig...]
+Coded frame:     [0x91][FourCC:4B][raw syncframe data...]
+```
+
+- Byte 0 upper nibble (0x9) = SoundFormat 9 (Enhanced RTMP)
+- Byte 0 lower nibble = AudioPacketType (0=SequenceStart, 1=CodedFrames)
+- Both AC-3 and E-AC-3 syncframes start with syncword `0x0B77`
+- AC-3 has `bsid ≤ 10`; E-AC-3 has `bsid > 10` (typically 16)
+
 ---
 
 ## Stream Keys

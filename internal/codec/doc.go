@@ -10,6 +10,9 @@
 //   - AAC ADTS ↔ Raw: MPEG-TS wraps each AAC frame in an ADTS header (7-9 bytes).
 //     RTMP expects raw AAC frames with a separate AudioSpecificConfig header.
 //
+//   - AC-3/E-AC-3 → Enhanced RTMP: MPEG-TS carries AC-3 and E-AC-3 syncframes.
+//     Enhanced RTMP wraps them in FourCC-tagged audio tags ('ac-3' / 'ec-3').
+//
 // These conversions are essential for the SRT-to-RTMP bridge, which ingests
 // MPEG-TS streams over SRT and re-publishes them as RTMP streams.
 package codec

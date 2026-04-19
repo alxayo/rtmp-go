@@ -36,6 +36,15 @@ const (
 	// HEVC is the successor to H.264, offering better compression at the
 	// cost of higher encoding complexity.
 	StreamTypeH265 uint8 = 0x24
+
+	// StreamTypeAC3 identifies an AC-3 (Dolby Digital) audio stream.
+	// This uses the ATSC registration descriptor value (0x81), which is the
+	// most common way AC-3 is signaled in MPEG-TS streams.
+	StreamTypeAC3 uint8 = 0x81
+
+	// StreamTypeEAC3 identifies an E-AC-3 (Dolby Digital Plus) audio stream.
+	// This uses the ATSC registration descriptor value (0x87).
+	StreamTypeEAC3 uint8 = 0x87
 )
 
 // StreamTypeName returns a human-readable name for a stream type constant.
@@ -57,6 +66,10 @@ func StreamTypeName(st uint8) string {
 		return "H.264"
 	case StreamTypeH265:
 		return "H.265"
+	case StreamTypeAC3:
+		return "AC-3"
+	case StreamTypeEAC3:
+		return "E-AC-3"
 	default:
 		return "Unknown"
 	}
