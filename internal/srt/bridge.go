@@ -4,46 +4,78 @@ package srt
 //
 // The data flow is:
 //
-//	SRT Connection → MPEG-TS Demuxer → Codec Converter → chunk.Message → Ingress Manager
+//	SRT Connection → Container Detection → Demuxer → Codec Converter → chunk.Message → Ingress Manager
 //
-// Each SRT stream carries MPEG-TS (the standard transport for SRT). The bridge:
-//   1. Reads raw bytes from the SRT connection
-//   2. Feeds them to the TS demuxer, which extracts elementary streams
-//   3. Converts H.264 video from Annex B to AVCC format (what RTMP expects)
-//   4. Converts AAC audio from ADTS to raw format (what RTMP expects)
-//   5. Converts AC-3/E-AC-3 audio to Enhanced RTMP format (FourCC-based tags)
-//   6. Wraps everything in chunk.Message and pushes it to the ingress manager
+// SRT can carry two container formats:
+//   - MPEG-TS (traditional): Detected by 0x47 sync byte at 188-byte boundaries.
+//     Supports H.264, H.265, AAC, AC-3, E-AC-3.
+//   - Matroska/WebM (new): Detected by EBML header magic bytes (0x1A45DFA3).
+//     Supports VP8, VP9, AV1, Opus, FLAC plus H.264, H.265, AAC, AC-3, E-AC-3.
+//
+// The bridge auto-detects the container from the first bytes of data, then:
+//   1. Creates the appropriate demuxer (TS or MKV)
+//   2. Feeds raw bytes to the demuxer, which extracts elementary streams
+//   3. Converts codec data to RTMP format (Annex B→AVCC, ADTS→raw, etc.)
+//   4. Wraps everything in chunk.Message and pushes to the ingress manager
 //
 // From the RTMP server's perspective, SRT streams look identical to native
 // RTMP publishes — same internal data format, same routing, same subscribers.
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 
 	"github.com/alxayo/go-rtmp/internal/codec"
 	"github.com/alxayo/go-rtmp/internal/ingress"
+	"github.com/alxayo/go-rtmp/internal/mkv"
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
 	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/srt/conn"
 	"github.com/alxayo/go-rtmp/internal/ts"
 )
 
-// Bridge reads MPEG-TS from an SRT connection, demuxes audio/video,
+// containerType indicates which container format the SRT stream uses.
+type containerType int
+
+const (
+	containerUnknown containerType = iota // Not yet detected
+	containerTS                           // MPEG-TS (0x47 sync bytes)
+	containerMKV                          // Matroska/WebM (EBML header)
+)
+
+// mkvMagic is the first 4 bytes of any Matroska/WebM file — the EBML
+// element ID. Used for container auto-detection.
+var mkvMagic = []byte{0x1A, 0x45, 0xDF, 0xA3}
+
+// minDetectionBytes is the minimum number of bytes needed to reliably
+// detect the container format. We need at least 4 bytes for MKV magic
+// and at least 188+1 bytes for TS sync validation.
+const minDetectionBytes = 189
+
+// Bridge reads media from an SRT connection, demuxes audio/video,
 // converts codecs, and pushes RTMP-format messages to the publish session.
 type Bridge struct {
 	// conn is the SRT connection we're reading from.
 	conn *conn.Conn
 
+	// container tracks which format was auto-detected (TS or MKV).
+	container containerType
+
 	// demuxer breaks the MPEG-TS byte stream into audio/video frames.
+	// Only used when container == containerTS.
 	demuxer *ts.Demuxer
+
+	// mkvDemuxer breaks the Matroska byte stream into audio/video frames.
+	// Only used when container == containerMKV.
+	mkvDemuxer *mkv.Demuxer
 
 	// session is the publish session in the ingress manager.
 	// Media messages are pushed here for distribution to RTMP subscribers.
 	session *ingress.PublishSession
 
-	// --- Video state (H.264) ---
+	// --- Video state (H.264, TS path) ---
 
 	// sps and pps cache the most recent H.264 Sequence Parameter Set
 	// and Picture Parameter Set. These are needed to build the RTMP
@@ -55,7 +87,7 @@ type Bridge struct {
 	// We delay sending it until we see an SPS+PPS pair in the stream.
 	h264SeqHeaderSent bool
 
-	// --- Video state (H.265) ---
+	// --- Video state (H.265, TS path) ---
 
 	// vps, sps265, and pps265 cache the most recent H.265 Video Parameter Set,
 	// Sequence Parameter Set, and Picture Parameter Set. H.265 requires all three.
@@ -72,7 +104,7 @@ type Bridge struct {
 	// This tells us which parameter sets and sequence header builder to use.
 	videoCodec string
 
-	// --- Common video state ---
+	// --- Common video state (TS path, 90kHz timestamps) ---
 
 	// videoTSBase is the DTS of the first video frame (in 90kHz units).
 	// All subsequent video timestamps are relative to this base.
@@ -81,19 +113,19 @@ type Bridge struct {
 	// videoTSSet is true once we've recorded the first video timestamp.
 	videoTSSet bool
 
-	// --- Audio state (AAC) ---
+	// --- Audio state (AAC, TS path) ---
 
 	// aacConfigSent is true once we've sent the AAC sequence header.
 	// We delay sending it until we parse the first ADTS header.
 	aacConfigSent bool
 
-	// --- Audio state (AC-3) ---
+	// --- Audio state (AC-3, TS path) ---
 
 	// ac3ConfigSent is true once we've sent the AC-3 Enhanced RTMP sequence header.
 	// We delay sending it until we parse the first AC-3 syncframe header.
 	ac3ConfigSent bool
 
-	// --- Audio state (E-AC-3) ---
+	// --- Audio state (E-AC-3, TS path) ---
 
 	// eac3ConfigSent is true once we've sent the E-AC-3 Enhanced RTMP sequence header.
 	// We delay sending it until we parse the first E-AC-3 syncframe header.
@@ -106,34 +138,62 @@ type Bridge struct {
 	// audioTSSet is true once we've recorded the first audio timestamp.
 	audioTSSet bool
 
+	// --- MKV-specific state ---
+	// These are separate from TS state because MKV timestamps are in
+	// milliseconds (not 90kHz), and the bridge is either TS or MKV, never both.
+
+	// mkvVideoSeqSent tracks whether we've sent the video sequence header
+	// for the MKV path (works for all codecs: VP8, VP9, AV1, H264, H265).
+	mkvVideoSeqSent bool
+
+	// mkvAudioSeqSent tracks whether we've sent the audio sequence header
+	// for the MKV path (works for all codecs: Opus, FLAC, AAC, AC-3, E-AC-3).
+	mkvAudioSeqSent bool
+
+	// mkvVideoTSBase is the timestamp (ms) of the first MKV video frame.
+	mkvVideoTSBase int64
+
+	// mkvVideoTSSet is true once we've recorded the first MKV video timestamp.
+	mkvVideoTSSet bool
+
+	// mkvAudioTSBase is the timestamp (ms) of the first MKV audio frame.
+	mkvAudioTSBase int64
+
+	// mkvAudioTSSet is true once we've recorded the first MKV audio timestamp.
+	mkvAudioTSSet bool
+
+	// mkvNALULenSize is the NALU length field size from the H.264/H.265
+	// decoder configuration record (1, 2, 3, or 4 bytes). Only used for
+	// MKV H.264/H.265 where frame data is length-prefixed (AVCC format).
+	mkvNALULenSize int
+
 	// log is the logger for this bridge, tagged with connection context.
 	log *slog.Logger
 }
 
 // NewBridge creates a bridge for the given SRT connection and publish session.
-// The bridge is ready to run after creation — call Run() to start processing.
+// The bridge auto-detects whether the SRT stream carries MPEG-TS or Matroska
+// when the first data arrives. Call Run() to start processing.
 func NewBridge(c *conn.Conn, session *ingress.PublishSession, log *slog.Logger) *Bridge {
-	b := &Bridge{
+	return &Bridge{
 		conn:    c,
 		session: session,
 		log:     log,
 	}
-
-	// Create the MPEG-TS demuxer with our frame callback.
-	// Each time the demuxer extracts a complete audio or video frame,
-	// it calls b.onFrame to handle the codec conversion.
-	b.demuxer = ts.NewDemuxer(b.onFrame)
-
-	return b
 }
 
-// Run reads data from the SRT connection and feeds it to the TS demuxer.
-// It blocks until the connection is closed or an error occurs.
+// Run reads data from the SRT connection, auto-detects the container format,
+// and feeds data to the appropriate demuxer. It blocks until the connection
+// is closed or an error occurs.
 // This is typically called in a goroutine for each SRT publisher.
 func (b *Bridge) Run() error {
 	// Read buffer — 1500 bytes is a typical MTU size for UDP packets.
 	// SRT sends data in chunks roughly this size.
 	buf := make([]byte, 1500)
+
+	// Detection buffer — accumulates initial bytes until we have enough
+	// to reliably identify the container format.
+	var detectBuf []byte
 
 	for {
 		// Read the next chunk of data from the SRT connection.
@@ -151,14 +211,95 @@ func (b *Bridge) Run() error {
 		metrics.SRTBytesReceived.Add(int64(n))
 		metrics.SRTPacketsReceived.Add(1)
 
-		// Feed the raw bytes to the TS demuxer. It handles:
-		// - Packet boundary alignment (188-byte TS packets)
-		// - PAT/PMT parsing to discover stream PIDs
-		// - PES reassembly to reconstruct complete audio/video frames
-		if err := b.demuxer.Feed(buf[:n]); err != nil {
-			b.log.Warn("TS demux error", "error", err)
-			// Continue processing — a single bad packet shouldn't kill the stream
+		// If container not yet detected, accumulate bytes and try detection
+		if b.container == containerUnknown {
+			detectBuf = append(detectBuf, buf[:n]...)
+			detected := b.detectContainer(detectBuf)
+			if !detected {
+				// Need more bytes for reliable detection
+				continue
+			}
+			// Container detected — replay all buffered data through the demuxer
+			if err := b.feedDemuxer(detectBuf); err != nil {
+				b.log.Warn("demux error on initial data", "error", err)
+			}
+			detectBuf = nil // Free the detection buffer
+			continue
 		}
+
+		// Normal path: feed data to the detected demuxer
+		if err := b.feedDemuxer(buf[:n]); err != nil {
+			b.log.Warn("demux error", "error", err)
+			// For TS: continue processing (a single bad packet shouldn't kill the stream).
+			// For MKV: errors are more likely fatal, but we log and try to continue.
+		}
+	}
+}
+
+// detectContainer examines buffered data to identify the container format.
+// Returns true if detection succeeded (and sets b.container), false if more data needed.
+//
+// Detection strategy:
+//   - Matroska: First 4 bytes are the EBML element ID (0x1A 0x45 0xDF 0xA3).
+//     This is unambiguous — no other container starts with these bytes.
+//   - MPEG-TS: Look for 0x47 sync byte at 188-byte boundaries. Checking at
+//     two positions (0 and 188) gives high confidence it's really TS.
+//   - Fallback: If we have enough data and neither pattern matches, default
+//     to TS (backward compatible with existing behavior).
+func (b *Bridge) detectContainer(data []byte) bool {
+	// Check for Matroska/WebM EBML header magic (4 bytes)
+	if len(data) >= 4 && bytes.Equal(data[:4], mkvMagic) {
+		b.container = containerMKV
+		b.mkvDemuxer = mkv.NewDemuxer(b.onMKVFrame, b.log)
+		b.log.Info("detected Matroska/WebM container")
+		return true
+	}
+
+	// Check for MPEG-TS sync bytes at packet boundaries.
+	// A single 0x47 could be coincidental; verifying at offset 188
+	// confirms it's really TS packet alignment.
+	if len(data) >= minDetectionBytes {
+		if data[0] == 0x47 && data[188] == 0x47 {
+			b.container = containerTS
+			b.demuxer = ts.NewDemuxer(b.onFrame)
+			b.log.Info("detected MPEG-TS container")
+			return true
+		}
+
+		// Neither pattern matched — try single 0x47 as fallback (some
+		// TS streams may not be perfectly aligned in the first read).
+		if data[0] == 0x47 {
+			b.container = containerTS
+			b.demuxer = ts.NewDemuxer(b.onFrame)
+			b.log.Info("detected MPEG-TS container (single sync)")
+			return true
+		}
+
+		// Unknown format — default to TS for backward compatibility.
+		// The TS demuxer will handle misalignment gracefully.
+		b.container = containerTS
+		b.demuxer = ts.NewDemuxer(b.onFrame)
+		b.log.Warn("unknown SRT container format, defaulting to MPEG-TS",
+			"first_bytes", fmt.Sprintf("%02x %02x %02x %02x", data[0], data[1], data[2], data[3]),
+		)
+		return true
+	}
+
+	// Not enough data yet — but check for early MKV detection (only 4 bytes needed)
+	// We already checked MKV above, so if we're here with < minDetectionBytes,
+	// we just need more data for TS validation.
+	return false
+}
+
+// feedDemuxer routes data to the active demuxer based on detected container.
+func (b *Bridge) feedDemuxer(data []byte) error {
+	switch b.container {
+	case containerTS:
+		return b.demuxer.Feed(data)
+	case containerMKV:
+		return b.mkvDemuxer.Feed(data)
+	default:
+		return nil // Should not happen after detection
 	}
 }
 
