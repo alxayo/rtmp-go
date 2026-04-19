@@ -10,6 +10,8 @@ go-rtmp records published streams to disk automatically. The server selects the 
 - **H.264/AVC streams** → **FLV** (Flash Video) container
 - **H.265/HEVC streams** → **MP4** (ISO BMFF) container
 
+Modern codecs including **AV1**, **VP8**, **VP9**, and **VVC** also record to MP4.
+
 Recording runs alongside live relay — subscribers see the stream in real-time while the server simultaneously writes to disk.
 
 ## Enabling Recording

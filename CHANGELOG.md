@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **VP8 E-RTMP support**: Added VP8 video codec (FourCC `vp08`) for Enhanced RTMP, completing full E-RTMP v2 video codec parity (H.264, H.265, AV1, VP8, VP9, VVC)
 - **SRT Encryption**: Full AES-CTR encryption for SRT ingest streams with passphrase-based authentication
   - KMREQ/KMRSP key exchange during SRT handshake (KM message parser per SRT RFC §3.2.2)
   - AES-128, AES-192, and AES-256 support with PBKDF2-HMAC-SHA1 key derivation

@@ -205,7 +205,9 @@ When IsExHeader is set, the next 4 bytes contain a FourCC code identifying the c
 | `hvc1` | H.265/HEVC | High Efficiency Video Coding |
 | `av01` | AV1 | AOMedia Video 1 |
 | `vp09` | VP9 | Google VP9 |
+| `vp08` | VP8 | Google VP8 |
 | `avc1` | H.264/AVC | Advanced Video Coding (enhanced path) |
+| `vvc1` | H.266/VVC | Versatile Video Coding |
 
 ### Audio ExHeader Detection
 

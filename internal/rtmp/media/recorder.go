@@ -42,7 +42,7 @@ type MediaWriter interface {
 // Defaults to FLV for backward compatibility when codec is empty or unknown.
 func SelectContainerFormat(codec string) string {
 	switch codec {
-	case "H265", "AV1", "VP9", "VVC": // Modern codecs that FLV doesn't support
+	case "H265", "AV1", "VP9", "VP8", "VVC": // Modern codecs that FLV doesn't support
 		return "mp4"
 	case "H264", "": // H.264 or unknown → FLV (backward compatible)
 		return "flv"

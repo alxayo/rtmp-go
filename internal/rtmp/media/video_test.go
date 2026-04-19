@@ -173,6 +173,55 @@ func TestParseVideoMessage_EnhancedVP9CodedFrames(t *testing.T) {
 	}
 }
 
+// TestParseVideoMessage_EnhancedVP8SequenceStart verifies that the VP8 codec
+// (FourCC "vp08") is correctly identified in an Enhanced RTMP sequence start tag.
+// VP8 follows the same Enhanced RTMP pattern as VP9, AV1, etc.
+func TestParseVideoMessage_EnhancedVP8SequenceStart(t *testing.T) {
+	payload := []byte{0xAA, 0xBB} // pretend VP8 codec config
+	data := buildEnhancedVideoTag(1, 0, "vp08", payload) // keyframe, SequenceStart
+	m, err := ParseVideoMessage(data)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.Codec != VideoCodecVP8 || m.FourCC != "vp08" {
+		_tFatalf(t, "codec/fourcc mismatch: %s / %s", m.Codec, m.FourCC)
+	}
+	if m.PacketType != PacketTypeSequenceStart {
+		_tFatalf(t, "packetType mismatch: %s", m.PacketType)
+	}
+	if !m.Enhanced {
+		_tFatalf(t, "should be enhanced")
+	}
+	if m.FrameType != VideoFrameTypeKey {
+		_tFatalf(t, "frameType mismatch want keyframe got %s", m.FrameType)
+	}
+}
+
+// TestParseVideoMessage_EnhancedVP8CodedFrames verifies that VP8 coded frames
+// (with 3-byte composition time offset) are parsed correctly.
+func TestParseVideoMessage_EnhancedVP8CodedFrames(t *testing.T) {
+	compTime := []byte{0x00, 0x00, 0x00} // composition time = 0
+	payload := []byte{0x33, 0x44}
+	tag := buildEnhancedVideoTag(2, 1, "vp08", append(compTime, payload...)) // inter, CodedFrames
+	m, err := ParseVideoMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.Codec != VideoCodecVP8 || m.FourCC != "vp08" {
+		_tFatalf(t, "codec/fourcc mismatch: %s / %s", m.Codec, m.FourCC)
+	}
+	if m.FrameType != VideoFrameTypeInter {
+		_tFatalf(t, "frameType mismatch want inter got %s", m.FrameType)
+	}
+	if m.PacketType != PacketTypeCodedFrames {
+		_tFatalf(t, "packetType mismatch want coded_frames got %s", m.PacketType)
+	}
+	// Payload should exclude the 3-byte composition time
+	if len(m.Payload) != 2 || m.Payload[0] != 0x33 {
+		_tFatalf(t, "payload mismatch (should skip comp time): %+v", m.Payload)
+	}
+}
+
 func TestParseVideoMessage_EnhancedCodedFramesX(t *testing.T) {
 	// CodedFramesX (pktType=3) has NO composition time (DTS==PTS optimization).
 	payload := []byte{0xAA, 0xBB, 0xCC}
@@ -294,6 +343,7 @@ func TestIsVideoSequenceHeader(t *testing.T) {
 		{"legacyAVC_nalu", []byte{(1 << 4) | 7, 0x01}, false},
 		{"legacyHEVC_seqHeader", []byte{(1 << 4) | 12, 0x00}, true},
 		{"enhancedSeqStart", buildEnhancedVideoTag(1, 0, "hvc1", []byte{0x01}), true},
+		{"enhancedVP8SeqStart", buildEnhancedVideoTag(1, 0, "vp08", []byte{0x01}), true},
 		{"enhancedCodedFrames", buildEnhancedVideoTag(2, 1, "hvc1", []byte{0x00, 0x00, 0x00, 0x01}), false},
 		{"enhancedCodedFramesX", buildEnhancedVideoTag(1, 3, "hvc1", []byte{0x01}), false},
 		{"tooShort", []byte{0x17}, false},

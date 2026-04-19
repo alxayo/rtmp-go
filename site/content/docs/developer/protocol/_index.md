@@ -259,7 +259,9 @@ Followed by a 4-byte FourCC identifying the codec:
 | `hvc1` | H.265/HEVC |
 | `av01` | AV1 |
 | `vp09` | VP9 |
+| `vp08` | VP8 |
 | `avc1` | H.264/AVC (enhanced mode) |
+| `vvc1` | H.266/VVC |
 
 This format is used by FFmpeg 6.1+, OBS 29.1+, and SRS 6.0+ for modern codecs.
 

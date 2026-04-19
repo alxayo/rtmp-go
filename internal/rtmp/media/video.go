@@ -12,6 +12,7 @@ const (
 	VideoCodecHEVC = "H265" // H.265 / High Efficiency Video Coding (legacy CodecID 12, FourCC "hvc1")
 	VideoCodecAV1  = "AV1"  // AV1 (FourCC "av01")
 	VideoCodecVP9  = "VP9"  // VP9 (FourCC "vp09")
+	VideoCodecVP8  = "VP8"  // VP8 (FourCC "vp08")
 	VideoCodecVVC  = "VVC"  // H.266 / Versatile Video Coding (FourCC "vvc1")
 )
 
@@ -53,6 +54,7 @@ var videoFourCCMap = map[uint32]string{
 	fourCC("hvc1"): VideoCodecHEVC,
 	fourCC("av01"): VideoCodecAV1,
 	fourCC("vp09"): VideoCodecVP9,
+	fourCC("vp08"): VideoCodecVP8,
 	fourCC("vvc1"): VideoCodecVVC,
 }
 

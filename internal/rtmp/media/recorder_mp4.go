@@ -184,6 +184,8 @@ case "av01":
 r.videoCodec = "AV1"
 case "vp09":
 r.videoCodec = "VP9"
+case "vp08":
+r.videoCodec = "VP8"
 }
 
 isKey := frameTypeID == 1
@@ -665,21 +667,33 @@ sampleEntry.writeBytes(make([]byte, 32)) // compressorname
 sampleEntry.writeU16(0x0018) // depth (24-bit)
 sampleEntry.writeU16(0xFFFF) // pre_defined
 
-// Codec configuration box (hvcC or avcC) with actual config from sequence header
-configBoxType := "hvcC"
-if r.videoCodec == "H264" {
+// Determine codec-specific MP4 box types.
+// Each codec has its own configuration box (e.g., avcC for H.264) and
+// sample entry box (e.g., avc1 for H.264) in the MP4 stsd atom.
+configBoxType := "hvcC" // Default for H.265/HEVC
+entryBoxType := "hvc1"
+switch r.videoCodec {
+case "H264":
 configBoxType = "avcC"
+entryBoxType = "avc1"
+case "AV1":
+configBoxType = "av1C"
+entryBoxType = "av01"
+case "VP9":
+configBoxType = "vpcC"
+entryBoxType = "vp09"
+case "VP8":
+configBoxType = "vpcC"
+entryBoxType = "vp08"
+case "VVC":
+configBoxType = "vvcC"
+entryBoxType = "vvc1"
 }
 if len(r.videoConfig) > 0 {
 sampleEntry.writeBox(configBoxType, r.videoConfig)
 } else {
 // Fallback: empty config (file may not be fully playable)
 sampleEntry.writeBox(configBoxType, []byte{})
-}
-
-entryBoxType := "hvc1"
-if r.videoCodec == "H264" {
-entryBoxType = "avc1"
 }
 stsdBuf.writeBox(entryBoxType, sampleEntry.Bytes())
 stblBuf.writeBox("stsd", stsdBuf.Bytes())
