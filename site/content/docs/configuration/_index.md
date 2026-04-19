@@ -37,8 +37,10 @@ The minimum TLS version is 1.2.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-record-all` | `false` | Record all published streams to FLV |
-| `-record-dir` | `recordings` | Directory for FLV files |
+| `-record-all` | `false` | Record all published streams (FLV or MP4 based on codec) |
+| `-record-dir` | `recordings` | Directory for recording files |
+| `-segment-duration` | *(none)* | Split recordings into segments of this duration (e.g. `30s`, `5m`, `15m`). Segments align to video keyframes. Empty = single file per session |
+| `-segment-pattern` | `%s_%T_seg%03d` | Filename pattern for segments. Placeholders: `%s`=stream key, `%d`=segment number, `%03d`=zero-padded, `%T`=timestamp, `%Y`/`%m`/`%D`/`%H`/`%M`/`%S`=date parts, `%%`=literal % |
 
 ## Relay
 
@@ -117,7 +119,7 @@ This listens on `:1935` with default settings. Any client can publish and subscr
 
 ### 2. Recording Server
 
-Record all streams to FLV files:
+Record all streams (auto-selects FLV for H.264, MP4 for modern codecs):
 
 ```bash
 ./rtmp-server \
@@ -125,9 +127,24 @@ Record all streams to FLV files:
   -record-dir /data/recordings
 ```
 
-Files are saved as `{record-dir}/{streamKey}_{timestamp}.flv`.
+Files are saved as `{record-dir}/{streamKey}_{timestamp}.{flv,mp4}` (extension based on video codec).
 
-### 3. Relay Server (Simulcast to YouTube + Twitch)
+### 3. Segmented Recording
+
+Split streams into 5-minute segments (useful for archiving and HLS-like workflows):
+
+```bash
+./rtmp-server \
+  -record-all true \
+  -record-dir /data/recordings \
+  -segment-duration 5m \
+  -segment-pattern "%s/%Y-%m-%D/seg%03d"
+```
+
+Produces: `/data/recordings/live_mystream/2026-04-19/seg001.mp4`, `seg002.mp4`, etc.
+Each segment starts on a video keyframe and includes codec initialization data for standalone playback.
+
+### 4. Relay Server (Simulcast to YouTube + Twitch)
 
 Forward all streams to multiple destinations:
 
@@ -139,7 +156,7 @@ Forward all streams to multiple destinations:
 
 The server accepts the stream once and relays it to both YouTube and Twitch simultaneously.
 
-### 4. Authenticated Server with Webhooks
+### 5. Authenticated Server with Webhooks
 
 Require tokens for publishing and notify an external service:
 
@@ -158,7 +175,7 @@ Publishers must include the token in their stream key:
 rtmp://server:1935/live/mystream?token=secret123
 ```
 
-### 5. Authenticated Server with Webhooks and Relay
+### 6. Authenticated Server with Webhooks and Relay
 
 All RTMP features — relay, auth, and hooks:
 
@@ -177,7 +194,7 @@ All RTMP features — relay, auth, and hooks:
   -metrics-addr :8080
 ```
 
-### 6. RTMPS (TLS-Encrypted) Server
+### 7. RTMPS (TLS-Encrypted) Server
 
 Serve encrypted RTMP connections:
 
@@ -190,7 +207,7 @@ Serve encrypted RTMP connections:
 
 This listens for TLS-encrypted RTMP on port 1936. Clients connect with `rtmps://server:1936/live/test`.
 
-### 7. Dual Listener (RTMP + RTMPS)
+### 8. Dual Listener (RTMP + RTMPS)
 
 Run both plain and encrypted listeners simultaneously:
 
@@ -205,7 +222,7 @@ Run both plain and encrypted listeners simultaneously:
 
 Plain RTMP on port 1935 and encrypted RTMPS on port 1936. Useful during migration or when supporting both legacy and modern clients.
 
-### 8. SRT Ingest
+### 9. SRT Ingest
 
 Accept SRT streams alongside RTMP:
 
@@ -227,7 +244,7 @@ ffmpeg -re -i test.mp4 -c copy -f mpegts "srt://localhost:4200?streamid=live/tes
 ffplay rtmp://localhost:1935/live/test
 ```
 
-### 9. SRT with Encryption
+### 10. SRT with Encryption
 
 Encrypted SRT ingest with AES-256:
 
@@ -239,7 +256,7 @@ Encrypted SRT ingest with AES-256:
   -record-all true
 ```
 
-### 10. Full Production Setup (RTMP + RTMPS + SRT)
+### 11. Full Production Setup (RTMP + RTMPS + SRT)
 
 All features enabled:
 
