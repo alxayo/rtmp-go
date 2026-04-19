@@ -14,10 +14,9 @@ package media
 //	For OneTrack/ManyTracks: byte 1 = trackId, then track data
 //	For ManyTracksManyCodecs: byte 1 = trackId, bytes 2-5 = per-track FourCC
 //
-// The server currently recognizes and passes through multitrack packets
-// but does not demultiplex individual tracks. Full track separation
-// (per-track sequence header caching, per-track recording) is planned
-// for a future release.
+// The server recognizes multitrack packets and caches per-track sequence
+// headers for late-join subscriber delivery. Multitrack messages are relayed
+// to subscribers as-is (the raw RTMP message is not demultiplexed).
 
 import "fmt"
 

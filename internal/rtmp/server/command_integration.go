@@ -227,6 +227,8 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				stream.VideoSequenceHeader = nil
 				stream.AudioCodec = ""
 				stream.VideoCodec = ""
+				stream.VideoTrackHeaders = make(map[uint8][]byte)
+				stream.AudioTrackHeaders = make(map[uint8][]byte)
 				stream.mu.Unlock()
 
 				// Clear the error so we proceed with normal publish setup below.

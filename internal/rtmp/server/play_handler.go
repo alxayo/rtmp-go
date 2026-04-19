@@ -82,6 +82,33 @@ func HandlePlay(reg *Registry, conn sender, app string, msg *chunk.Message) (*ch
 	stream.mu.RLock()
 	audioSeqHdr := stream.AudioSequenceHeader
 	videoSeqHdr := stream.VideoSequenceHeader
+
+	// Snapshot multitrack per-track headers (for non-zero tracks).
+	// Track 0 is already covered by the main AudioSequenceHeader/VideoSequenceHeader.
+	var extraVideoTracks map[uint8][]byte
+	if len(stream.VideoTrackHeaders) > 0 {
+		extraVideoTracks = make(map[uint8][]byte, len(stream.VideoTrackHeaders))
+		for k, v := range stream.VideoTrackHeaders {
+			if k == 0 {
+				continue // track 0 sent as main header below
+			}
+			cp := make([]byte, len(v))
+			copy(cp, v)
+			extraVideoTracks[k] = cp
+		}
+	}
+	var extraAudioTracks map[uint8][]byte
+	if len(stream.AudioTrackHeaders) > 0 {
+		extraAudioTracks = make(map[uint8][]byte, len(stream.AudioTrackHeaders))
+		for k, v := range stream.AudioTrackHeaders {
+			if k == 0 {
+				continue // track 0 sent as main header below
+			}
+			cp := make([]byte, len(v))
+			copy(cp, v)
+			extraAudioTracks[k] = cp
+		}
+	}
 	stream.mu.RUnlock()
 
 	if audioSeqHdr != nil {
@@ -112,6 +139,41 @@ func HandlePlay(reg *Registry, conn sender, app string, msg *chunk.Message) (*ch
 		copy(videoMsg.Payload, videoSeqHdr.Payload)
 		_ = conn.SendMessage(videoMsg)
 		log.Info("Sent cached video sequence header to subscriber", "stream_key", pcmd.StreamKey, "size", len(videoMsg.Payload))
+	}
+
+	// 4. Send per-track multitrack sequence headers for non-zero tracks.
+	//
+	// Multitrack E-RTMP streams carry multiple audio/video tracks (e.g.,
+	// multiple camera angles or language tracks). Each track has its own
+	// sequence header. Track 0 was already sent above as the main header;
+	// here we send the remaining tracks so multitrack-capable subscribers
+	// can initialize all decoders.
+	for trackID, payload := range extraAudioTracks {
+		trackMsg := &chunk.Message{
+			CSID:            4,
+			TypeID:          8, // audio
+			Timestamp:       0,
+			MessageStreamID: msg.MessageStreamID,
+			MessageLength:   uint32(len(payload)),
+			Payload:         payload,
+		}
+		_ = conn.SendMessage(trackMsg)
+		log.Info("Sent cached multitrack audio header to subscriber",
+			"stream_key", pcmd.StreamKey, "track_id", trackID, "size", len(payload))
+	}
+
+	for trackID, payload := range extraVideoTracks {
+		trackMsg := &chunk.Message{
+			CSID:            6,
+			TypeID:          9, // video
+			Timestamp:       0,
+			MessageStreamID: msg.MessageStreamID,
+			MessageLength:   uint32(len(payload)),
+			Payload:         payload,
+		}
+		_ = conn.SendMessage(trackMsg)
+		log.Info("Sent cached multitrack video header to subscriber",
+			"stream_key", pcmd.StreamKey, "track_id", trackID, "size", len(payload))
 	}
 
 	return started, nil

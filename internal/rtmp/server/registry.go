@@ -57,6 +57,15 @@ type Stream struct {
 	AudioSequenceHeader *chunk.Message
 	VideoSequenceHeader *chunk.Message
 
+	// Per-track sequence headers for multitrack E-RTMP v2 streams.
+	// Key is the track ID (uint8). Track 0 is also stored in the
+	// single-track VideoSequenceHeader/AudioSequenceHeader fields
+	// for backward compatibility with non-multitrack subscribers.
+	// Each value is a complete Enhanced RTMP payload (header + FourCC + config)
+	// ready to be sent as a standalone chunk.Message.
+	VideoTrackHeaders map[uint8][]byte // track ID → Enhanced RTMP video sequence start payload
+	AudioTrackHeaders map[uint8][]byte // track ID → Enhanced RTMP audio sequence start payload
+
 	mu sync.RWMutex // protects concurrent access to Subscribers and Publisher
 }
 
@@ -80,7 +89,13 @@ func (r *Registry) CreateStream(key string) (*Stream, bool) {
 	if s, ok := r.streams[key]; ok { // double‑check
 		return s, false
 	}
-	s := &Stream{Key: key, StartTime: time.Now(), Subscribers: make([]media.Subscriber, 0)}
+	s := &Stream{
+		Key:               key,
+		StartTime:         time.Now(),
+		Subscribers:       make([]media.Subscriber, 0),
+		VideoTrackHeaders: make(map[uint8][]byte),
+		AudioTrackHeaders: make(map[uint8][]byte),
+	}
 	r.streams[key] = s
 	metrics.StreamsActive.Add(1)
 	return s, true
@@ -325,6 +340,11 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		copy(s.VideoSequenceHeader.Payload, msg.Payload)
 		s.mu.Unlock()
 		logger.Info("Cached video sequence header", "stream_key", s.Key, "size", len(msg.Payload))
+	} else if msg.TypeID == 9 && media.IsVideoMultitrack(msg.Payload) {
+		// Multitrack video: parse individual tracks and cache any sequence start
+		// headers per track. This enables late-joining subscribers to receive
+		// codec configuration for all tracks, not just the default.
+		s.cacheMultitrackVideoHeaders(msg, logger)
 	} else if msg.TypeID == 8 && media.IsAudioSequenceHeader(msg.Payload) {
 		s.mu.Lock()
 		s.AudioSequenceHeader = &chunk.Message{
@@ -338,6 +358,9 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		copy(s.AudioSequenceHeader.Payload, msg.Payload)
 		s.mu.Unlock()
 		logger.Info("Cached audio sequence header", "stream_key", s.Key, "size", len(msg.Payload))
+	} else if msg.TypeID == 8 && media.IsAudioMultitrack(msg.Payload) {
+		// Multitrack audio: same per-track caching as video.
+		s.cacheMultitrackAudioHeaders(msg, logger)
 	}
 
 	// DIAGNOSTIC: Log parsed video packet details for debugging.
@@ -395,5 +418,116 @@ func (s *Stream) BroadcastMessage(detector *media.CodecDetector, msg *chunk.Mess
 		} else {
 			metrics.BytesEgress.Add(int64(len(relayMsg.Payload)))
 		}
+	}
+}
+
+// cacheMultitrackVideoHeaders parses a multitrack video message and caches
+// per-track sequence headers. If any track carries a sequence start (inner
+// packet type 0), its codec configuration is stored in VideoTrackHeaders.
+// Track 0 is also written to the main VideoSequenceHeader for backward
+// compatibility with subscribers that don't understand multitrack.
+func (s *Stream) cacheMultitrackVideoHeaders(msg *chunk.Message, logger *slog.Logger) {
+	// Multitrack payload starts after the 1-byte header + 4-byte FourCC.
+	if len(msg.Payload) < 6 {
+		return
+	}
+	outerFourCC := string(msg.Payload[1:5])
+
+	mt, err := media.ParseMultitrack(msg.Payload[5:])
+	if err != nil {
+		logger.Debug("Failed to parse multitrack video", "stream_key", s.Key, "error", err)
+		return
+	}
+
+	// Only cache tracks when the inner packet type is sequence start (0).
+	if mt.InnerPacketType != 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, track := range mt.Tracks {
+		// Determine the FourCC for this track. ManyTracksManyCodecs provides
+		// a per-track FourCC; otherwise all tracks share the outer FourCC.
+		trackFourCC := track.FourCC
+		if trackFourCC == "" {
+			trackFourCC = outerFourCC
+		}
+
+		// Build a standalone Enhanced RTMP video sequence start payload
+		// that can be sent directly to late-joining subscribers.
+		payload := media.BuildVideoSeqStartPayload(trackFourCC, track.Data)
+		s.VideoTrackHeaders[track.TrackID] = payload
+
+		// Track 0 is the default/primary track. Also update the main
+		// single-track VideoSequenceHeader so non-multitrack subscribers
+		// still get the default track's codec config.
+		if track.TrackID == 0 {
+			s.VideoSequenceHeader = &chunk.Message{
+				CSID:            msg.CSID,
+				TypeID:          msg.TypeID,
+				Timestamp:       msg.Timestamp,
+				MessageStreamID: msg.MessageStreamID,
+				MessageLength:   uint32(len(payload)),
+				Payload:         payload,
+			}
+		}
+
+		logger.Info("Cached multitrack video sequence header",
+			"stream_key", s.Key, "track_id", track.TrackID,
+			"fourcc", trackFourCC, "size", len(track.Data))
+	}
+}
+
+// cacheMultitrackAudioHeaders parses a multitrack audio message and caches
+// per-track sequence headers. Same logic as cacheMultitrackVideoHeaders
+// but for audio (TypeID 8) messages.
+func (s *Stream) cacheMultitrackAudioHeaders(msg *chunk.Message, logger *slog.Logger) {
+	// Multitrack payload starts after the 1-byte header + 4-byte FourCC.
+	if len(msg.Payload) < 6 {
+		return
+	}
+	outerFourCC := string(msg.Payload[1:5])
+
+	mt, err := media.ParseMultitrack(msg.Payload[5:])
+	if err != nil {
+		logger.Debug("Failed to parse multitrack audio", "stream_key", s.Key, "error", err)
+		return
+	}
+
+	// Only cache tracks when the inner packet type is sequence start (0).
+	if mt.InnerPacketType != 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, track := range mt.Tracks {
+		trackFourCC := track.FourCC
+		if trackFourCC == "" {
+			trackFourCC = outerFourCC
+		}
+
+		// Build a standalone Enhanced RTMP audio sequence start payload.
+		payload := media.BuildAudioSeqStartPayload(trackFourCC, track.Data)
+		s.AudioTrackHeaders[track.TrackID] = payload
+
+		// Track 0 backward compatibility with single-track subscribers.
+		if track.TrackID == 0 {
+			s.AudioSequenceHeader = &chunk.Message{
+				CSID:            msg.CSID,
+				TypeID:          msg.TypeID,
+				Timestamp:       msg.Timestamp,
+				MessageStreamID: msg.MessageStreamID,
+				MessageLength:   uint32(len(payload)),
+				Payload:         payload,
+			}
+		}
+
+		logger.Info("Cached multitrack audio sequence header",
+			"stream_key", s.Key, "track_id", track.TrackID,
+			"fourcc", trackFourCC, "size", len(track.Data))
 	}
 }

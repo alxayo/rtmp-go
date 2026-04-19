@@ -293,6 +293,10 @@ VideoPacketType 6 and AudioPacketType 6 signal multitrack content — multiple a
 | 1 | ManyTracks | Multiple tracks, same codec |
 | 2 | ManyTracksManyCodecs | Multiple tracks, different codecs per track |
 
+#### Multitrack Late-Join
+
+When a multitrack publisher sends per-track sequence headers (InnerPacketType = 0 / SequenceStart), the server caches each track's codec configuration independently in the stream registry. Late-joining subscribers receive all cached track headers, enabling immediate playback of all tracks. Track 0 (the primary/default track) is also stored in the main sequence header fields for backward compatibility with non-multitrack subscribers.
+
 ### Additional Packet Types
 
 | Type | Value | Name | Description |
