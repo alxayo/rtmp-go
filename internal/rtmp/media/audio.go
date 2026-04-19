@@ -26,14 +26,22 @@ const (
 
 // Enhanced RTMP AudioPacketType values (E-RTMP v2 spec).
 const (
-	AudioPacketTypeSequenceStart = "sequence_start" // Codec configuration record
-	AudioPacketTypeCodedFrames   = "coded_frames"   // Compressed audio data
+	AudioPacketTypeSequenceStart    = "sequence_start"    // Codec configuration record
+	AudioPacketTypeCodedFrames      = "coded_frames"      // Compressed audio data
+	AudioPacketTypeSequenceEnd      = "sequence_end"      // End of audio stream signal
+	AudioPacketTypeMultichannelConfig = "multichannel_config" // Multichannel audio layout
+	AudioPacketTypeMultitrack       = "multitrack"         // Multiple audio tracks
+	AudioPacketTypeModEx            = "modex"              // Modifier extension wrapper
 )
 
 // Enhanced RTMP AudioPacketType numeric values on the wire.
 const (
-	audioPacketTypeSequenceStart uint8 = 0
-	audioPacketTypeCodedFrames   uint8 = 1
+	audioPacketTypeSequenceStart      uint8 = 0
+	audioPacketTypeCodedFrames        uint8 = 1
+	audioPacketTypeSequenceEnd        uint8 = 4 // End of audio stream
+	audioPacketTypeMultichannelConfig uint8 = 5 // Multichannel audio layout configuration
+	audioPacketTypeMultitrack         uint8 = 6 // Multitrack audio (multiple audio tracks)
+	audioPacketTypeModEx              uint8 = 7 // Modifier Extension
 )
 
 // SoundFormat value that signals Enhanced RTMP audio (ExAudioTagHeader).
@@ -116,6 +124,20 @@ func parseEnhancedAudio(data []byte) (*AudioMessage, error) {
 		msg.PacketType = AudioPacketTypeSequenceStart
 	case audioPacketTypeCodedFrames:
 		msg.PacketType = AudioPacketTypeCodedFrames
+	case audioPacketTypeSequenceEnd:
+		// End-of-stream signal — no payload expected after this.
+		msg.PacketType = AudioPacketTypeSequenceEnd
+	case audioPacketTypeMultichannelConfig:
+		// Multichannel audio layout configuration (speaker positions, channel count).
+		msg.PacketType = AudioPacketTypeMultichannelConfig
+	case audioPacketTypeMultitrack:
+		// Multitrack audio — multiple audio tracks in one RTMP message.
+		// Use ParseMultitrack() on msg.Payload to extract individual tracks.
+		msg.PacketType = AudioPacketTypeMultitrack
+	case audioPacketTypeModEx:
+		// ModEx (Modifier Extension) — wraps another audio packet with modifiers
+		// like nanosecond timestamps. Use ParseModEx() on msg.Payload.
+		msg.PacketType = AudioPacketTypeModEx
 	default:
 		msg.PacketType = fmt.Sprintf("enhanced_%d", pktType)
 	}

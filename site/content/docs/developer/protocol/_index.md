@@ -265,6 +265,42 @@ Followed by a 4-byte FourCC identifying the codec:
 
 This format is used by FFmpeg 6.1+, OBS 29.1+, and SRS 6.0+ for modern codecs.
 
+### ModEx (Modifier Extension)
+
+VideoPacketType 7 and AudioPacketType 7 signal a ModEx wrapper. ModEx adds modifier extensions to another packet, enabling features like sub-millisecond timestamp precision:
+
+```
+[ModExType:4bits][DataSize:4bits][ModExData:1-4 bytes][WrappedPacket...]
+```
+
+| ModExType | Name | Description |
+|-----------|------|-------------|
+| 0 | TimestampOffsetNano | Nanosecond offset (0–999999) added to the base RTMP millisecond timestamp |
+
+DataSize encoding: 0=1 byte, 1=2 bytes, 2=3 bytes, 3=4 bytes. Values 4+ are reserved.
+
+### Multitrack
+
+VideoPacketType 6 and AudioPacketType 6 signal multitrack content — multiple audio or video tracks in a single RTMP stream:
+
+```
+[AvMultitrackType:4bits][InnerPacketType:4bits][TrackData...]
+```
+
+| AvMultitrackType | Name | Description |
+|-----------------|------|-------------|
+| 0 | OneTrack | Single track with explicit track ID |
+| 1 | ManyTracks | Multiple tracks, same codec |
+| 2 | ManyTracksManyCodecs | Multiple tracks, different codecs per track |
+
+### Additional Packet Types
+
+| Type | Value | Name | Description |
+|------|-------|------|-------------|
+| Video | 5 | MPEG2TSSequenceStart | MPEG-2 TS sequence start (recognized, passed through) |
+| Audio | 4 | SequenceEnd | Signals end of audio stream |
+| Audio | 5 | MultichannelConfig | Multichannel audio layout configuration |
+
 ---
 
 ## Stream Keys

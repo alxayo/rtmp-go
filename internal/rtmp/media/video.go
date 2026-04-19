@@ -31,20 +31,26 @@ const (
 	AVCPacketTypeNALU           = "nalu"            // Network Abstraction Layer Unit (actual video data)
 
 	// Enhanced RTMP VideoPacketType values (E-RTMP v2 spec)
-	PacketTypeSequenceStart = "sequence_start" // Codec configuration record (SPS/PPS/VPS)
-	PacketTypeCodedFrames   = "coded_frames"   // NALUs with 3-byte composition time offset
-	PacketTypeSequenceEnd   = "sequence_end"   // End of stream signal
-	PacketTypeCodedFramesX  = "coded_frames_x" // NALUs without composition time (DTS==PTS)
-	PacketTypeMetadata      = "metadata"        // AMF-encoded metadata (e.g., colorInfo for HDR)
+	PacketTypeSequenceStart   = "sequence_start"    // Codec configuration record (SPS/PPS/VPS)
+	PacketTypeCodedFrames     = "coded_frames"      // NALUs with 3-byte composition time offset
+	PacketTypeSequenceEnd     = "sequence_end"      // End of stream signal
+	PacketTypeCodedFramesX    = "coded_frames_x"    // NALUs without composition time (DTS==PTS)
+	PacketTypeMetadata        = "metadata"           // AMF-encoded metadata (e.g., colorInfo for HDR)
+	PacketTypeMPEG2TSSeqStart = "mpeg2ts_seq_start" // MPEG-2 TS sequence start
+	PacketTypeMultitrack      = "multitrack"         // Multiple tracks in one message
+	PacketTypeModEx           = "modex"              // Modifier extension wrapper
 )
 
 // Enhanced RTMP VideoPacketType numeric values on the wire.
 const (
-	videoPacketTypeSequenceStart uint8 = 0
-	videoPacketTypeCodedFrames   uint8 = 1
-	videoPacketTypeSequenceEnd   uint8 = 2
-	videoPacketTypeCodedFramesX  uint8 = 3
-	videoPacketTypeMetadata      uint8 = 4
+	videoPacketTypeSequenceStart   uint8 = 0
+	videoPacketTypeCodedFrames     uint8 = 1
+	videoPacketTypeSequenceEnd     uint8 = 2
+	videoPacketTypeCodedFramesX    uint8 = 3
+	videoPacketTypeMetadata        uint8 = 4
+	videoPacketTypeMPEG2TSSeqStart uint8 = 5 // MPEG-2 TS sequence start (for MPEG-TS over RTMP)
+	videoPacketTypeMultitrack      uint8 = 6 // Multitrack video (multiple video tracks in one stream)
+	videoPacketTypeModEx           uint8 = 7 // Modifier Extension (wraps another packet with modifiers)
 )
 
 // videoFourCCMap maps well-known video FourCC values (as big-endian uint32)
@@ -165,6 +171,20 @@ func parseEnhancedVideo(data []byte) (*VideoMessage, error) {
 		vm.Payload = data[5:]
 	case videoPacketTypeMetadata:
 		vm.PacketType = PacketTypeMetadata
+		vm.Payload = data[5:]
+	case videoPacketTypeMPEG2TSSeqStart:
+		// MPEG-2 TS sequence start — recognized but payload is passed through as-is.
+		vm.PacketType = PacketTypeMPEG2TSSeqStart
+		vm.Payload = data[5:]
+	case videoPacketTypeMultitrack:
+		// Multitrack video — multiple video tracks in one RTMP message.
+		// Use ParseMultitrack() on vm.Payload to extract individual tracks.
+		vm.PacketType = PacketTypeMultitrack
+		vm.Payload = data[5:]
+	case videoPacketTypeModEx:
+		// ModEx (Modifier Extension) — wraps another packet with modifiers
+		// like nanosecond timestamps. Use ParseModEx() on vm.Payload.
+		vm.PacketType = PacketTypeModEx
 		vm.Payload = data[5:]
 	default:
 		vm.PacketType = fmt.Sprintf("enhanced_%d", pktType)
