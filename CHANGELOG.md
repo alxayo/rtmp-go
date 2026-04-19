@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Segmented recording**: New `-segment-duration` and `-segment-pattern` flags to split recordings into multiple files of configurable duration with FFmpeg-style filename patterns. Segment boundaries align to video keyframes for independent playback. Works across RTMP, RTMPS, and SRT.
 - **SRT AC-3/E-AC-3 audio bridge**: AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) audio codecs are now supported in the SRT-to-RTMP bridge. When an SRT stream carries AC-3 or E-AC-3 audio via MPEG-TS, the bridge converts them to Enhanced RTMP audio messages using FourCC codes `ac-3` and `ec-3`
 - **Multitrack sequence header caching**: Per-track video/audio sequence headers are cached in the stream registry for late-join subscribers (E-RTMP v2 multitrack)
 - **MP4 recording parity**: Enhanced audio codec recording with proper MP4 sample entries

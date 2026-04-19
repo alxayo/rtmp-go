@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // version is set at build time using: go build -ldflags "-X main.version=v0.4.0"
@@ -20,6 +21,8 @@ type cliConfig struct {
 	logLevel          string   // log verbosity level (debug/info/warn/error)
 	recordAll         bool     // whether to record all published streams
 	recordDir         string   // directory for FLV recording files
+	segmentDuration   string   // segment duration string (e.g., "30s", "5m")
+	segmentPattern    string   // filename pattern for segments
 	chunkSize         uint     // outbound chunk size (1-65536 bytes)
 	showVersion       bool     // print version and exit
 	relayDestinations []string // RTMP URLs to relay published streams to
@@ -71,6 +74,13 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.logLevel, "log-level", "info", "Log level: debug|info|warn|error")
 	fs.Var(&explicitBool{&cfg.recordAll}, "record-all", "Enable recording of all streams to -record-dir (true/false)")
 	fs.StringVar(&cfg.recordDir, "record-dir", "recordings", "Directory to write FLV recordings")
+	fs.StringVar(&cfg.segmentDuration, "segment-duration", "",
+		"Split recordings into segments of this duration (e.g. '2s', '30s', '5m', '15m'). "+
+			"Segments align to video keyframes. Empty = single file (default)")
+	fs.StringVar(&cfg.segmentPattern, "segment-pattern", "%s_%T_seg%03d",
+		"Filename pattern for segments. Placeholders: %s=stream key, %d=segment number "+
+			"(supports padding like %03d), %T=timestamp (YYYYMMDD_HHMMSS), "+
+			"%Y=year, %m=month, %D=day, %H=hour, %M=minute, %S=second, %%=literal %")
 	fs.UintVar(&cfg.chunkSize, "chunk-size", 4096, "Initial outbound chunk size")
 	fs.BoolVar(&cfg.showVersion, "version", false, "Print version and exit")
 	fs.Var(&relayDests, "relay-to", "RTMP destination URL (can be specified multiple times)")
@@ -117,6 +127,13 @@ func parseFlags(args []string) (*cliConfig, error) {
 
 	if cfg.chunkSize == 0 || cfg.chunkSize > 65536 {
 		return nil, errors.New("chunk-size must be between 1 and 65536")
+	}
+
+	// Validate segment duration if provided
+	if cfg.segmentDuration != "" {
+		if _, err := time.ParseDuration(cfg.segmentDuration); err != nil {
+			return nil, fmt.Errorf("invalid -segment-duration %q: %w", cfg.segmentDuration, err)
+		}
 	}
 
 	switch cfg.logLevel {

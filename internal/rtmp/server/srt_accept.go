@@ -392,6 +392,8 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 	if s.cfg.RecordAll {
 		stream.mu.Lock()
 		stream.RecordDir = s.cfg.RecordDir
+		stream.SegmentDuration = s.cfg.SegmentDuration // propagate segment config
+		stream.SegmentPattern = s.cfg.SegmentPattern   // propagate segment config
 		stream.mu.Unlock()
 		s.log.Info("recording requested",
 			"stream_key", info.StreamKey(),

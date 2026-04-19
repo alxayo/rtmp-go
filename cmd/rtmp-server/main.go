@@ -55,12 +55,21 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Parse the segment duration string into a time.Duration.
+	// The string was already validated in parseFlags(), so we can safely ignore the error.
+	var segmentDur time.Duration
+	if cfg.segmentDuration != "" {
+		segmentDur, _ = time.ParseDuration(cfg.segmentDuration) // already validated in parseFlags
+	}
+
 	server := srv.New(srv.Config{
 		ListenAddr:            cfg.listenAddr,
 		ChunkSize:             uint32(cfg.chunkSize),
 		WindowAckSize:         2_500_000,
 		RecordAll:             cfg.recordAll,
 		RecordDir:             cfg.recordDir,
+		SegmentDuration:       segmentDur,
+		SegmentPattern:        cfg.segmentPattern,
 		LogLevel:              cfg.logLevel,
 		RelayDestinations:     cfg.relayDestinations,
 		HookScripts:           cfg.hookScripts,

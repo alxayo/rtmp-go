@@ -260,6 +260,8 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 			if stream != nil {
 				stream.mu.Lock()
 				stream.RecordDir = cfg.RecordDir
+				stream.SegmentDuration = cfg.SegmentDuration // propagate segment config
+				stream.SegmentPattern = cfg.SegmentPattern   // propagate segment config
 				stream.mu.Unlock()
 				log.Info("recording requested", "stream_key", pc.StreamKey, "record_dir", cfg.RecordDir)
 			}
@@ -512,6 +514,8 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 
 	recordDir := stream.RecordDir
 	audioCodec := stream.AudioCodec
+	segmentDuration := stream.SegmentDuration // extract segment config under same lock
+	segmentPattern := stream.SegmentPattern   // extract segment config under same lock
 
 	// Snapshot sequence headers for metadata extraction (under lock)
 	var videoSeqPayload, audioSeqPayload []byte
@@ -547,6 +551,52 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 		meta.Stereo = st
 	}
 
+	// --- Segmented recording branch ---
+	// When SegmentDuration is configured, create a SegmentedRecorder that rotates
+	// files automatically at keyframe boundaries. Each segment is independently
+	// playable because sequence headers are re-injected at the start of each file.
+	if segmentDuration > 0 {
+		// Determine the container format and file extension from the video codec.
+		// H.264 → FLV, H.265+ → MP4 (same logic as single-file recording).
+		format := media.SelectContainerFormat(codec)
+		extension := "." + format
+
+		// Create the segment namer from the user's pattern. The namer expands
+		// FFmpeg-style placeholders (%s, %d, %03d, %T, etc.) into concrete
+		// file paths for each segment.
+		namer, err := media.NewSegmentNamer(segmentPattern, stream.Key, recordDir, extension)
+		if err != nil {
+			log.Error("invalid segment pattern", "error", err, "pattern", segmentPattern)
+			stream.mu.Lock()
+			stream.RecordDir = "" // Don't retry on every frame
+			stream.mu.Unlock()
+			return
+		}
+
+		// The SegmentNameFunc wraps the namer's NextName method so the
+		// segmented recorder can request new filenames without knowing
+		// about the namer internals.
+		nameFn := func() (string, error) { return namer.NextName() }
+
+		// Convert the segment duration from time.Duration to milliseconds (uint32)
+		// because RTMP timestamps are in milliseconds.
+		segDurMs := uint32(segmentDuration.Milliseconds())
+		recorder := media.NewSegmentedRecorder(segDurMs, codec, nameFn, log, meta)
+
+		stream.mu.Lock()
+		stream.Recorder = recorder
+		stream.mu.Unlock()
+		metrics.RecordingsActive.Add(1)
+
+		log.Info("segmented recorder initialized",
+			"stream_key", stream.Key,
+			"segment_duration", segmentDuration,
+			"pattern", segmentPattern,
+			"codec", codec, "format", format)
+		return
+	}
+
+	// --- Single-file recording (default, unchanged) ---
 	// Generate filename with the correct extension based on detected codec
 	safeKey := strings.ReplaceAll(stream.Key, "/", "_")
 	timestamp := time.Now().Format("20060102_150405")

@@ -84,3 +84,4 @@ coverage.html
 
 # Delve debugger
 __debug_bin*
+*.pem

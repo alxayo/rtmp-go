@@ -106,6 +106,7 @@ ffplay rtmps://localhost:443/live/test
 | **Command Flow** | connect → createStream → publish / play |
 | **Live Relay** | Transparent forwarding to unlimited subscribers |
 | **FLV Recording** | Automatic recording of all streams to FLV files |
+| **Segmented Recording** | Split recordings into timed segments with keyframe alignment (`-segment-duration`, `-segment-pattern`) |
 | **Late-Join** | Sequence header caching (H.264/H.265/AV1/VP9 + AAC config) |
 | **Multi-Destination** | Relay to external RTMP servers (`-relay-to` flag) |
 | **Media Logging** | Per-connection codec detection (incl. Enhanced RTMP) and bitrate stats |
@@ -199,6 +200,9 @@ Integration tests in `tests/integration/` exercise the full publish → subscrib
 -log-level           debug | info | warn | error (default info)
 -record-all          Record all streams to FLV (default false)
 -record-dir          Recording directory (default recordings)
+-segment-duration    Split recordings into segments of this duration (e.g. "30s", "5m"). Default: disabled
+-segment-pattern     Filename pattern for segments. Placeholders: %s=stream key, %d=segment number,
+                     %T=timestamp, %Y/%m/%D/%H/%M/%S=date parts, %%=literal %. Default: "%s_%T_seg%03d"
 -chunk-size          Outbound chunk size, 1-65536 (default 4096)
 -relay-to            RTMP relay destination URL (repeatable)
 -auth-mode           Authentication mode: none|token|file|callback (default none)

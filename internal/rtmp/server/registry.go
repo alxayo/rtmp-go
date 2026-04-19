@@ -51,6 +51,14 @@ type Stream struct {
 	Recorder    media.MediaWriter  // optional media file recorder (nil if not recording)
 	RecordDir   string             // non-empty when recording is requested; used for lazy recorder init
 
+	// SegmentDuration is the target duration for each recording segment.
+	// Zero means single-file recording (no segmentation).
+	SegmentDuration time.Duration
+
+	// SegmentPattern is the filename pattern for segments (FFmpeg-style placeholders).
+	// Only used when SegmentDuration > 0.
+	SegmentPattern string
+
 	// Cached sequence headers for late-joining subscribers.
 	// Sequence headers contain codec configuration (H.264 SPS/PPS, AAC AudioSpecificConfig)
 	// that decoders need before they can process media frames.

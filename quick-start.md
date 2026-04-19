@@ -66,6 +66,27 @@ You should see output like:
 .\rtmp-server.exe -listen localhost:1935 -log-level warn -record-all true -record-dir ./recordings
 ```
 
+### Segmented Recording
+
+Split recordings into multiple files of a fixed duration. Segment boundaries align to video keyframes, so each segment is independently playable.
+
+```bash
+# Record with 30-second segments (default naming pattern)
+./rtmp-server -record-all true -segment-duration 30s
+# → recordings/live_mystream_20260419_130000_seg001.mp4
+# → recordings/live_mystream_20260419_130030_seg002.mp4
+
+# Custom segment naming pattern with 4-digit padding
+./rtmp-server -record-all true -segment-duration 5m -segment-pattern "%s_%T_seg%04d"
+# → recordings/live_mystream_20260419_130000_seg0001.mp4
+
+# Date-based subdirectories (great for archival)
+./rtmp-server -record-all true -segment-duration 10m -segment-pattern "%Y/%m/%D/%s_seg%03d"
+# → recordings/2026/04/19/live_mystream_seg001.mp4
+```
+
+See [docs/rtmp-protocol.md](docs/rtmp-protocol.md#segmented-recording) for the full pattern placeholder reference.
+
 ## Step 3: Configure OBS Studio
 
 1. **Open OBS Studio**

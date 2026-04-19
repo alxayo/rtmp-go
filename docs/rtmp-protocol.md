@@ -352,3 +352,71 @@ Stream Key: "live/mystream"
 ```
 
 The application name is sent in the `connect` command. The stream name is sent in `publish` or `play`.
+
+## Segmented Recording
+
+By default, the server writes one recording file per publish session. **Segmented recording** splits the recording into multiple files of a configurable duration, with each segment starting at a video keyframe so it can be played back independently.
+
+This is useful for:
+- **HLS-like workflows** — short segments (2–10 s) ready for packaging
+- **Archival** — manageable 15-minute chunks instead of multi-hour monoliths
+- **Fault tolerance** — if the server crashes, only the current segment is lost
+
+### CLI Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-segment-duration` | Target duration per segment. Actual splits happen at the next keyframe after this duration elapses. Examples: `2s`, `30s`, `5m`, `15m`. | `""` (disabled — single file per session) |
+| `-segment-pattern` | Filename pattern for segments. Supports placeholders listed below. | `%s_%T_seg%03d` |
+
+### Pattern Placeholders
+
+| Placeholder | Expands To | Example |
+|-------------|-----------|---------|
+| `%s` | Stream key (slashes replaced with underscores) | `live_mystream` |
+| `%d` | Segment number (supports printf-style padding: `%03d`, `%04d`) | `001`, `0001` |
+| `%T` | Full timestamp (`YYYYMMDD_HHMMSS`) | `20260419_130000` |
+| `%Y` | Year (4 digits) | `2026` |
+| `%m` | Month (2 digits) | `04` |
+| `%D` | Day (2 digits) | `19` |
+| `%H` | Hour (2 digits, 24-hour) | `13` |
+| `%M` | Minute (2 digits) | `00` |
+| `%S` | Second (2 digits) | `00` |
+| `%%` | Literal `%` | `%` |
+
+### Keyframe Alignment
+
+Segments do **not** split at the exact requested duration. Instead, the server waits for the next video keyframe after the target duration has elapsed. This guarantees:
+
+1. Every segment starts with a keyframe — no decoder initialization issues.
+2. Each segment is independently playable without referencing other segments.
+3. The actual segment duration may be slightly longer than the configured value (by up to one keyframe interval, typically 1–2 seconds).
+
+### Usage Examples
+
+```bash
+# Basic: 30-second segments with default naming
+./rtmp-server -record-all true -segment-duration 30s
+# → recordings/live_mystream_20260419_130000_seg001.mp4
+# → recordings/live_mystream_20260419_130030_seg002.mp4
+
+# Short segments (2 seconds, for HLS-like workflows)
+./rtmp-server -record-all true -segment-duration 2s
+
+# Long segments (15 minutes, for archival)
+./rtmp-server -record-all true -segment-duration 15m
+
+# Custom pattern with 4-digit padding
+./rtmp-server -record-all true -segment-duration 5m -segment-pattern "%s_%T_seg%04d"
+# → recordings/live_mystream_20260419_130000_seg0001.mp4
+
+# Date-based subdirectories
+./rtmp-server -record-all true -segment-duration 10m -segment-pattern "%Y/%m/%D/%s_seg%03d"
+# → recordings/2026/04/19/live_mystream_seg001.mp4
+
+# Simple numbered segments
+./rtmp-server -record-all true -segment-duration 1m -segment-pattern "stream_%d"
+# → recordings/stream_1.mp4, recordings/stream_2.mp4, ...
+```
+
+Segmented recording works identically across RTMP, RTMPS, and SRT ingest — the segment logic runs after media messages have been normalized into the internal format.

@@ -37,6 +37,16 @@ type Config struct {
 	WindowAckSize     uint32   // flow control: bytes before client must acknowledge (default 2,500,000)
 	RecordAll         bool     // if true, automatically record all published streams to FLV files
 	RecordDir         string   // directory for FLV recordings (default "recordings")
+
+	// SegmentDuration splits recordings into multiple files of this duration.
+	// Segment boundaries are aligned to video keyframes for independent playback.
+	// Zero (default) means recording produces a single file per session.
+	SegmentDuration time.Duration
+
+	// SegmentPattern is the filename pattern for segments, using FFmpeg-inspired
+	// placeholders. See the -segment-pattern flag documentation for details.
+	// Default: "%s_%T_seg%03d"
+	SegmentPattern string
 	LogLevel          string   // log verbosity: "debug", "info", "warn", "error" (default "info")
 	RelayDestinations []string // RTMP URLs to forward published streams to (e.g. rtmp://cdn/live/key)
 
@@ -98,6 +108,9 @@ func (c *Config) applyDefaults() {
 	} // matches control burst
 	if c.RecordDir == "" {
 		c.RecordDir = "recordings"
+	}
+	if c.SegmentPattern == "" {
+		c.SegmentPattern = "%s_%T_seg%03d"
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
