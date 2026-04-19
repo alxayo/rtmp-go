@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multitrack sequence header caching**: Per-track video/audio sequence headers are cached in the stream registry for late-join subscribers (E-RTMP v2 multitrack)
 - **MP4 recording parity**: Enhanced audio codec recording with proper MP4 sample entries
   - Opus → `Opus` sample entry + `dOps` box (OpusSpecificBox)
   - FLAC → `fLaC` sample entry + `dfLa` box (FLAC metadata blocks)

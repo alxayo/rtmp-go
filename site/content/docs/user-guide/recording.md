@@ -64,6 +64,19 @@ When H.265/HEVC video is detected, the server writes an ISO BMFF (MP4) container
 - **File layout**: `ftyp` (32 bytes) → `mdat` (streamed media) → `moov` (metadata)
 - **Codec detection**: Container format is decided lazily when the first video message arrives, ensuring correct codec identification
 
+### Supported Audio Codecs in MP4
+
+MP4 recording supports all Enhanced RTMP audio codecs with proper codec-specific sample entries:
+
+| Audio Codec | FourCC | MP4 Sample Entry | Config Box | Notes |
+|-------------|--------|------------------|------------|-------|
+| AAC         | `mp4a` | `mp4a`           | `esds`     | Default, works with legacy and enhanced RTMP |
+| Opus        | `Opus` | `Opus`           | `dOps`     | Always 48kHz timescale; parses OpusHead |
+| FLAC        | `fLaC` | `fLaC`           | `dfLa`     | Parses STREAMINFO for sample rate/channels |
+| AC-3        | `ac-3` | `ac-3`           | `dac3`     | Default 48kHz / 5.1 surround |
+| E-AC-3      | `ec-3` | `ec-3`           | `dec3`     | Default 48kHz / 5.1 surround |
+| MP3         | `.mp3` | `.mp3`           | `esds`     | Uses MPEG-1 Audio OTI (0x6B) |
+
 ## Verifying Recordings
 
 Inspect a recording with FFprobe:

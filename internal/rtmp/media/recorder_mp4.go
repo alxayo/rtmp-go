@@ -50,7 +50,8 @@ videoSamples []mp4VideoSample // per-video-frame metadata (separate from audio)
 audioSamples []mp4AudioSample // per-audio-frame metadata (separate from video)
 videoConfig  []byte           // HEVCDecoderConfigurationRecord or AVCDecoderConfigurationRecord
 audioConfig  []byte           // AudioSpecificConfig (from sequence header)
-videoCodec   string           // detected codec: "H265", "H264", etc.
+videoCodec   string           // detected video codec: "H265", "H264", "AV1", "VP9", "VP8", "VVC"
+audioCodec   string           // detected audio codec: "AAC", "Opus", "FLAC", "AC3", "EAC3", "MP3"
 mdatStart    int64            // file offset where mdat box begins
 mdatDataSize int64            // total bytes written to mdat so far
 }
@@ -303,19 +304,42 @@ r.handleEnhancedAudio(msg, data)
 // Legacy AAC
 r.handleLegacyAAC(msg, data)
 }
-// Other audio codecs (MP3, etc.) are not supported in MP4 recorder
+// Other audio codecs not using enhanced RTMP are not supported in MP4 recorder
 }
 
 // handleEnhancedAudio processes Enhanced RTMP audio messages.
+// Enhanced audio payload: [ExHeader(1B)][FourCC(4B)][data...]
+//   - FourCC identifies the audio codec (mp4a=AAC, Opus, fLaC, ac-3, ec-3, .mp3)
+//   - pktType 0: SequenceStart — codec configuration record after FourCC
+//   - pktType 1: CodedFrames — raw audio data after FourCC
 func (r *MP4Recorder) handleEnhancedAudio(msg *chunk.Message, data []byte) {
 if len(data) < 5 {
 return
 }
 
 pktType := data[0] & 0x0F
+fourCC := string(data[1:5])
+
+// Detect audio codec from the FourCC identifier in the enhanced audio header.
+// Each FourCC maps to a specific codec that determines which MP4 sample entry
+// box we'll generate later in buildAudioSampleTable().
+switch fourCC {
+case "mp4a":
+r.audioCodec = "AAC"
+case "Opus":
+r.audioCodec = "Opus"
+case "fLaC":
+r.audioCodec = "FLAC"
+case "ac-3":
+r.audioCodec = "AC3"
+case "ec-3":
+r.audioCodec = "EAC3"
+case ".mp3":
+r.audioCodec = "MP3"
+}
 
 switch pktType {
-case 0: // SequenceStart — AudioSpecificConfig after FourCC
+case 0: // SequenceStart — codec configuration record after FourCC
 r.audioConfig = make([]byte, len(data[5:]))
 copy(r.audioConfig, data[5:])
 case 1: // CodedFrames — raw audio after FourCC
@@ -324,7 +348,10 @@ r.writeAudioSample(data[5:], msg.Timestamp)
 }
 
 // handleLegacyAAC processes traditional RTMP AAC audio messages.
+// Legacy AAC is always codec "AAC" — set audioCodec so buildAudioSampleTable()
+// uses the correct mp4a/esds sample entry.
 func (r *MP4Recorder) handleLegacyAAC(msg *chunk.Message, data []byte) {
+r.audioCodec = "AAC"
 pktType := data[1]
 
 switch pktType {
@@ -568,18 +595,58 @@ trakBuf.writeBox("tkhd", tkhdBuf.Bytes())
 mediaBuf := newMP4BoxBuilder()
 
 // Parse AudioSpecificConfig to get sample rate
+// For AAC, we parse the 2-byte AudioSpecificConfig from the sequence header.
+// For other codecs, we use codec-specific defaults or parse their config data.
 sampleRate := uint32(44100)
 channels := uint16(2)
+
+switch r.audioCodec {
+case "Opus":
+// Opus in MP4 always uses 48kHz timescale per RFC 7845 / ISO 14496-12
+sampleRate = 48000
+channels = 2 // default stereo; overridden from OpusHead if available
+if len(r.audioConfig) >= 19 {
+// OpusHead: offset 9 = channel count
+channels = uint16(r.audioConfig[9])
+if channels == 0 {
+	channels = 2
+}
+}
+case "FLAC":
+// Parse FLAC STREAMINFO block to get sample rate and channels.
+// STREAMINFO layout (34 bytes): bytes 10-13 contain sample rate (20 bits),
+// bits after that contain channel count - 1 (3 bits).
+if len(r.audioConfig) >= 18 {
+sr := uint32(r.audioConfig[10])<<12 | uint32(r.audioConfig[11])<<4 | uint32(r.audioConfig[12])>>4
+if sr > 0 {
+	sampleRate = sr
+}
+ch := uint16((r.audioConfig[12]>>1)&0x07) + 1
+if ch > 0 {
+	channels = ch
+}
+}
+case "AC3", "EAC3":
+// AC-3 and E-AC-3 are almost always 48kHz with 5.1 surround
+sampleRate = 48000
+channels = 6
+case "MP3":
+// Common MP3 defaults: 44100 Hz stereo
+sampleRate = 44100
+channels = 2
+default:
+// AAC or unknown — parse AudioSpecificConfig (2+ bytes)
 if len(r.audioConfig) >= 2 {
 // AudioSpecificConfig: 5-bit object type, 4-bit freq index, 4-bit channels
 freqIdx := (r.audioConfig[0]&0x07)<<1 | (r.audioConfig[1] >> 7)
 ch := (r.audioConfig[1] >> 3) & 0x0F
 aacFreqs := []uint32{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
 if int(freqIdx) < len(aacFreqs) {
-sampleRate = aacFreqs[freqIdx]
+	sampleRate = aacFreqs[freqIdx]
 }
 if ch > 0 {
-channels = uint16(ch)
+	channels = uint16(ch)
+}
 }
 }
 
@@ -792,38 +859,42 @@ return stblBuf
 }
 
 // buildAudioSampleTable builds the stbl box for the audio track.
+// Generates codec-specific sample description (stsd) entries based on
+// r.audioCodec, then the shared timing/size/chunk/offset tables.
 func (r *MP4Recorder) buildAudioSampleTable(sampleRate uint32, channels uint16) *mp4BoxBuilder {
 stblBuf := newMP4BoxBuilder()
 samples := r.audioSamples
 
-// --- stsd ---
+// --- stsd: Sample Description ---
+// Each audio codec requires a different sample entry box type and
+// codec-specific configuration box inside it.
 stsdBuf := newMP4BoxBuilder()
 stsdBuf.writeU32(0) // version + flags
 stsdBuf.writeU32(1) // entry_count
 
-sampleEntry := newMP4BoxBuilder()
-sampleEntry.writeBytes(make([]byte, 6)) // reserved
-sampleEntry.writeU16(1)                 // data_reference_index
-// Audio sample entry fields (ISO 14496-12)
-sampleEntry.writeU32(0)         // reserved
-sampleEntry.writeU32(0)         // reserved
-sampleEntry.writeU16(channels)  // channel_count
-sampleEntry.writeU16(16)        // sample_size (bits)
-sampleEntry.writeU16(0)         // pre_defined
-sampleEntry.writeU16(0)         // reserved
-sampleEntry.writeU32(sampleRate << 16) // sample_rate (fixed-point 16.16)
+switch r.audioCodec {
+case "Opus":
+stsdBuf.writeBox("Opus", r.buildOpusSampleEntry(sampleRate, channels).Bytes())
+case "FLAC":
+stsdBuf.writeBox("fLaC", r.buildFLACSampleEntry(sampleRate, channels).Bytes())
+case "AC3":
+stsdBuf.writeBox("ac-3", r.buildAC3SampleEntry(sampleRate, channels).Bytes())
+case "EAC3":
+stsdBuf.writeBox("ec-3", r.buildEAC3SampleEntry(sampleRate, channels).Bytes())
+case "MP3":
+stsdBuf.writeBox(".mp3", r.buildMP3SampleEntry(sampleRate, channels).Bytes())
+default: // AAC or unknown → existing mp4a/esds path
+stsdBuf.writeBox("mp4a", r.buildAACSampleEntry(sampleRate, channels).Bytes())
+}
 
-// esds box with actual AudioSpecificConfig
-esdsBuf := r.buildEsdsBox()
-sampleEntry.writeBox("esds", esdsBuf)
-
-stsdBuf.writeBox("mp4a", sampleEntry.Bytes())
 stblBuf.writeBox("stsd", stsdBuf.Bytes())
 
 // --- stts ---
-// For AAC, each frame is typically 1024 samples at the given sample rate.
-// Use actual timestamps converted to audio timescale.
-sttsEntries := buildAudioSttsEntries(samples, sampleRate)
+// Audio frame duration varies by codec:
+//   - AAC: 1024 samples per frame
+//   - Opus: 960 samples per frame (20ms at 48kHz)
+//   - FLAC/AC3/EAC3/MP3: use timestamp-based deltas
+sttsEntries := buildAudioSttsEntries(samples, sampleRate, r.audioCodec)
 sttsBuf := newMP4BoxBuilder()
 sttsBuf.writeU32(0) // version + flags
 sttsBuf.writeU32(uint32(len(sttsEntries)))
@@ -916,6 +987,200 @@ return buf.Bytes()
 }
 
 // =============================================================================
+// Codec-specific audio sample entry builders
+// =============================================================================
+//
+// Each audio codec in MP4 requires a specific sample entry box type (e.g., "Opus",
+// "fLaC", "ac-3") containing the common AudioSampleEntry fields plus a codec-
+// specific configuration box (e.g., dOps, dfLa, dac3). These builders produce
+// the inner contents of those boxes.
+
+// buildCommonAudioSampleEntry creates the shared AudioSampleEntry prefix defined
+// in ISO 14496-12 §12.2.3. All audio sample entries (mp4a, Opus, fLaC, etc.)
+// start with these fields before their codec-specific config box.
+func (r *MP4Recorder) buildCommonAudioSampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := newMP4BoxBuilder()
+entry.writeBytes(make([]byte, 6)) // reserved (6 bytes, must be zero)
+entry.writeU16(1)                  // data_reference_index (1 = self-contained)
+entry.writeU32(0)                  // reserved
+entry.writeU32(0)                  // reserved
+entry.writeU16(channels)           // channel_count
+entry.writeU16(16)                 // sample_size (bits per sample)
+entry.writeU16(0)                  // pre_defined (must be zero)
+entry.writeU16(0)                  // reserved
+entry.writeU32(sampleRate << 16)   // sample_rate as fixed-point 16.16
+return entry
+}
+
+// buildAACSampleEntry creates an mp4a sample entry with an esds box containing
+// the AAC AudioSpecificConfig. This is the original path used for AAC audio.
+func (r *MP4Recorder) buildAACSampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := r.buildCommonAudioSampleEntry(sampleRate, channels)
+// esds box — Elementary Stream Descriptor with AAC config
+esdsBuf := r.buildEsdsBox()
+entry.writeBox("esds", esdsBuf)
+return entry
+}
+
+// buildOpusSampleEntry creates an "Opus" sample entry with a "dOps" box
+// (OpusSpecificBox) per RFC 7845 §5.1. Opus in MP4 always uses a 48kHz
+// timescale regardless of the input sample rate.
+func (r *MP4Recorder) buildOpusSampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+// Opus in MP4 always uses 48kHz timescale per RFC 7845
+entry := r.buildCommonAudioSampleEntry(48000, channels)
+
+// Build the dOps (OpusSpecificBox) — describes Opus decoder parameters.
+// If we have a full OpusHead from the sequence header (≥19 bytes), parse it
+// for accurate values. Otherwise, build a minimal default configuration.
+dOps := newMP4BoxBuilder()
+
+if len(r.audioConfig) >= 19 {
+// OpusHead format (from Ogg/Opus):
+//   Bytes 0-7:  "OpusHead" magic string
+//   Byte 8:     Version (should be 1)
+//   Byte 9:     Output channel count
+//   Bytes 10-11: Pre-skip (little-endian uint16)
+//   Bytes 12-15: Input sample rate (little-endian uint32)
+//   Bytes 16-17: Output gain (little-endian int16)
+//   Byte 18:     Channel mapping family
+dOps.writeU8(0)                                                                // Version of dOps box
+dOps.writeU8(r.audioConfig[9])                                                 // OutputChannelCount
+dOps.writeU16(uint16(r.audioConfig[10]) | uint16(r.audioConfig[11])<<8)        // PreSkip (LE→BE)
+dOps.writeU32(uint32(r.audioConfig[12]) | uint32(r.audioConfig[13])<<8 |
+uint32(r.audioConfig[14])<<16 | uint32(r.audioConfig[15])<<24)                 // InputSampleRate (LE→BE)
+dOps.writeU16(uint16(r.audioConfig[16]) | uint16(r.audioConfig[17])<<8)        // OutputGain (LE→BE)
+dOps.writeU8(r.audioConfig[18])                                                // ChannelMappingFamily
+} else {
+// Minimal dOps for when no OpusHead config is available
+dOps.writeU8(0)                 // Version
+dOps.writeU8(uint8(channels))   // OutputChannelCount
+dOps.writeU16(0)                // PreSkip (default 0)
+dOps.writeU32(48000)            // InputSampleRate
+dOps.writeU16(0)                // OutputGain (0 dB)
+dOps.writeU8(0)                 // ChannelMappingFamily (mono/stereo)
+}
+
+entry.writeBox("dOps", dOps.Bytes())
+return entry
+}
+
+// buildFLACSampleEntry creates a "fLaC" sample entry with a "dfLa" box
+// containing FLAC METADATA_BLOCK(s). The audioConfig from the sequence header
+// should contain the raw FLAC STREAMINFO block (34 bytes).
+func (r *MP4Recorder) buildFLACSampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := r.buildCommonAudioSampleEntry(sampleRate, channels)
+
+// dfLa box — FLAC-specific configuration per ISO 14496-12 Amd.3
+// Contains a version/flags field followed by FLAC METADATA_BLOCK(s).
+dfLa := newMP4BoxBuilder()
+dfLa.writeU32(0) // version + flags (always 0)
+
+if len(r.audioConfig) > 0 {
+// Write the STREAMINFO as the first (and last) metadata block.
+// Block header: 1 byte = [last-block-flag(1 bit) | type(7 bits)]
+// followed by 3 bytes of block length.
+dfLa.writeU8(0x80)                       // last-block flag set (bit 7=1), type=0 (STREAMINFO)
+dfLa.writeU8(0)                           // length high byte
+dfLa.writeU16(uint16(len(r.audioConfig))) // length low 2 bytes
+dfLa.writeBytes(r.audioConfig)            // raw STREAMINFO data
+}
+
+entry.writeBox("dfLa", dfLa.Bytes())
+return entry
+}
+
+// buildAC3SampleEntry creates an "ac-3" sample entry with a "dac3" box
+// (AC3SpecificBox) per ETSI TS 102 366. The audioConfig from the sequence
+// header should contain the raw AC-3 specific config data.
+func (r *MP4Recorder) buildAC3SampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := r.buildCommonAudioSampleEntry(sampleRate, channels)
+
+// dac3 box — AC3SpecificBox
+// If we have config data from the enhanced RTMP sequence header, use it
+// directly. Otherwise write a minimal default for 48kHz stereo.
+if len(r.audioConfig) > 0 {
+entry.writeBox("dac3", r.audioConfig)
+} else {
+// Minimal dac3: 3 bytes encoding fscod(48kHz), bsid(8), bsmod(complete main),
+// acmod(stereo), lfeon(0), bit_rate_code
+dac3 := []byte{0x10, 0x40, 0x00}
+entry.writeBox("dac3", dac3)
+}
+return entry
+}
+
+// buildEAC3SampleEntry creates an "ec-3" sample entry with a "dec3" box
+// (EC3SpecificBox) per ETSI TS 102 366. E-AC-3 extends AC-3 with support
+// for more channels and higher bitrates.
+func (r *MP4Recorder) buildEAC3SampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := r.buildCommonAudioSampleEntry(sampleRate, channels)
+
+// dec3 box — EC3SpecificBox
+if len(r.audioConfig) > 0 {
+entry.writeBox("dec3", r.audioConfig)
+} else {
+// Minimal dec3: 1 independent substream, stereo
+dec3 := []byte{0x00, 0x20, 0x0F, 0x00}
+entry.writeBox("dec3", dec3)
+}
+return entry
+}
+
+// buildMP3SampleEntry creates a ".mp3" sample entry with an esds box using
+// objectTypeIndication 0x6B (MPEG-1 Audio / MP3) instead of 0x40 (AAC).
+// MP3 in MP4 is defined in ISO 14496-14 and uses the same ES_Descriptor
+// structure as AAC but with a different object type.
+func (r *MP4Recorder) buildMP3SampleEntry(sampleRate uint32, channels uint16) *mp4BoxBuilder {
+entry := r.buildCommonAudioSampleEntry(sampleRate, channels)
+
+// MP3 doesn't require an AudioSpecificConfig, but if one was provided
+// in the sequence header, include it.
+asc := r.audioConfig
+
+// Calculate descriptor lengths for the esds structure
+decSpecInfoLen := len(asc)
+decConfigLen := 13 // fixed DecoderConfigDescriptor fields
+if decSpecInfoLen > 0 {
+decConfigLen += 2 + decSpecInfoLen // tag + length + data
+}
+esDescLen := 3 + 2 + decConfigLen + 3 // ES_ID+flags + tag+len + decConfig + SLConfig
+
+esds := newMP4BoxBuilder()
+esds.writeU32(0) // version + flags
+
+// ES_Descriptor (tag 0x03)
+esds.writeU8(0x03)              // tag
+esds.writeU8(uint8(esDescLen))  // length
+esds.writeU16(0)                // ES_ID
+esds.writeU8(0)                 // flags
+
+// DecoderConfigDescriptor (tag 0x04)
+esds.writeU8(0x04)                // tag
+esds.writeU8(uint8(decConfigLen)) // length
+esds.writeU8(0x6B)                // objectTypeIndication: MPEG-1 Audio (MP3)
+esds.writeU8(0x15)                // streamType=5 (audio), upstream=0, reserved=1
+esds.writeU8(0x00)                // bufferSizeDB (3 bytes)
+esds.writeU16(0x0000)
+esds.writeU32(0)                  // maxBitrate
+esds.writeU32(0)                  // avgBitrate
+
+// DecoderSpecificInfo (tag 0x05) — only present if config data exists
+if decSpecInfoLen > 0 {
+esds.writeU8(0x05)                  // tag
+esds.writeU8(uint8(decSpecInfoLen)) // length
+esds.writeBytes(asc)                // config data
+}
+
+// SLConfigDescriptor (tag 0x06)
+esds.writeU8(0x06) // tag
+esds.writeU8(0x01) // length
+esds.writeU8(0x02) // predefined = MP4
+
+entry.writeBox("esds", esds.Bytes())
+return entry
+}
+
+// =============================================================================
 // stts helpers — run-length encode timestamp deltas
 // =============================================================================
 
@@ -959,14 +1224,60 @@ entries[len(entries)-1].count++
 return entries
 }
 
-func buildAudioSttsEntries(samples []mp4AudioSample, sampleRate uint32) []sttsEntry {
+// buildAudioSttsEntries creates time-to-sample entries for the audio track.
+// Each audio codec has a different standard frame size:
+//   - AAC: 1024 samples per frame
+//   - Opus: 960 samples per frame (20ms at 48kHz)
+//   - MP3: 1152 samples per frame (MPEG-1 Layer III)
+//   - FLAC/AC3/EAC3: 1536 samples per frame (common AC-3 frame size at 48kHz)
+func buildAudioSttsEntries(samples []mp4AudioSample, sampleRate uint32, audioCodec string) []sttsEntry {
 if len(samples) == 0 {
 return nil
 }
-// AAC frames are typically 1024 samples per frame at the given sample rate
-// Use constant delta for simplicity (most AAC streams are CBR-timed)
-aacFrameSamples := uint32(1024)
-return []sttsEntry{{uint32(len(samples)), aacFrameSamples}}
+
+// Select the standard frame duration for this codec
+var frameSamples uint32
+switch audioCodec {
+case "Opus":
+frameSamples = 960 // 20ms at 48kHz
+case "MP3":
+frameSamples = 1152 // MPEG-1 Layer III standard
+case "AC3", "EAC3":
+frameSamples = 1536 // standard AC-3 frame at 48kHz
+case "FLAC":
+// FLAC frame sizes vary; use timestamp deltas for accuracy
+frameSamples = 0
+default: // AAC
+frameSamples = 1024
+}
+
+// For codecs with a known constant frame size, emit a single run-length entry
+if frameSamples > 0 {
+return []sttsEntry{{uint32(len(samples)), frameSamples}}
+}
+
+// For variable-frame codecs (FLAC), compute deltas from timestamps
+if len(samples) == 1 {
+// Single sample — use a reasonable default
+return []sttsEntry{{1, 1024}}
+}
+var entries []sttsEntry
+for i := 1; i < len(samples); i++ {
+delta := uint32(float64(samples[i].timestamp-samples[i-1].timestamp) * float64(sampleRate) / 1000)
+if delta == 0 {
+delta = 1024 // prevent zero delta
+}
+if len(entries) > 0 && entries[len(entries)-1].delta == delta {
+entries[len(entries)-1].count++
+} else {
+entries = append(entries, sttsEntry{1, delta})
+}
+}
+// Last sample gets same delta as previous
+if len(entries) > 0 {
+entries[len(entries)-1].count++
+}
+return entries
 }
 
 // =============================================================================
