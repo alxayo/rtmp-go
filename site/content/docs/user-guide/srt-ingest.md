@@ -167,22 +167,69 @@ The `-srt-latency` flag controls the TSBPD (Timestamp-Based Packet Delivery) jit
 
 ## Codec Support
 
-SRT streams carry MPEG-TS containers. The server automatically detects and converts:
+SRT streams can carry either **MPEG-TS** or **Matroska/WebM** containers. The server auto-detects the format from the first bytes of each connection — no configuration needed.
 
-| Codec | Support | RTMP Output |
-|-------|---------|-------------|
-| H.264/AVC | ✅ Full | Standard RTMP video (TypeID 9) |
-| H.265/HEVC | ✅ Full | Enhanced RTMP with FourCC `hvc1` |
-| AAC | ✅ Full | Standard RTMP audio (TypeID 8) |
+### Supported Codecs
 
-H.265 streams from SRT are automatically converted to Enhanced RTMP format, allowing modern players (FFmpeg 6.1+, OBS 29.1+) to subscribe.
+| Codec | Container | E-RTMP FourCC | RTMP Output |
+|-------|-----------|---------------|-------------|
+| H.264/AVC | TS, MKV | `avc1` | Standard or Enhanced RTMP video |
+| H.265/HEVC | TS, MKV | `hvc1` | Enhanced RTMP video |
+| VP8 | MKV only | `vp08` | Enhanced RTMP video |
+| VP9 | MKV only | `vp09` | Enhanced RTMP video |
+| AV1 | MKV only | `av01` | Enhanced RTMP video |
+| AAC | TS, MKV | legacy | Standard RTMP audio |
+| Opus | MKV only | `Opus` | Enhanced RTMP audio |
+| FLAC | MKV only | `fLaC` | Enhanced RTMP audio |
+| AC-3 | TS, MKV | `ac-3` | Enhanced RTMP audio |
+| E-AC-3 | TS, MKV | `ec-3` | Enhanced RTMP audio |
+
+### Container Selection Guide
+
+| Use Case | Container | FFmpeg `-f` flag |
+|----------|-----------|-----------------|
+| H.264 + AAC (standard) | MPEG-TS | `-f mpegts` |
+| H.265 + AAC | MPEG-TS | `-f mpegts` |
+| VP8/VP9 video | Matroska | `-f matroska` |
+| AV1 video | Matroska | `-f matroska` |
+| Opus/FLAC audio | Matroska | `-f matroska` |
+| Any codec mix | Matroska | `-f matroska` |
+
+### Publishing with Matroska
+
+```bash
+# VP9 video + Opus audio
+ffmpeg -re -i test.mp4 -c:v libvpx-vp9 -c:a libopus -f matroska \
+  "srt://localhost:4200?streamid=publish:live/vp9test"
+
+# AV1 video + Opus audio
+ffmpeg -re -i test.mp4 -c:v libsvtav1 -c:a libopus -f matroska \
+  "srt://localhost:4200?streamid=publish:live/av1test"
+
+# VP8 video + FLAC audio
+ffmpeg -re -i test.mp4 -c:v libvpx -c:a flac -f matroska \
+  "srt://localhost:4200?streamid=publish:live/vp8test"
+
+# H.264 in Matroska (also works — MKV supports all codecs)
+ffmpeg -re -i test.mp4 -c copy -f matroska \
+  "srt://localhost:4200?streamid=publish:live/h264mkv"
+```
+
+### How Auto-Detection Works
+
+When a new SRT connection starts sending data, the server inspects the first bytes:
+
+- **`0x1A 0x45 0xDF 0xA3`** (EBML header) → Matroska/WebM demuxer
+- **`0x47` sync byte** at expected positions → MPEG-TS demuxer
+
+The detection is transparent — publishers simply use `-f mpegts` or `-f matroska` in FFmpeg (or equivalent in OBS). All codecs are converted to Enhanced RTMP for delivery to RTMP subscribers.
 
 ## Recording SRT Streams
 
-SRT streams are recorded just like RTMP streams when `-record-all` is enabled. The server automatically selects the container format:
+SRT streams are recorded just like RTMP streams when `-record-all` is enabled. The server automatically selects the container format based on the video codec:
 
 - **H.264 streams** → FLV recording
-- **H.265 streams** → MP4 recording
+- **H.265/VP8/VP9/AV1 streams** → MP4 recording
 
 ```bash
 ./rtmp-server -srt-listen :4200 -record-all true -record-dir ./recordings
@@ -204,12 +251,13 @@ When metrics are enabled (`-metrics-addr`), SRT adds 6 counters:
 ## Architecture
 
 ```
-SRT Publisher → UDP → SRT Handshake → TSBPD Buffer → MPEG-TS Demux
-    → Codec Convert (Annex B→AVCC, ADTS→raw) → chunk.Message → Stream Registry
+SRT Publisher → UDP → SRT Handshake → TSBPD Buffer
+    → Container Auto-Detection (MPEG-TS or Matroska/WebM)
+    → Codec Convert → chunk.Message → Stream Registry
     → RTMP Subscribers / Recording / Relay
 ```
 
-The conversion is transparent: RTMP subscribers see the SRT source as a regular RTMP publisher.
+The conversion is transparent: RTMP subscribers see the SRT source as a regular RTMP publisher, regardless of whether the SRT stream uses MPEG-TS or Matroska/WebM.
 
 ## Example: Full Setup
 
@@ -231,10 +279,18 @@ The conversion is transparent: RTMP subscribers see the SRT source as a regular 
 Publish via SRT and watch via RTMP:
 
 ```bash
-# Publish H.265 via SRT
+# Publish H.265 via SRT (MPEG-TS)
 ffmpeg -re -i test.mp4 -c:v libx265 -c:a aac -f mpegts \
   "srt://localhost:4200?streamid=live/test"
 
-# Subscribe via RTMP
+# Publish VP9 + Opus via SRT (Matroska)
+ffmpeg -re -i test.mp4 -c:v libvpx-vp9 -c:a libopus -f matroska \
+  "srt://localhost:4200?streamid=live/vp9"
+
+# Publish AV1 via SRT (Matroska)
+ffmpeg -re -i test.mp4 -c:v libsvtav1 -c:a libopus -f matroska \
+  "srt://localhost:4200?streamid=live/av1"
+
+# Subscribe via RTMP (works for any SRT publisher above)
 ffplay rtmp://localhost:1935/live/test
 ```

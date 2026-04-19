@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Matroska/WebM over SRT**: SRT ingest now auto-detects both MPEG-TS and Matroska/WebM containers. Matroska support enables five additional codecs that have no standard MPEG-TS stream type:
+  - VP8 video (`vp08` FourCC)
+  - VP9 video (`vp09` FourCC)
+  - AV1 video (`av01` FourCC)
+  - Opus audio (`Opus` FourCC)
+  - FLAC audio (`fLaC` FourCC)
+  - Plus H.264, H.265, AAC, AC-3, and E-AC-3 via MKV path
+  - Container auto-detection: first 4 bytes `0x1A45DFA3` → Matroska, `0x47` sync → MPEG-TS
+  - New `internal/mkv/` package: streaming EBML parser + Matroska demuxer (pure Go, zero deps)
+  - MKV-specific codec helpers for H.264/H.265 length-prefixed NALUs and raw AAC
 - **Segmented recording**: New `-segment-duration` and `-segment-pattern` flags to split recordings into multiple files of configurable duration with FFmpeg-style filename patterns. Segment boundaries align to video keyframes for independent playback. Works across RTMP, RTMPS, and SRT.
 - **SRT AC-3/E-AC-3 audio bridge**: AC-3 (Dolby Digital) and E-AC-3 (Dolby Digital Plus) audio codecs are now supported in the SRT-to-RTMP bridge. When an SRT stream carries AC-3 or E-AC-3 audio via MPEG-TS, the bridge converts them to Enhanced RTMP audio messages using FourCC codes `ac-3` and `ec-3`
 - **Multitrack sequence header caching**: Per-track video/audio sequence headers are cached in the stream registry for late-join subscribers (E-RTMP v2 multitrack)

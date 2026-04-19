@@ -11,36 +11,42 @@ SRT is a UDP-based protocol designed for reliable, low-latency live video transp
 ```
 SRT Publisher (FFmpeg/OBS)
     │
-    ▼ UDP + MPEG-TS
-┌─────────────────────────────────┐
-│  SRT Listener (:10080 UDP)      │
-│    │                            │
-│    ▼                            │
-│  SRT Handshake v5               │
-│  (cookie, extensions, stream ID)│
-│    │                            │
-│    ▼                            │
-│  SRT Connection                 │
-│  (reliability: ACK/NAK/TSBPD)  │
-│    │                            │
-│    ▼                            │
-│  MPEG-TS Demuxer                │
-│  (PAT/PMT → PES → H.264/AAC)   │
-│    │                            │
-│    ▼                            │
-│  Codec Converter                │
-│  H.264: Annex B → AVCC          │
-│  AAC:   ADTS → Raw              │
-│    │                            │
-│    ▼                            │
-│  chunk.Message (RTMP format)    │
-│    │                            │
-│    ▼                            │
-│  Stream Registry (shared)       │
-│    │                            │
-│    ▼                            │
-│  RTMP Subscribers / Recording   │
-└─────────────────────────────────┘
+    ▼ UDP + MPEG-TS or Matroska/WebM
+┌─────────────────────────────────────┐
+│  SRT Listener (:10080 UDP)          │
+│    │                                │
+│    ▼                                │
+│  SRT Handshake v5                   │
+│  (cookie, extensions, stream ID)    │
+│    │                                │
+│    ▼                                │
+│  SRT Connection                     │
+│  (reliability: ACK/NAK/TSBPD)      │
+│    │                                │
+│    ▼                                │
+│  Container Auto-Detection           │
+│  (first 4 bytes: MKV or TS?)       │
+│    │                                │
+│    ├── 0x47 sync → MPEG-TS Demuxer  │
+│    │   (PAT/PMT → PES → frames)    │
+│    │                                │
+│    └── 0x1A45DFA3 → MKV Demuxer    │
+│        (EBML → Tracks → Clusters)   │
+│    │                                │
+│    ▼                                │
+│  Codec Converter                    │
+│  TS:  Annex B → AVCC, ADTS → Raw   │
+│  MKV: Length-prefix → AVCC, raw AAC │
+│    │                                │
+│    ▼                                │
+│  chunk.Message (RTMP format)        │
+│    │                                │
+│    ▼                                │
+│  Stream Registry (shared)           │
+│    │                                │
+│    ▼                                │
+│  RTMP Subscribers / Recording       │
+└─────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -61,9 +67,17 @@ SRT Publisher (FFmpeg/OBS)
 ### Publish via SRT
 
 ```bash
-# FFmpeg with SRT output (publish mode)
+# FFmpeg with MPEG-TS (H.264 + AAC)
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
   "srt://localhost:10080?streamid=publish:live/test"
+
+# FFmpeg with Matroska (VP9 + Opus — not possible with MPEG-TS!)
+ffmpeg -re -i test.mp4 -c:v libvpx-vp9 -c:a libopus -f matroska \
+  "srt://localhost:10080?streamid=publish:live/vp9test"
+
+# FFmpeg with Matroska (AV1 + Opus)
+ffmpeg -re -i test.mp4 -c:v libsvtav1 -c:a libopus -f matroska \
+  "srt://localhost:10080?streamid=publish:live/av1test"
 
 # With structured stream ID
 ffmpeg -re -i test.mp4 -c copy -f mpegts \
@@ -180,13 +194,16 @@ internal/srt/
 │   ├── receiver  Receive buffer, loss detection, reordering
 │   ├── tsbpd     Timestamp-Based Packet Delivery scheduling
 │   └── reliability  Background loop: ACK/NAK/keepalive tickers
-├── bridge.go     SRT→RTMP conversion pipeline
+├── bridge.go     SRT→RTMP conversion pipeline with container auto-detection
+├── bridge_mkv.go Matroska/WebM frame handlers (VP8, VP9, AV1, Opus, FLAC, etc.)
 ├── listener.go   UDP socket multiplexer
 ├── stream_id.go  Stream ID parser (3 formats)
 └── config.go     Configuration with defaults
 
 internal/ts/        MPEG-TS demuxer (packet, PAT/PMT, PES, stream types)
-internal/codec/     H.264 Annex B→AVCC, AAC ADTS→raw converters
+internal/mkv/       Matroska/WebM demuxer (EBML parser, streaming state machine)
+internal/codec/     Codec converters: Annex B→AVCC, ADTS→raw, MKV helpers,
+                    Enhanced RTMP tag builders (VP8, VP9, AV1, Opus, FLAC, etc.)
 internal/ingress/   Protocol-agnostic publish lifecycle manager
 ```
 
@@ -198,11 +215,30 @@ internal/ingress/   Protocol-agnostic publish lifecycle manager
 
 3. **Protocol Transparency**: SRT streams are converted to standard `chunk.Message` format before entering the stream registry. Subscribers cannot distinguish SRT from RTMP sources.
 
-4. **Zero Dependencies**: The entire SRT stack — including AES-CTR encryption, PBKDF2 key derivation, AES Key Wrap, KM parsing, MPEG-TS demuxing, and codec conversion — is implemented in pure Go using only the standard library.
+4. **Zero Dependencies**: The entire SRT stack — including AES-CTR encryption, PBKDF2 key derivation, AES Key Wrap, KM parsing, MPEG-TS demuxing, Matroska/WebM demuxing, EBML parsing, and codec conversion — is implemented in pure Go using only the standard library.
+
+### Supported Codecs
+
+| Codec | Container | E-RTMP FourCC | Notes |
+|-------|-----------|---------------|-------|
+| H.264 (AVC) | TS, MKV | `avc1` | TS: Annex B→AVCC; MKV: length-prefix normalization |
+| H.265 (HEVC) | TS, MKV | `hvc1` | TS: Annex B→HVCC; MKV: length-prefix normalization |
+| VP8 | MKV | `vp08` | MKV only (no TS stream type) |
+| VP9 | MKV | `vp09` | MKV only (no TS stream type) |
+| AV1 | MKV | `av01` | MKV only (no standard TS binding) |
+| AAC | TS, MKV | legacy | TS: ADTS→raw; MKV: raw with AudioSpecificConfig |
+| Opus | MKV | `Opus` | MKV only (no TS stream type) |
+| FLAC | MKV | `fLaC` | MKV only (no TS stream type) |
+| AC-3 | TS, MKV | `ac-3` | Syncframe pass-through |
+| E-AC-3 | TS, MKV | `ec-3` | Syncframe pass-through |
 
 ## Codec Conversion
 
-### H.264: Annex B → AVCC
+The SRT bridge supports two container formats, each requiring different codec conversion strategies.
+
+### MPEG-TS Container
+
+#### H.264: Annex B → AVCC
 
 MPEG-TS carries H.264 in **Annex B** format (start codes: `0x00000001`). RTMP expects **AVCC** format (4-byte length prefixes). The bridge:
 
@@ -211,7 +247,11 @@ MPEG-TS carries H.264 in **Annex B** format (start codes: `0x00000001`). RTMP ex
 3. Replaces start codes with 4-byte big-endian lengths
 4. Wraps in RTMP video tag format (FrameType + CodecID + AVCPacketType + CTS)
 
-### AAC: ADTS → Raw
+#### H.265: Annex B → HVCC
+
+Same Annex B→length-prefix conversion as H.264, but with VPS/SPS/PPS NALUs. Builds HEVCDecoderConfigurationRecord for the sequence header.
+
+#### AAC: ADTS → Raw
 
 MPEG-TS wraps each AAC frame in a 7-byte ADTS header. RTMP expects raw AAC with a separate AudioSpecificConfig. The bridge:
 
@@ -220,10 +260,57 @@ MPEG-TS wraps each AAC frame in a 7-byte ADTS header. RTMP expects raw AAC with 
 3. Strips the ADTS header from subsequent frames
 4. Wraps in RTMP audio tag format (SoundFormat + AACPacketType)
 
+#### AC-3 / E-AC-3
+
+Syncframes pass through directly — same format in both MPEG-TS and RTMP.
+
+### Matroska/WebM Container
+
+Matroska uses different internal formats than MPEG-TS, requiring separate codec handling:
+
+#### H.264 (MKV): Length-Prefixed NALUs
+
+MKV stores H.264 in **AVCC-like format** (length-prefixed NALUs, not Annex B). The CodecPrivate field IS the AVCDecoderConfigurationRecord. However, the NALU length field size may vary (1–4 bytes), so the bridge:
+
+1. Parses the AVCDecoderConfigurationRecord to extract SPS, PPS, and lengthSizeMinusOne
+2. Rebuilds the config record with 4-byte NALU lengths (RTMP standard)
+3. Splits frame data using the source length size, re-wraps with 4-byte lengths
+4. Wraps in Enhanced RTMP video tag format
+
+#### H.265 (MKV): Length-Prefixed NALUs
+
+Same approach as H.264 MKV. Parses HEVCDecoderConfigurationRecord for VPS/SPS/PPS arrays.
+
+#### AAC (MKV): Raw Frames
+
+MKV stores AAC as raw frames (no ADTS headers). The CodecPrivate field contains the AudioSpecificConfig (typically 2 bytes). The bridge wraps this config as an RTMP sequence header and passes frames through directly.
+
+#### VP8, VP9, AV1 (MKV): Direct Mapping
+
+These codecs store raw frames in MKV. The bridge wraps them in Enhanced RTMP video tags using their respective FourCC codes (`vp08`, `vp09`, `av01`). AV1 frames include the configOBUs from CodecPrivate as the sequence header.
+
+#### Opus, FLAC (MKV): Direct Mapping
+
+Opus and FLAC store raw frames in MKV. The bridge wraps them in Enhanced RTMP audio tags using FourCC codes (`Opus`, `fLaC`). FLAC includes the full stream info from CodecPrivate as the sequence header.
+
+### Container Auto-Detection
+
+The bridge automatically detects the container format from the first bytes of SRT payload:
+
+| First Bytes | Container | Detection Method |
+|-------------|-----------|-----------------|
+| `0x1A 0x45 0xDF 0xA3` | Matroska/WebM | EBML header element ID |
+| `0x47` at offset 0 and 188 | MPEG-TS | Dual sync byte validation |
+| `0x47` at offset 0 only | MPEG-TS (fallback) | Single sync byte |
+| Other | MPEG-TS (default) | Backward compatibility |
+
+The first 189 bytes are buffered for detection, then replayed into the chosen demuxer. This is transparent to the publisher — no configuration or Stream ID hints are needed.
+
 ### Timestamp Conversion
 
-MPEG-TS uses 90kHz clock units. RTMP uses milliseconds. The conversion:
+**MPEG-TS** uses 90kHz clock units. **Matroska** uses milliseconds (scaled by TimecodeScale). RTMP uses milliseconds.
 
-- **RTMP timestamp** = DTS / 90 (decode timestamp, not presentation)
-- **CTS** (Composition Time Offset) = (PTS - DTS) / 90 (for B-frame reordering)
+- **TS → RTMP**: timestamp = DTS / 90, CTS = (PTS - DTS) / 90
+- **MKV → RTMP**: timestamp = (clusterTimecode + blockOffset) × timecodeScale / 1,000,000
 - First timestamp is used as base (timestamps start at 0)
+- MKV path uses CTS=0 (no B-frame reordering in live VP8/VP9/AV1 streams)

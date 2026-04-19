@@ -7,8 +7,9 @@ Stream from OBS/FFmpeg → go-rtmp server → multiple viewers + FLV recording +
 
 > **Status:** ✅ Core features operational  
 > **Protocols:** ✅ RTMP, RTMPS (TLS), SRT (UDP ingest)  
-> **Codecs:** ✅ H.264, H.265/HEVC (SRT + RTMP), AV1, VP9 via Enhanced RTMP  
-> **Recording:** ✅ Automatic FLV recording with codec preservation  
+> **Codecs:** ✅ H.264, H.265/HEVC, AV1, VP8, VP9, Opus, FLAC, AC-3, E-AC-3 via Enhanced RTMP  
+> **SRT Ingest:** ✅ MPEG-TS + Matroska/WebM containers (auto-detected)  
+> **Recording:** ✅ Automatic FLV/MP4 recording with codec preservation  
 > **Relay:** ✅ Multi-subscriber with late-join support  
 > **Tested with:** OBS Studio, FFmpeg, ffplay, VLC
 
@@ -40,11 +41,19 @@ ffmpeg -re -i test.mp4 -c copy -f mpegts srt://localhost:10080?streamid=publish:
 # Publish via SRT (MPEG-TS with H.265/HEVC)
 ffmpeg -re -i test.mp4 -c:v libx265 -f mpegts srt://localhost:10080?streamid=publish:live/h265test
 
+# Publish via SRT (Matroska with VP9 + Opus)
+ffmpeg -re -i test.mp4 -c:v libvpx-vp9 -c:a libopus -f matroska \
+  srt://localhost:10080?streamid=publish:live/vp9test
+
+# Publish via SRT (Matroska with AV1)
+ffmpeg -re -i test.mp4 -c:v libsvtav1 -c:a libopus -f matroska \
+  srt://localhost:10080?streamid=publish:live/av1test
+
 # Watch via RTMP (SRT streams are transparently converted)
 ffplay rtmp://localhost:1935/live/test
 ```
 
-SRT streams carry MPEG-TS, which is automatically demuxed and converted to RTMP format (H.264/H.265 Annex B→AVCC, AAC ADTS→raw). SRT publishers appear identical to RTMP publishers from the subscriber's perspective.
+SRT streams can carry either MPEG-TS or Matroska/WebM containers — the server auto-detects the format from the first bytes. MPEG-TS supports H.264, H.265, AAC, AC-3, and E-AC-3. Matroska adds VP8, VP9, AV1, Opus, and FLAC. All codecs are converted to Enhanced RTMP for transparent subscriber delivery.
 
 #### SRT with Encryption (AES-256)
 

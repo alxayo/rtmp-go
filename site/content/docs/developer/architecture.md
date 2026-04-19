@@ -74,10 +74,15 @@ TCP Accept → Handshake → Control Burst → Command RPC → Media Relay/Recor
 | `internal/rtmp/server` | Listener, stream registry, pub/sub | `Server`, `Registry`, `Stream`, `Config` |
 | `internal/rtmp/server/auth` | Token-based authentication validators | `Validator`, `TokenValidator`, `FileValidator`, `CallbackValidator` |
 | `internal/rtmp/server/hooks` | Event notification | `HookManager`, `Event`, `Hook` |
-| `internal/rtmp/media` | Audio/video parsing, codec detection (Enhanced RTMP), FLV recording | `Recorder`, `CodecDetector` |
+| `internal/rtmp/media` | Audio/video parsing, codec detection (Enhanced RTMP), FLV/MP4 recording | `Recorder`, `CodecDetector` |
 | `internal/rtmp/relay` | Multi-destination relay | `DestinationManager`, `Destination` |
 | `internal/rtmp/metrics` | Expvar counters | `ConnectionsActive`, `BytesIngested` |
 | `internal/rtmp/client` | Minimal RTMP client for testing | `Client` |
+| `internal/srt` | SRT protocol: handshake, reliability, encryption | `Listener`, `Bridge`, `Connection` |
+| `internal/ts` | MPEG-TS demuxer for SRT ingest | `Demuxer`, `MediaFrame` |
+| `internal/mkv` | Matroska/WebM demuxer for SRT ingest (VP8/VP9/AV1/Opus/FLAC) | `Demuxer`, `Frame` |
+| `internal/codec` | Codec converters and Enhanced RTMP tag builders | `H264`, `VP8`, `VP9`, `AV1`, `Opus`, `FLAC` |
+| `internal/ingress` | Protocol-agnostic publish lifecycle manager | `Manager`, `PublishSession` |
 | `internal/errors` | Domain-specific error types | `ProtocolError`, `ChunkError`, `AMFError` |
 | `internal/logger` | Structured logging | `Init()`, `Logger()` |
 
@@ -162,7 +167,7 @@ A stream key is derived from the RTMP URL: `rtmp://host:port/app/streamName`. Th
 
 H.264 video requires SPS/PPS (Sequence Parameter Set / Picture Parameter Set) to initialize the decoder. AAC audio requires AudioSpecificConfig. These are sent as the first media messages after `publish` and are identified by a specific byte pattern (type byte 0x00 = sequence header).
 
-Enhanced RTMP codecs (H.265, AV1, VP9) use the same sequence header mechanism but are identified by a FourCC code instead of a CodecID byte.
+Enhanced RTMP codecs (H.265, AV1, VP8, VP9, Opus, FLAC) use the same sequence header mechanism but are identified by a FourCC code instead of a CodecID byte. These can arrive via direct RTMP publish or via SRT ingest (MPEG-TS for H.264/H.265/AAC, Matroska/WebM for VP8/VP9/AV1/Opus/FLAC).
 
 The server caches these so that late-joining subscribers receive them immediately, enabling instant video playback without waiting for the next keyframe cycle.
 
