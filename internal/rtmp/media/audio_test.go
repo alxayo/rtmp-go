@@ -206,6 +206,73 @@ func TestParseAudioMessage_Errors(t *testing.T) {
 	}
 }
 
+// --- ModEx Nanosecond Timestamp Tests ---
+
+// TestParseAudioMessage_ModExNanosecondTimestamp verifies that a ModEx audio packet
+// correctly extracts the nanosecond offset and provides the unwrapped payload.
+// This enables sub-millisecond A/V synchronization for Enhanced RTMP audio.
+func TestParseAudioMessage_ModExNanosecondTimestamp(t *testing.T) {
+	// Build the ModEx data that goes after the FourCC:
+	//   byte 0: [ModExType=0 (TimestampOffsetNano):4bits][DataSizeCode=1 (2 bytes):4bits] → 0x01
+	//   bytes 1-2: nanosecond offset value = 750 (0x02EE)
+	//   bytes 3-4: wrapped payload (0xDD, 0xEE) — the inner audio data
+	modexAndPayload := []byte{0x01, 0x02, 0xEE, 0xDD, 0xEE}
+
+	// Construct a full enhanced audio tag: ModEx packet type (7), AAC codec
+	tag := buildEnhancedAudioTag(7, "mp4a", modexAndPayload)
+	m, err := ParseAudioMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.PacketType != AudioPacketTypeModEx {
+		_tFatalf(t, "packetType mismatch: got %s, want modex", m.PacketType)
+	}
+	// The nanosecond offset should be extracted from the ModEx header.
+	if m.NanosecondOffset != 750 {
+		_tFatalf(t, "nano offset mismatch: got %d, want 750", m.NanosecondOffset)
+	}
+	// The payload should be the unwrapped inner data (after the ModEx header).
+	if len(m.Payload) != 2 || m.Payload[0] != 0xDD || m.Payload[1] != 0xEE {
+		_tFatalf(t, "payload mismatch: got %v, want [0xDD 0xEE]", m.Payload)
+	}
+}
+
+// TestParseAudioMessage_ModExLargeNanosecondOffset verifies extraction of a
+// larger nanosecond offset (500000) stored in 3 bytes (dataSizeCode=2).
+func TestParseAudioMessage_ModExLargeNanosecondOffset(t *testing.T) {
+	// byte 0: type=0, dataSizeCode=2 (3 bytes) → 0x02
+	// bytes 1-3: 500000 = 0x07A120
+	// byte 4: wrapped payload
+	modexAndPayload := []byte{0x02, 0x07, 0xA1, 0x20, 0xFF}
+	tag := buildEnhancedAudioTag(7, "Opus", modexAndPayload)
+	m, err := ParseAudioMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.NanosecondOffset != 500000 {
+		_tFatalf(t, "nano offset mismatch: got %d, want 500000", m.NanosecondOffset)
+	}
+}
+
+// TestParseAudioMessage_ModExInvalidFallback verifies that when the ModEx data is
+// too short to parse, the parser falls back to passing through raw data after FourCC.
+func TestParseAudioMessage_ModExInvalidFallback(t *testing.T) {
+	// Only 1 byte of ModEx data (too short — ParseModEx needs at least 2 bytes)
+	modexAndPayload := []byte{0x00}
+	tag := buildEnhancedAudioTag(7, "mp4a", modexAndPayload)
+	m, err := ParseAudioMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.PacketType != AudioPacketTypeModEx {
+		_tFatalf(t, "packetType mismatch: got %s, want modex", m.PacketType)
+	}
+	// NanosecondOffset should be zero since ModEx parsing failed.
+	if m.NanosecondOffset != 0 {
+		_tFatalf(t, "nano offset should be 0 on parse failure, got %d", m.NanosecondOffset)
+	}
+}
+
 // --- IsAudioSequenceHeader Tests ---
 
 func TestIsAudioSequenceHeader(t *testing.T) {

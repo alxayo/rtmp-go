@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MP4 recording parity**: Enhanced audio codec recording with proper MP4 sample entries
+  - Opus → `Opus` sample entry + `dOps` box (OpusSpecificBox)
+  - FLAC → `fLaC` sample entry + `dfLa` box (FLAC metadata blocks)
+  - AC-3 → `ac-3` sample entry + `dac3` box (AC3SpecificBox)
+  - E-AC-3 → `ec-3` sample entry + `dec3` box (EC3SpecificBox)
+  - MP3 → `.mp3` sample entry + `esds` box (MPEG-1 Audio OTI)
 - **E-RTMP v2 ModEx support**: Parse ModEx (Modifier Extension) packets for both video and audio, including nanosecond timestamp offset extraction
 - **E-RTMP v2 Multitrack support**: Parse multitrack video/audio packets (OneTrack, ManyTracks, ManyTracksManyCodecs)
 - **E-RTMP v2 additional packet types**: Handle AudioPacketType.SequenceEnd (4), MultichannelConfig (5), VideoPacketType.MPEG2TSSequenceStart (5)

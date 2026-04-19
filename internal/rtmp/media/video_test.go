@@ -331,6 +331,79 @@ func TestParseVideoMessage_ErrorCases(t *testing.T) {
 	}
 }
 
+// --- ModEx Nanosecond Timestamp Tests ---
+
+// TestParseVideoMessage_ModExNanosecondTimestamp verifies that a ModEx video packet
+// correctly extracts the nanosecond offset and provides the unwrapped payload.
+// ModEx (PacketType 7) wraps another packet with modifier extensions; the most
+// important modifier is the nanosecond timestamp offset for sub-ms A/V sync.
+func TestParseVideoMessage_ModExNanosecondTimestamp(t *testing.T) {
+	// Build the ModEx data that goes after the FourCC:
+	//   byte 0: [ModExType=0 (TimestampOffsetNano):4bits][DataSizeCode=1 (2 bytes):4bits] → 0x01
+	//   bytes 1-2: nanosecond offset value = 500 (0x01F4)
+	//   bytes 3-4: wrapped payload (0xAA, 0xBB) — the inner video data
+	modexAndPayload := []byte{0x01, 0x01, 0xF4, 0xAA, 0xBB}
+
+	// Construct a full enhanced video tag: keyframe (1), ModEx packet type (7), HEVC codec
+	tag := buildEnhancedVideoTag(1, 7, "hvc1", modexAndPayload)
+	m, err := ParseVideoMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.PacketType != PacketTypeModEx {
+		_tFatalf(t, "packetType mismatch: got %s, want modex", m.PacketType)
+	}
+	// The nanosecond offset should be extracted from the ModEx header.
+	if m.NanosecondOffset != 500 {
+		_tFatalf(t, "nano offset mismatch: got %d, want 500", m.NanosecondOffset)
+	}
+	// The payload should be the unwrapped inner data (after the ModEx header).
+	if len(m.Payload) != 2 || m.Payload[0] != 0xAA || m.Payload[1] != 0xBB {
+		_tFatalf(t, "payload mismatch: got %v, want [0xAA 0xBB]", m.Payload)
+	}
+}
+
+// TestParseVideoMessage_ModExLargeNanosecondOffset verifies extraction of a larger
+// nanosecond offset (999999) stored in 4 bytes (dataSizeCode=3).
+func TestParseVideoMessage_ModExLargeNanosecondOffset(t *testing.T) {
+	// byte 0: type=0, dataSizeCode=3 (4 bytes) → 0x03
+	// bytes 1-4: 999999 = 0x000F423F
+	// byte 5: wrapped payload
+	modexAndPayload := []byte{0x03, 0x00, 0x0F, 0x42, 0x3F, 0xCC}
+	tag := buildEnhancedVideoTag(1, 7, "hvc1", modexAndPayload)
+	m, err := ParseVideoMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.NanosecondOffset != 999999 {
+		_tFatalf(t, "nano offset mismatch: got %d, want 999999", m.NanosecondOffset)
+	}
+}
+
+// TestParseVideoMessage_ModExInvalidFallback verifies that when the ModEx data is
+// too short to parse, the parser falls back to passing through raw data after FourCC
+// instead of returning an error.
+func TestParseVideoMessage_ModExInvalidFallback(t *testing.T) {
+	// Only 1 byte of ModEx data (too short — ParseModEx needs at least 2 bytes)
+	modexAndPayload := []byte{0x00}
+	tag := buildEnhancedVideoTag(1, 7, "hvc1", modexAndPayload)
+	m, err := ParseVideoMessage(tag)
+	if err != nil {
+		_tFatalf(t, "unexpected error: %v", err)
+	}
+	if m.PacketType != PacketTypeModEx {
+		_tFatalf(t, "packetType mismatch: got %s, want modex", m.PacketType)
+	}
+	// NanosecondOffset should be zero since ModEx parsing failed.
+	if m.NanosecondOffset != 0 {
+		_tFatalf(t, "nano offset should be 0 on parse failure, got %d", m.NanosecondOffset)
+	}
+	// Raw fallback payload should be whatever was after FourCC.
+	if len(m.Payload) != 1 || m.Payload[0] != 0x00 {
+		_tFatalf(t, "payload mismatch on fallback: got %v", m.Payload)
+	}
+}
+
 // --- IsVideoSequenceHeader Tests ---
 
 func TestIsVideoSequenceHeader(t *testing.T) {

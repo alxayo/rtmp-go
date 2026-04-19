@@ -70,6 +70,14 @@ type AudioMessage struct {
 	Payload    []byte // Raw payload after parsed header bytes
 	Enhanced   bool   // True if parsed via Enhanced RTMP (ExAudioTagHeader) path
 	FourCC     string // Raw FourCC string (e.g. "Opus"), empty for legacy
+
+	// NanosecondOffset is the sub-millisecond offset from ModEx, if present.
+	// When non-zero, the full nanosecond timestamp is:
+	//   (chunk.Message.Timestamp * 1_000_000) + NanosecondOffset
+	// This provides microsecond/nanosecond A/V sync precision.
+	// Only populated when PacketType is "modex" and the ModEx carries a
+	// TimestampOffsetNano modifier.
+	NanosecondOffset uint32
 }
 
 // ParseAudioMessage parses a raw RTMP audio message payload (the FLV/RTMP tag data for
@@ -136,8 +144,17 @@ func parseEnhancedAudio(data []byte) (*AudioMessage, error) {
 		msg.PacketType = AudioPacketTypeMultitrack
 	case audioPacketTypeModEx:
 		// ModEx (Modifier Extension) — wraps another audio packet with modifiers
-		// like nanosecond timestamps. Use ParseModEx() on msg.Payload.
+		// like nanosecond timestamps. Parse the ModEx wrapper to extract
+		// modifiers and unwrap the inner payload automatically.
 		msg.PacketType = AudioPacketTypeModEx
+		modex, modexErr := ParseModEx(data[5:])
+		if modexErr == nil {
+			// Successfully parsed: extract nanosecond offset and unwrapped payload.
+			msg.NanosecondOffset = modex.NanosecondOffset
+			msg.Payload = modex.WrappedPayload
+			return msg, nil
+		}
+		// Parse failed: fall through to default payload assignment below.
 	default:
 		msg.PacketType = fmt.Sprintf("enhanced_%d", pktType)
 	}
@@ -175,6 +192,37 @@ func parseLegacyAudio(data []byte, soundFormat uint8) (*AudioMessage, error) {
 		return nil, fmt.Errorf("audio.parse: unsupported sound format id=%d", soundFormat)
 	}
 	return msg, nil
+}
+
+// IsAudioMultitrack checks whether raw audio tag data is an Enhanced RTMP
+// multitrack message (AudioPacketType = 6). Used by the stream registry to
+// detect multitrack containers and extract per-track sequence headers.
+func IsAudioMultitrack(data []byte) bool {
+	// Need at least 6 bytes: 1 header + 4 FourCC + 1 multitrack header byte.
+	if len(data) < 6 {
+		return false
+	}
+	soundFormat := (data[0] >> 4) & 0x0F
+	if soundFormat != soundFormatExHeader {
+		return false // Multitrack only exists in Enhanced RTMP
+	}
+	pktType := data[0] & 0x0F
+	return pktType == audioPacketTypeMultitrack
+}
+
+// BuildAudioSeqStartPayload constructs a complete Enhanced RTMP audio sequence
+// start payload for a single track. This is used to wrap per-track codec config
+// data into a standalone RTMP audio message for late-join delivery.
+//
+// Wire format: [0x90 (soundFormat=9 | seqStart)][FourCC(4B)][configData...]
+func BuildAudioSeqStartPayload(fourCC string, configData []byte) []byte {
+	// byte 0: soundFormat=9 (bits 7:4) | pktType=seqStart=0 (bits 3:0)
+	// = 0b1001_0000 = 0x90
+	payload := make([]byte, 5+len(configData))
+	payload[0] = 0x90
+	copy(payload[1:5], []byte(fourCC))
+	copy(payload[5:], configData)
+	return payload
 }
 
 // IsAudioSequenceHeader checks whether raw audio tag data represents a sequence header

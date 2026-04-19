@@ -83,6 +83,14 @@ type VideoMessage struct {
 	Payload    []byte // Raw payload after parsed header bytes
 	Enhanced   bool   // True if parsed via Enhanced RTMP (IsExHeader) path
 	FourCC     string // Raw FourCC string (e.g. "hvc1"), empty for legacy
+
+	// NanosecondOffset is the sub-millisecond offset from ModEx, if present.
+	// When non-zero, the full nanosecond timestamp is:
+	//   (chunk.Message.Timestamp * 1_000_000) + NanosecondOffset
+	// This provides microsecond/nanosecond A/V sync precision.
+	// Only populated when PacketType is "modex" and the ModEx carries a
+	// TimestampOffsetNano modifier.
+	NanosecondOffset uint32
 }
 
 // ParseVideoMessage parses the raw payload of an RTMP video message (type 9).
@@ -183,9 +191,18 @@ func parseEnhancedVideo(data []byte) (*VideoMessage, error) {
 		vm.Payload = data[5:]
 	case videoPacketTypeModEx:
 		// ModEx (Modifier Extension) — wraps another packet with modifiers
-		// like nanosecond timestamps. Use ParseModEx() on vm.Payload.
+		// like nanosecond timestamps. Parse the ModEx wrapper to extract
+		// modifiers and unwrap the inner payload automatically.
 		vm.PacketType = PacketTypeModEx
-		vm.Payload = data[5:]
+		modex, err := ParseModEx(data[5:])
+		if err == nil {
+			// Successfully parsed: extract nanosecond offset and unwrapped payload.
+			vm.NanosecondOffset = modex.NanosecondOffset
+			vm.Payload = modex.WrappedPayload
+		} else {
+			// Parse failed: pass through raw data so callers can still inspect it.
+			vm.Payload = data[5:]
+		}
 	default:
 		vm.PacketType = fmt.Sprintf("enhanced_%d", pktType)
 		vm.Payload = data[5:]
@@ -248,6 +265,38 @@ func parseLegacyVideo(data []byte) (*VideoMessage, error) {
 	}
 
 	return vm, nil
+}
+
+// IsVideoMultitrack checks whether raw video tag data is an Enhanced RTMP
+// multitrack message (VideoPacketType = 6). Used by the stream registry to
+// detect multitrack containers and extract per-track sequence headers.
+func IsVideoMultitrack(data []byte) bool {
+	// Need at least 6 bytes: 1 header + 4 FourCC + 1 multitrack header byte.
+	if len(data) < 6 {
+		return false
+	}
+	b0 := data[0]
+	isExHeader := (b0 >> 7) & 1
+	if isExHeader != 1 {
+		return false // Multitrack only exists in Enhanced RTMP
+	}
+	pktType := b0 & 0x0F
+	return pktType == videoPacketTypeMultitrack
+}
+
+// BuildVideoSeqStartPayload constructs a complete Enhanced RTMP video sequence
+// start payload for a single track. This is used to wrap per-track codec config
+// data into a standalone RTMP video message for late-join delivery.
+//
+// Wire format: [0x90 (isExHeader=1 | keyframe | seqStart)][FourCC(4B)][configData...]
+func BuildVideoSeqStartPayload(fourCC string, configData []byte) []byte {
+	// byte 0: isExHeader=1 (bit 7) | frameType=keyframe=1 (bits 6:4) | pktType=seqStart=0 (bits 3:0)
+	// = 0b1_001_0000 = 0x90
+	payload := make([]byte, 5+len(configData))
+	payload[0] = 0x90
+	copy(payload[1:5], []byte(fourCC))
+	copy(payload[5:], configData)
+	return payload
 }
 
 // IsVideoSequenceHeader checks whether raw video tag data represents a sequence header

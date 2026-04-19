@@ -301,6 +301,28 @@ VideoPacketType 6 and AudioPacketType 6 signal multitrack content — multiple a
 | Audio | 4 | SequenceEnd | Signals end of audio stream |
 | Audio | 5 | MultichannelConfig | Multichannel audio layout configuration |
 
+### Nanosecond Timestamps
+
+When a ModEx packet carries a TimestampOffsetNano modifier, the full nanosecond timestamp is:
+
+    nanoseconds = (rtmpTimestamp × 1,000,000) + nanosecondOffset
+
+This allows sub-millisecond A/V synchronization (important for lip-sync and multi-camera setups). The nanosecond offset is automatically extracted during parsing and stored in `VideoMessage.NanosecondOffset` / `AudioMessage.NanosecondOffset`.
+
+### Multichannel Audio Configuration
+
+AudioPacketType 5 carries multichannel layout configuration:
+
+```
+[AudioChannelOrder:4bits][AudioChannelCount:4bits][ChannelMapping...]
+```
+
+- **ChannelOrder 0 (Unspecified)**: codec-native order, no explicit mapping
+- **ChannelOrder 1 (Native)**: standard layout for the channel count (e.g., AAC ISO 14496-3)
+- **ChannelOrder 2 (Custom)**: explicit per-channel speaker mapping follows (one byte per channel)
+
+Use `ParseMultichannelConfig()` on the payload to extract channel layout details.
+
 ---
 
 ## Stream Keys
