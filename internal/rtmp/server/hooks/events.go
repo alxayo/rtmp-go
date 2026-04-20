@@ -38,6 +38,11 @@ const (
 	// Analytics events
 	EventSubscriberCount EventType = "subscriber_count"
 
+	// Recording events
+	EventRecordingStart  EventType = "recording_start"  // Recorder initialized for a stream
+	EventRecordingStop   EventType = "recording_stop"   // Recorder closed (publisher disconnected)
+	EventSegmentComplete EventType = "segment_complete" // Segment file finalized and closed
+
 	// Authentication events
 	EventAuthFailed EventType = "auth_failed"
 )
