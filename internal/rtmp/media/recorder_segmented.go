@@ -70,11 +70,22 @@ type SegmentedRecorder struct {
 	// meta holds FLV metadata (dimensions, codecs) passed to each inner recorder.
 	meta FLVMetadata
 
+	// OnSegmentComplete is called (if non-nil) after a segment file is
+	// finalized and closed. It receives the file path, 1-based segment index,
+	// and duration in milliseconds. The callback is invoked under the
+	// recorder's mutex — implementations must not block or call back into
+	// the recorder.
+	OnSegmentComplete func(path string, index int, durationMs uint32)
+
 	// --- Current segment state ---
 
 	// current is the active inner recorder (FLV or MP4) for the current segment.
 	// nil before the first segment is opened or after a fatal error.
 	current MediaWriter
+
+	// currentPath is the file path of the current segment being written.
+	// Set by openSegmentLocked, used by rotateLocked to report completion.
+	currentPath string
 
 	// segmentStartTS is the RTMP timestamp (ms) of the first frame in the
 	// current segment. Used to calculate elapsed time for rotation decisions.
@@ -254,7 +265,15 @@ func (s *SegmentedRecorder) Close() error {
 	defer s.mu.Unlock()
 
 	if s.current != nil {
+		closedPath := s.currentPath
+		closedIndex := s.segmentCount
+		// For the final segment, estimate duration from last known timestamp.
+		// This is approximate since we don't have the "next" timestamp.
 		err := s.current.Close()
+		if err == nil && s.OnSegmentComplete != nil {
+			// Use 0 for duration of final segment — caller can compute from file metadata
+			s.OnSegmentComplete(closedPath, closedIndex, 0)
+		}
 		s.current = nil
 		return err
 	}
@@ -285,11 +304,17 @@ func (s *SegmentedRecorder) SegmentCount() int {
 func (s *SegmentedRecorder) rotateLocked(newStartTS uint32) {
 	// Close the current segment (this finalizes the file — patches duration, etc.)
 	if s.current != nil {
+		closedPath := s.currentPath
+		closedIndex := s.segmentCount
+		durationMs := newStartTS - s.segmentStartTS
+
 		if err := s.current.Close(); err != nil {
 			s.logger.Error("segmented recorder: segment close error",
 				"error", err,
 				"segment", s.segmentCount,
 			)
+		} else if s.OnSegmentComplete != nil {
+			s.OnSegmentComplete(closedPath, closedIndex, durationMs)
 		}
 		s.current = nil
 	}
@@ -331,6 +356,7 @@ func (s *SegmentedRecorder) openSegmentLocked(startTS uint32) {
 	}
 
 	s.current = recorder
+	s.currentPath = path
 	s.segmentCount++
 	s.segmentStartTS = startTS
 	s.needKeyframe = false
