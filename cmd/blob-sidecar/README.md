@@ -1,35 +1,60 @@
 # Azure Blob Storage Sidecar
 
-A standalone service that watches rtmp-go's recording directory and uploads completed segment files to Azure Blob Storage. Supports multi-tenant routing where different streams are stored in different storage accounts.
+A standalone service that uploads rtmp-go recording segments to Azure Blob Storage. Supports multi-tenant routing where different streams are stored in different storage accounts.
+
+## Operating Modes
+
+| Mode | Flag | How it works | Latency |
+|------|------|-------------|---------|
+| **watch** (default) | `-mode watch` | Filesystem watching (fsnotify) with stabilization delay | ~2s after segment close |
+| **events** | `-mode events` | Reads hook events from stdin (piped from rtmp-go) | Instant on segment close |
 
 ## Features
 
-- **Zero rtmp-go modifications** — uses filesystem watching (fsnotify)
+- **Dual mode** — filesystem watching or event-driven via rtmp-go hooks
 - **Multi-tenant** — route streams to different Azure storage accounts
 - **Dual resolution** — JSON config file + HTTP API fallback
 - **Hot-reload** — send SIGHUP to reload tenant config without restart
-- **Self-healing** — on restart, uploads any segments missed during downtime
+- **Self-healing** — on restart (watch mode), uploads any segments missed during downtime
 - **Configurable cleanup** — optionally delete local files after upload
 - **Bounded concurrency** — configurable worker pool prevents network saturation
 
 ## Quick Start
+
+### Watch Mode (no rtmp-go changes needed)
 
 ```bash
 # Build
 cd cmd/blob-sidecar
 go build -o blob-sidecar .
 
-# Configure tenants
-cp tenants.example.json tenants.json
-# Edit tenants.json with your Azure storage accounts
-
-# Run
+# Run alongside rtmp-go
 ./blob-sidecar \
+  -mode watch \
   -watch-dir /path/to/recordings \
   -config tenants.json \
   -workers 4 \
-  -cleanup=true \
-  -log-level info
+  -cleanup=true
+```
+
+### Events Mode (recommended for production)
+
+Requires rtmp-go to be started with the stdio hook enabled:
+
+```bash
+# Start rtmp-go with stdio hook, pipe stderr to sidecar
+rtmp-server \
+  -listen :1935 \
+  -record-dir ./recordings \
+  -hook-stdio-format json \
+  2>&1 | blob-sidecar -mode events -config tenants.json -workers 4 -cleanup=true
+```
+
+Or with process substitution (keeps rtmp-go stdout separate):
+
+```bash
+rtmp-server -listen :1935 -record-dir ./recordings -hook-stdio-format json \
+  2> >(blob-sidecar -mode events -config tenants.json)
 ```
 
 ## Configuration
@@ -165,3 +190,78 @@ Expected response:
 ```
 
 Responses are cached for the configured TTL to minimize API calls.
+
+## Events Mode Details
+
+In events mode, the sidecar reads JSON hook events from stdin. rtmp-go emits these
+on stderr when configured with `-hook-stdio-format json`.
+
+### Event Format
+
+```
+RTMP_EVENT: {"type":"segment_complete","timestamp":1714168200,"conn_id":"abc123","stream_key":"live/stream1","data":{"path":"/recordings/live_stream1_20260420_143000_seg001.flv","size":47185920,"segment_index":1,"duration_ms":180000,"codec":"H264","format":"flv"}}
+```
+
+### Supported Events
+
+| Event | Action |
+|-------|--------|
+| `segment_complete` | Triggers upload of the segment file |
+| `recording_start` | Logged (informational) |
+| `recording_stop` | Logged (informational) |
+
+### Advantages over Watch Mode
+
+- **Zero latency** — upload starts immediately when segment is closed (no 2s stabilization wait)
+- **Accurate stream key** — provided directly by rtmp-go (no filename parsing heuristics)
+- **Rich metadata** — size, duration, codec, segment index available without file inspection
+- **Lower resource usage** — no fsnotify watchers or directory scanning
+
+### Container Apps Deployment (Events Mode)
+
+```yaml
+# Azure Container Apps with sidecar logging
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+      - name: rtmp-server
+        image: myregistry.azurecr.io/rtmp-go:latest
+        args:
+          - "-listen"
+          - ":1935"
+          - "-record-dir"
+          - "/recordings"
+          - "-segment-duration"
+          - "3m"
+          - "-hook-stdio-format"
+          - "json"
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+
+      - name: blob-sidecar
+        image: myregistry.azurecr.io/blob-sidecar:latest
+        args: ["-mode", "events", "-config", "/config/tenants.json", "-cleanup"]
+        stdin: true
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+        - name: config
+          mountPath: /config
+
+      volumes:
+      - name: recordings
+        emptyDir: {}
+      - name: config
+        secret:
+          secretName: tenants-config
+```
+
+> **Note**: In Kubernetes, piping stderr between containers requires a logging sidecar
+> or shared log file. For direct piping, use Docker Compose or a shell wrapper:
+> ```bash
+> rtmp-server ... -hook-stdio-format json 2>&1 | blob-sidecar -mode events ...
+> ```
