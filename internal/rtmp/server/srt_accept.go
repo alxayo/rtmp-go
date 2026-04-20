@@ -417,7 +417,7 @@ func (s *Server) handleSRTConnection(req *srt.ConnRequest) {
 		stream.BroadcastMessage(detector, msg, connLog)
 
 		// 2. Lazy recorder init (creates recorder once codec is known)
-		ensureRecorder(stream, connLog)
+		ensureRecorder(stream, connLog, nil)
 
 		// 3. Write to recorder (snapshot under lock to avoid race with teardown)
 		if rec := stream.GetRecorder(); rec != nil {

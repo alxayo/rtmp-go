@@ -55,6 +55,37 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 		mediaLogger:   NewMediaLogger(c.ID(), log, 30*time.Second),
 		codecDetector: &media.CodecDetector{},
 	}
+
+	// recHookFn fires recording_start and wires the segment_complete callback.
+	var recHookFn RecordingHookFn
+	if srv != nil {
+		recHookFn = func(streamKey, codec, format, recordDir string, segmented bool, segmentDurationMs uint32, recorder *media.SegmentedRecorder) {
+			srv.triggerHookEvent(hooks.EventRecordingStart, c.ID(), streamKey, map[string]interface{}{
+				"codec":            codec,
+				"format":           format,
+				"record_dir":       recordDir,
+				"segmented":        segmented,
+				"segment_duration": segmentDurationMs,
+			})
+			if recorder != nil {
+				recorder.OnSegmentComplete = func(path string, index int, durationMs uint32) {
+					// Stat the file for size (best-effort, don't fail if file was moved)
+					var size int64
+					if info, err := os.Stat(path); err == nil {
+						size = info.Size()
+					}
+					srv.triggerHookEvent(hooks.EventSegmentComplete, c.ID(), streamKey, map[string]interface{}{
+						"path":          path,
+						"size":          size,
+						"segment_index": index,
+						"duration_ms":   durationMs,
+						"codec":         codec,
+						"format":        format,
+					})
+				}
+			}
+		}
+	}
 	// Install disconnect handler — fires when readLoop exits for any reason.
 	c.SetDisconnectHandler(func() {
 		// 1. Stop media logger (prevents goroutine + ticker leak)
@@ -70,6 +101,12 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 				// Close recorder under lock (concurrent with cleanupAllRecorders)
 				stream.mu.Lock()
 				if stream.Recorder != nil {
+					// Fire recording_stop hook before closing
+					if srv != nil {
+						srv.triggerHookEvent(hooks.EventRecordingStop, c.ID(), st.streamKey, map[string]interface{}{
+							"duration_sec": durationSec,
+						})
+					}
 					if err := stream.Recorder.Close(); err != nil {
 						metrics.RecordingErrorsTotal.Add(1)
 						log.Error("recorder close error on disconnect", "error", err, "stream_key", st.streamKey)
@@ -411,7 +448,7 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// Route audio/video messages to media dispatch (recording + relay + broadcast).
 		if m.TypeID == 8 || m.TypeID == 9 {
-			dispatchMedia(m, st, reg, destMgr, log)
+			dispatchMedia(m, st, reg, destMgr, log, recHookFn)
 			return
 		}
 
@@ -485,6 +522,15 @@ func authenticateRequest(
 	return true // rejected
 }
 
+// RecordingHookFn is called by ensureRecorder after a recorder is successfully
+// initialized. It allows the caller to wire recording lifecycle hooks (e.g.
+// fire recording_start, set OnSegmentComplete callback). Parameters:
+//   - streamKey, codec, format, recordDir: recording metadata
+//   - segmented: true for SegmentedRecorder, false for single-file
+//   - segmentDurationMs: configured segment duration (0 for single-file)
+//   - recorder: non-nil only for segmented recordings (to set OnSegmentComplete)
+type RecordingHookFn func(streamKey, codec, format, recordDir string, segmented bool, segmentDurationMs uint32, recorder *media.SegmentedRecorder)
+
 // ensureRecorder lazily creates a recorder for the given stream once the video
 // codec has been detected. This is called on each media frame from the dispatch
 // path. Recording is only attempted when:
@@ -494,7 +540,8 @@ func authenticateRequest(
 //
 // This deferred approach ensures H.265 streams get MP4 containers (not FLV),
 // because the codec is only known after the first video frame is parsed.
-func ensureRecorder(stream *Stream, log *slog.Logger) {
+// The optional hookFn is called after successful recorder creation to wire hooks.
+func ensureRecorder(stream *Stream, log *slog.Logger, hookFn RecordingHookFn) {
 	if stream == nil {
 		return
 	}
@@ -593,6 +640,10 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 			"segment_duration", segmentDuration,
 			"pattern", segmentPattern,
 			"codec", codec, "format", format)
+
+		if hookFn != nil {
+			hookFn(stream.Key, codec, format, recordDir, true, segDurMs, recorder)
+		}
 		return
 	}
 
@@ -621,4 +672,8 @@ func ensureRecorder(stream *Stream, log *slog.Logger) {
 
 	log.Info("recorder initialized", "stream_key", stream.Key, "file", fpath, "codec", codec, "format", format,
 		"width", meta.Width, "height", meta.Height)
+
+	if hookFn != nil {
+		hookFn(stream.Key, codec, format, recordDir, false, 0, nil)
+	}
 }

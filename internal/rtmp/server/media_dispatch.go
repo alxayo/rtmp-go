@@ -24,6 +24,7 @@ func dispatchMedia(
 	reg *Registry,
 	destMgr *relay.DestinationManager,
 	log *slog.Logger,
+	hookFn RecordingHookFn,
 ) {
 	st.mediaLogger.ProcessMessage(m)
 
@@ -42,7 +43,7 @@ func dispatchMedia(
 
 	// 2. Lazy recorder initialization — creates the recorder once the video codec
 	// is known, selecting the correct container format automatically.
-	ensureRecorder(stream, log)
+	ensureRecorder(stream, log, hookFn)
 
 	// 3. Write to recorder (snapshot under lock to avoid race with teardown).
 	if rec := stream.GetRecorder(); rec != nil {
