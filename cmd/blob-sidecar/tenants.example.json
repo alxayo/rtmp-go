@@ -1,0 +1,33 @@
+{
+  "tenants": {
+    "live": {
+      "storage_account": "https://mainaccount.blob.core.windows.net",
+      "container": "recordings",
+      "credential": "managed-identity"
+    },
+    "tenant-a": {
+      "storage_account": "https://tenanta.blob.core.windows.net",
+      "container": "streams",
+      "credential": "connection-string",
+      "connection_string_env": "TENANT_A_CONN_STRING"
+    },
+    "tenant-b": {
+      "storage_account": "https://tenantb.blob.core.windows.net",
+      "container": "media",
+      "credential": "managed-identity",
+      "path_prefix": "rtmp"
+    }
+  },
+  "default": {
+    "storage_account": "https://defaultstorage.blob.core.windows.net",
+    "container": "unrouted",
+    "credential": "managed-identity"
+  },
+  "api_fallback": {
+    "enabled": false,
+    "url": "https://streamgate.example.com/api/tenants/resolve",
+    "timeout": "5s",
+    "cache_ttl": "5m",
+    "auth_header": ""
+  }
+}
