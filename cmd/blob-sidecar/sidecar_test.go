@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -218,4 +220,60 @@ func TestIsSegmentFile(t *testing.T) {
 
 func noopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestStdinListener_SegmentComplete(t *testing.T) {
+	input := `some random log line
+RTMP_EVENT: {"type":"segment_complete","timestamp":1714168200,"conn_id":"c1","stream_key":"live/stream1","data":{"path":"/recordings/live_stream1_seg001.flv","size":1024,"segment_index":1,"duration_ms":180000}}
+RTMP_EVENT: {"type":"recording_start","timestamp":1714168000,"conn_id":"c1","stream_key":"live/stream1","data":{}}
+RTMP_EVENT: {"type":"segment_complete","timestamp":1714168400,"conn_id":"c1","stream_key":"live/stream2","data":{"path":"/recordings/live_stream2_seg001.mp4","size":2048,"segment_index":1,"duration_ms":60000}}
+`
+	reader := strings.NewReader(input)
+	var events []HookEvent
+	listener := NewStdinListener(reader, noopLogger(), func(event HookEvent) {
+		events = append(events, event)
+	})
+
+	err := listener.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expected 2 segment_complete events, got %d", len(events))
+	}
+
+	if events[0].StreamKey != "live/stream1" {
+		t.Errorf("event[0] stream_key = %q, want live/stream1", events[0].StreamKey)
+	}
+	if events[1].StreamKey != "live/stream2" {
+		t.Errorf("event[1] stream_key = %q, want live/stream2", events[1].StreamKey)
+	}
+	if path, _ := events[0].Data["path"].(string); path != "/recordings/live_stream1_seg001.flv" {
+		t.Errorf("event[0] path = %q, want /recordings/live_stream1_seg001.flv", path)
+	}
+}
+
+func TestStdinListener_MalformedJSON(t *testing.T) {
+	input := `RTMP_EVENT: {invalid json}
+RTMP_EVENT: {"type":"segment_complete","timestamp":1,"conn_id":"c1","stream_key":"live/ok","data":{"path":"/x.flv"}}
+`
+	reader := strings.NewReader(input)
+	var events []HookEvent
+	listener := NewStdinListener(reader, noopLogger(), func(event HookEvent) {
+		events = append(events, event)
+	})
+
+	err := listener.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should parse the valid line despite the malformed one
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].StreamKey != "live/ok" {
+		t.Errorf("stream_key = %q, want live/ok", events[0].StreamKey)
+	}
 }

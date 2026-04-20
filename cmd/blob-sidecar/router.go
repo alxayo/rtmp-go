@@ -62,6 +62,38 @@ func (r *Router) Resolve(path string) (*StorageTarget, error) {
 	return nil, fmt.Errorf("router: no storage target for stream key %q and no default configured", streamKey)
 }
 
+// ResolveByStreamKey determines the storage target for a known stream key.
+// Unlike Resolve, it skips path-based stream key extraction — used in events mode
+// where the stream key is provided directly by the hook event.
+func (r *Router) ResolveByStreamKey(streamKey string) (*StorageTarget, error) {
+	if streamKey == "" {
+		return nil, fmt.Errorf("router: empty stream key")
+	}
+
+	if target := r.fileResolver.Resolve(streamKey); target != nil {
+		r.logger.Debug("resolved via config file", "stream_key", streamKey, "account", target.StorageAccount)
+		return target, nil
+	}
+
+	if r.apiResolver != nil {
+		target, err := r.apiResolver.Resolve(streamKey)
+		if err != nil {
+			r.logger.Warn("API resolver failed, trying default", "stream_key", streamKey, "error", err)
+		} else if target != nil {
+			r.logger.Debug("resolved via API", "stream_key", streamKey, "account", target.StorageAccount)
+			return target, nil
+		}
+	}
+
+	cfg := r.config.Get()
+	if cfg.Default != nil {
+		r.logger.Debug("using default storage", "stream_key", streamKey)
+		return cfg.Default, nil
+	}
+
+	return nil, fmt.Errorf("router: no storage target for stream key %q and no default configured", streamKey)
+}
+
 // ExtractStreamKey parses the stream key from a segment file path.
 //
 // Supports two layouts:

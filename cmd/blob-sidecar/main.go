@@ -24,11 +24,12 @@ import (
 
 func main() {
 	// Flags
-	watchDir := flag.String("watch-dir", "recordings", "Directory to watch for segment files")
+	mode := flag.String("mode", "watch", "Operating mode: watch (fsnotify) or events (stdin hook events)")
+	watchDir := flag.String("watch-dir", "recordings", "Directory to watch for segment files (watch mode only)")
 	configPath := flag.String("config", "tenants.json", "Path to tenant configuration file")
 	workers := flag.Int("workers", 4, "Number of concurrent upload workers")
 	cleanup := flag.Bool("cleanup", false, "Delete local files after successful upload")
-	stabilizeDur := flag.Duration("stabilize-duration", 2*time.Second, "Wait time after last write before uploading")
+	stabilizeDur := flag.Duration("stabilize-duration", 2*time.Second, "Wait time after last write before uploading (watch mode only)")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 
 	flag.Parse()
@@ -69,24 +70,6 @@ func main() {
 	// Build uploader
 	uploader := NewUploader(*workers, *cleanup, logger)
 
-	// Build watcher
-	watcher, err := NewWatcher(*watchDir, *stabilizeDur, logger, func(path string) {
-		tenant, err := router.Resolve(path)
-		if err != nil {
-			logger.Error("tenant resolution failed", "path", path, "error", err)
-			return
-		}
-		uploader.Submit(UploadJob{
-			FilePath:  path,
-			Tenant:    tenant,
-			StreamKey: router.ExtractStreamKey(path),
-		})
-	})
-	if err != nil {
-		logger.Error("failed to create watcher", "dir", *watchDir, "error", err)
-		os.Exit(1)
-	}
-
 	// Signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	sigCh := make(chan os.Signal, 1)
@@ -110,22 +93,71 @@ func main() {
 		}
 	}()
 
-	// Start components
+	// Start uploader
 	uploader.Start(ctx)
-	if err := watcher.Start(ctx); err != nil {
-		logger.Error("watcher failed", "error", err)
+
+	switch *mode {
+	case "events":
+		logger.Info("starting in events mode (reading hook events from stdin)")
+		listener := NewStdinListener(os.Stdin, logger, func(event HookEvent) {
+			path, _ := event.Data["path"].(string)
+			if path == "" {
+				logger.Warn("segment_complete event missing path", "stream_key", event.StreamKey)
+				return
+			}
+			tenant, err := router.ResolveByStreamKey(event.StreamKey)
+			if err != nil {
+				logger.Error("tenant resolution failed", "stream_key", event.StreamKey, "error", err)
+				return
+			}
+			uploader.Submit(UploadJob{
+				FilePath:  path,
+				Tenant:    tenant,
+				StreamKey: event.StreamKey,
+			})
+		})
+		if err := listener.Run(ctx); err != nil && err != context.Canceled {
+			logger.Error("listener error", "error", err)
+		}
+
+	case "watch":
+		logger.Info("starting in watch mode", "dir", *watchDir, "stabilize", *stabilizeDur)
+		watcher, err := NewWatcher(*watchDir, *stabilizeDur, logger, func(path string) {
+			tenant, err := router.Resolve(path)
+			if err != nil {
+				logger.Error("tenant resolution failed", "path", path, "error", err)
+				return
+			}
+			uploader.Submit(UploadJob{
+				FilePath:  path,
+				Tenant:    tenant,
+				StreamKey: router.ExtractStreamKey(path),
+			})
+		})
+		if err != nil {
+			logger.Error("failed to create watcher", "dir", *watchDir, "error", err)
+			os.Exit(1)
+		}
+		if err := watcher.Start(ctx); err != nil {
+			logger.Error("watcher failed", "error", err)
+			os.Exit(1)
+		}
+		// Wait for shutdown
+		<-ctx.Done()
+		watcher.Stop()
+
+	default:
+		logger.Error("unknown mode", "mode", *mode)
+		fmt.Fprintf(os.Stderr, "Usage: -mode must be 'watch' or 'events'\n")
 		os.Exit(1)
 	}
 
-	// Wait for shutdown
-	<-ctx.Done()
 	logger.Info("shutting down, waiting for in-progress uploads...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
 	uploader.Shutdown(shutdownCtx)
-	watcher.Stop()
 	logger.Info("shutdown complete")
 	fmt.Fprintln(os.Stderr, "blob-sidecar stopped")
 }
