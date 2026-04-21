@@ -1,4 +1,4 @@
-module github.com/alxayo/go-rtmp/cmd/blob-sidecar
+module github.com/alxayo/go-rtmp/azure/blob-sidecar
 
 go 1.25.1
 

@@ -25,7 +25,7 @@ A standalone service that uploads rtmp-go recording segments to Azure Blob Stora
 
 ```bash
 # Build
-cd cmd/blob-sidecar
+cd azure/blob-sidecar
 go build -o blob-sidecar .
 
 # Run alongside rtmp-go
