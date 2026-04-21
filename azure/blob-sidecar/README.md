@@ -8,10 +8,11 @@ A standalone service that uploads rtmp-go recording segments to Azure Blob Stora
 |------|------|-------------|---------|
 | **watch** (default) | `-mode watch` | Filesystem watching (fsnotify) with stabilization delay | ~2s after segment close |
 | **events** | `-mode events` | Reads hook events from stdin (piped from rtmp-go) | Instant on segment close |
+| **webhook** | `-mode webhook` | HTTP server receiving webhook events from rtmp-go | Instant on segment close |
 
 ## Features
 
-- **Dual mode** — filesystem watching or event-driven via rtmp-go hooks
+- **Triple mode** — filesystem watching, stdin events, or HTTP webhook receiver
 - **Multi-tenant** — route streams to different Azure storage accounts
 - **Dual resolution** — JSON config file + HTTP API fallback
 - **Hot-reload** — send SIGHUP to reload tenant config without restart
@@ -37,7 +38,7 @@ go build -o blob-sidecar .
   -cleanup=true
 ```
 
-### Events Mode (recommended for production)
+### Events Mode (recommended for single-process deployments)
 
 Requires rtmp-go to be started with the stdio hook enabled:
 
@@ -56,6 +57,33 @@ Or with process substitution (keeps rtmp-go stdout separate):
 rtmp-server -listen :1935 -record-dir ./recordings -hook-stdio-format json \
   2> >(blob-sidecar -mode events -config tenants.json)
 ```
+
+### Webhook Mode (recommended for container deployments)
+
+Best for Azure Container Apps, Kubernetes, or any deployment where rtmp-server and
+the sidecar run as separate containers. rtmp-server pushes events via HTTP webhook:
+
+```bash
+# Start sidecar as HTTP webhook listener
+blob-sidecar \
+  -mode webhook \
+  -listen-addr :8080 \
+  -config tenants.json \
+  -workers 4 \
+  -cleanup=true
+
+# Start rtmp-go with webhook hooks pointing at sidecar
+rtmp-server \
+  -listen :1935 \
+  -record-dir ./recordings \
+  -hook-webhook "segment_complete=http://sidecar-host:8080/events" \
+  -hook-webhook "recording_start=http://sidecar-host:8080/events" \
+  -hook-webhook "recording_stop=http://sidecar-host:8080/events"
+```
+
+The sidecar exposes two endpoints:
+- `POST /events` — receives hook events (JSON body matching `hooks.Event` schema)
+- `GET /health` — liveness/readiness probe (returns `200 OK`)
 
 ## Configuration
 
@@ -116,11 +144,13 @@ The sidecar extracts the stream key from segment file paths:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-watch-dir` | `recordings` | Directory to watch for segment files |
+| `-mode` | `watch` | Operating mode: `watch`, `events`, or `webhook` |
+| `-watch-dir` | `recordings` | Directory to watch for segment files (watch mode only) |
+| `-listen-addr` | `:8080` | HTTP listen address (webhook mode only) |
 | `-config` | `tenants.json` | Path to tenant configuration file |
 | `-workers` | `4` | Number of concurrent upload workers |
 | `-cleanup` | `false` | Delete local files after successful upload |
-| `-stabilize-duration` | `2s` | Wait time after last write before uploading |
+| `-stabilize-duration` | `2s` | Wait time after last write before uploading (watch mode only) |
 | `-log-level` | `info` | Log level: debug, info, warn, error |
 
 ## Signals
@@ -217,7 +247,62 @@ RTMP_EVENT: {"type":"segment_complete","timestamp":1714168200,"conn_id":"abc123"
 - **Rich metadata** — size, duration, codec, segment index available without file inspection
 - **Lower resource usage** — no fsnotify watchers or directory scanning
 
+### Container Apps Deployment (Webhook Mode — Recommended)
+
+Webhook mode works natively with separate Container Apps since it uses HTTP:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+      - name: rtmp-server
+        image: myregistry.azurecr.io/rtmp-go:latest
+        args:
+          - "-listen"
+          - ":1935"
+          - "-record-dir"
+          - "/recordings"
+          - "-segment-duration"
+          - "3m"
+          - "-hook-webhook"
+          - "segment_complete=http://blob-sidecar:8080/events"
+          - "-hook-webhook"
+          - "recording_start=http://blob-sidecar:8080/events"
+          - "-hook-webhook"
+          - "recording_stop=http://blob-sidecar:8080/events"
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+
+      - name: blob-sidecar
+        image: myregistry.azurecr.io/blob-sidecar:latest
+        args: ["-mode", "webhook", "-listen-addr", ":8080", "-config", "/config/tenants.json", "-cleanup"]
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+        - name: config
+          mountPath: /config
+
+      volumes:
+      - name: recordings
+        emptyDir: {}
+      - name: config
+        secret:
+          secretName: tenants-config
+```
+
 ### Container Apps Deployment (Events Mode)
+
+Events mode requires piping stderr between containers. Use Docker Compose or a shell wrapper:
 
 ```yaml
 # Azure Container Apps with sidecar logging
