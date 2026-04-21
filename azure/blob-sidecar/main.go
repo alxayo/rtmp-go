@@ -6,10 +6,14 @@ package main
 // them to Azure Blob Storage. Supports multi-tenant routing: each stream key
 // can be directed to a different storage account/container.
 //
-// Zero modifications to rtmp-go required — uses filesystem watching (fsnotify).
+// Three operating modes:
+//   - watch:   filesystem monitoring via fsnotify (no rtmp-go changes needed)
+//   - events:  reads hook events from stdin (piped from rtmp-go stderr)
+//   - webhook: HTTP server receiving hook events from rtmp-go's webhook hooks
 //
 // Usage:
-//   blob-sidecar -watch-dir ./recordings -config tenants.json -workers 4
+//   blob-sidecar -mode watch -watch-dir ./recordings -config tenants.json
+//   blob-sidecar -mode webhook -listen-addr :8080 -config tenants.json
 
 import (
 	"context"
@@ -24,7 +28,8 @@ import (
 
 func main() {
 	// Flags
-	mode := flag.String("mode", "watch", "Operating mode: watch (fsnotify) or events (stdin hook events)")
+	mode := flag.String("mode", "watch", "Operating mode: watch (fsnotify), events (stdin hook events), or webhook (HTTP listener)")
+	listenAddr := flag.String("listen-addr", ":8080", "HTTP listen address for webhook mode")
 	watchDir := flag.String("watch-dir", "recordings", "Directory to watch for segment files (watch mode only)")
 	configPath := flag.String("config", "tenants.json", "Path to tenant configuration file")
 	workers := flag.Int("workers", 4, "Number of concurrent upload workers")
@@ -146,9 +151,32 @@ func main() {
 		<-ctx.Done()
 		watcher.Stop()
 
+	case "webhook":
+		logger.Info("starting in webhook mode (HTTP listener)", "addr", *listenAddr)
+		listener := NewWebhookListener(*listenAddr, logger, func(event HookEvent) {
+			path, _ := event.Data["path"].(string)
+			if path == "" {
+				logger.Warn("segment_complete event missing path", "stream_key", event.StreamKey)
+				return
+			}
+			tenant, err := router.ResolveByStreamKey(event.StreamKey)
+			if err != nil {
+				logger.Error("tenant resolution failed", "stream_key", event.StreamKey, "error", err)
+				return
+			}
+			uploader.Submit(UploadJob{
+				FilePath:  path,
+				Tenant:    tenant,
+				StreamKey: event.StreamKey,
+			})
+		})
+		if err := listener.Run(ctx); err != nil && err != context.Canceled {
+			logger.Error("webhook listener error", "error", err)
+		}
+
 	default:
 		logger.Error("unknown mode", "mode", *mode)
-		fmt.Fprintf(os.Stderr, "Usage: -mode must be 'watch' or 'events'\n")
+		fmt.Fprintf(os.Stderr, "Usage: -mode must be 'watch', 'events', or 'webhook'\n")
 		os.Exit(1)
 	}
 
