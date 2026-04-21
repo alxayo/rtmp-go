@@ -1,14 +1,103 @@
-# RTMP-Go Azure Deployment: Complete Architecture Guide
+# RTMP-Go Azure Deployment
 
-## 📚 Document Overview
+This directory contains infrastructure-as-code (Bicep), deployment scripts, and architecture research for running rtmp-go on Azure Container Apps.
 
-This directory contains **comprehensive research and implementation guides** for deploying RTMP-go to Azure Container Apps with **scheduled streaming** (93% cost reduction).
+## Quick Start
 
-**Total**: ~3,200 lines, 100KB of detailed analysis, code examples, and deployment procedures.
+### Prerequisites
+
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) installed and logged in (`az login`)
+- An active Azure subscription
+- Bash shell (macOS/Linux or WSL on Windows)
+
+### Deploy
+
+Run the deploy script from the project root:
+
+```bash
+# Interactive — prompts for auth token
+./azure/deploy.sh
+
+# Non-interactive
+RTMP_AUTH_TOKEN="live/stream=mysecret123" ./azure/deploy.sh
+```
+
+The script performs the following steps:
+
+1. **Creates a resource group** (`rg-rtmpgo` in `eastus2` by default)
+2. **Deploys Bicep infrastructure** — VNet, Container Apps Environment, ACR, Storage Account, Managed Identity with RBAC roles
+3. **Builds Docker images** in ACR using ACR Tasks (no local Docker required) — `rtmp-server` and `blob-sidecar`
+4. **Redeploys with real images** — updates container apps from placeholder to the built images
+5. **Verifies** both container apps are running and prints the RTMP endpoint
+
+On completion it prints the RTMP URL, ffmpeg test command, and OBS Studio settings.
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `RTMP_AUTH_TOKEN` | *(prompted)* | Auth token in `streamKey=secret` format |
+| `RESOURCE_GROUP` | `rg-rtmpgo` | Azure resource group name |
+| `LOCATION` | `eastus2` | Azure region |
+
+### Destroy
+
+Remove all Azure resources:
+
+```bash
+# Interactive — requires typing resource group name to confirm
+./azure/destroy.sh
+
+# Skip confirmation
+./azure/destroy.sh --yes
+```
+
+The script:
+
+1. Lists all resources that will be deleted
+2. Asks for confirmation (type the resource group name)
+3. Deletes the entire resource group asynchronously (takes 2-5 minutes)
+
+### What Gets Deployed
+
+```
+Resource Group (rg-rtmpgo)
+├── Virtual Network          — 10.0.0.0/16 with Container Apps subnet
+├── Container Apps Environment — with VNet integration for TCP ingress
+├── Container Registry (Basic) — stores rtmp-server and blob-sidecar images
+├── Storage Account            — Azure Files (shared volume) + Blob (recordings archive)
+├── Managed Identity           — AcrPull + Storage Blob Data Contributor roles
+├── rtmp-server Container App  — TCP ingress on port 1935, token auth, 2-min segment recording
+└── blob-sidecar Container App — watches /recordings, uploads segments to Blob Storage
+```
+
+### File Structure
+
+```
+azure/
+├── deploy.sh                 # One-command deploy (creates everything from scratch)
+├── destroy.sh                # One-command teardown (deletes resource group)
+├── infra/
+│   ├── main.bicep            # All Azure resources (Bicep IaC)
+│   └── main.parameters.json  # Default parameter values
+└── blob-sidecar/             # Blob upload sidecar (Go module with Dockerfile)
+```
 
 ---
 
-## 🎯 Start Here: 5-Minute Overview
+## Architecture Research
+
+The documents below contain research and planning for advanced deployment patterns (scheduled streaming, cost optimization). They are **not required** to deploy — the scripts above handle everything.
+
+### Document Overview
+
+Comprehensive research and implementation guides for deploying RTMP-go to Azure Container Apps with **scheduled streaming** (93% cost reduction).
+
+Total: ~3,200 lines, 100KB of detailed analysis, code examples, and deployment procedures.
+
+---
+
+## Start Here: 5-Minute Overview
 
 ### The Challenge
 - RTMP-go costs **$148/month** to run 24/7 on Azure
