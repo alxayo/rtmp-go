@@ -1,0 +1,11 @@
+.git
+azure/
+docs/
+specs/
+tests/
+e2e-tests/
+site/
+recordings/
+*.md
+*.exe
+handshake_cover
