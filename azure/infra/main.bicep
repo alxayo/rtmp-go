@@ -8,7 +8,7 @@
 //   - Storage Account + blob container for recordings
 //   - User Managed Identity (AcrPull + Storage Blob Data Contributor)
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
-//   - Container App 2: blob-sidecar (no ingress, watches shared volume)
+//   - Container App 2: blob-sidecar (internal HTTP ingress, receives webhook events from rtmp-server)
 //
 // Usage:
 //   az deployment group create -g <rg> -f main.bicep -p main.parameters.json
@@ -278,6 +278,12 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             '/recordings'
             '-segment-duration'
             '2m'
+            '-hook-webhook'
+            'segment_complete=http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-webhook'
+            'recording_start=http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-webhook'
+            'recording_stop=http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
           ] : []
@@ -327,7 +333,12 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: identity.id
         }
       ]
-      // No ingress — internal sidecar only
+      // Internal-only HTTP ingress for receiving webhook events from rtmp-server
+      ingress: {
+        external: false
+        targetPort: 8080
+        transport: 'http'
+      }
       secrets: [
         {
           name: 'tenants-json'
@@ -348,9 +359,9 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           command: !empty(blobSidecarImage) ? [
             '/blob-sidecar'
             '-mode'
-            'watch'
-            '-watch-dir'
-            '/recordings'
+            'webhook'
+            '-listen-addr'
+            ':8080'
             '-config'
             '/config/tenants-json'
             '-workers'
