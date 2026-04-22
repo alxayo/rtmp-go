@@ -58,6 +58,89 @@ The script:
 2. Asks for confirmation (type the resource group name)
 3. Deletes the entire resource group asynchronously (takes 2-5 minutes)
 
+> **Note:** `destroy.sh` only removes the app resource group (`rg-rtmpgo`). The DNS zone in `rg-dns` is preserved so you don't lose your GoDaddy nameserver delegation. Use `dns-destroy.sh` separately if you want to remove DNS too.
+
+### Custom Domain (stream.port-80.com)
+
+The DNS scripts manage an Azure DNS Zone in a **separate resource group** (`rg-dns`) so the domain configuration survives app teardowns.
+
+#### First-Time Setup
+
+**1. Create the DNS zone and get Azure nameservers:**
+
+```bash
+./azure/dns-deploy.sh
+```
+
+This creates the `rg-dns` resource group with a DNS zone for `port-80.com` and prints 4 Azure DNS nameservers.
+
+**2. Delegate your domain at GoDaddy (one-time):**
+
+1. Go to [GoDaddy DNS Management](https://dcc.godaddy.com/domains/port-80.com/dns)
+2. Scroll to **Nameservers** → click **Change**
+3. Select **"Enter my own nameservers (advanced)"**
+4. Replace all existing nameservers with the 4 Azure values printed by the script, e.g.:
+   ```
+   ns1-03.azure-dns.com
+   ns2-03.azure-dns.net
+   ns3-03.azure-dns.org
+   ns4-03.azure-dns.info
+   ```
+5. Click **Save** and confirm the warning dialog
+
+Propagation typically takes a few minutes (up to 48 hours). Verify with:
+
+```bash
+nslookup -type=NS port-80.com
+```
+
+**3. Add the CNAME record (after deploying the app):**
+
+After running `deploy.sh`, use the ACA FQDN from its output to create the CNAME:
+
+```bash
+RTMP_APP_FQDN="azappXXXXX1.eastus2.azurecontainerapps.io" ./azure/dns-deploy.sh
+```
+
+**4. Verify end-to-end:**
+
+```bash
+nslookup stream.port-80.com          # Should resolve to the ACA FQDN
+ffmpeg -re -i test.mp4 -c copy -f flv \
+  "rtmp://stream.port-80.com/live/stream?token=<your-secret>"
+```
+
+#### Subsequent Deploys
+
+After the initial GoDaddy delegation, you only need to re-run `dns-deploy.sh` with the FQDN if the ACA environment was recreated (new FQDN). The nameservers don't change as long as `rg-dns` exists.
+
+```bash
+# After a fresh deploy.sh, update the CNAME if the FQDN changed:
+RTMP_APP_FQDN="<new-fqdn>" ./azure/dns-deploy.sh
+```
+
+#### DNS Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `RTMP_APP_FQDN` | *(empty)* | ACA FQDN — when set, creates/updates the CNAME record |
+| `DNS_RESOURCE_GROUP` | `rg-dns` | Resource group for the DNS zone |
+| `DNS_ZONE_NAME` | `port-80.com` | Your registered domain name |
+| `DNS_SUBDOMAIN` | `stream` | Subdomain for the streaming endpoint |
+| `LOCATION` | `eastus2` | Azure region for the resource group |
+
+#### Remove DNS
+
+```bash
+# Interactive — requires typing resource group name to confirm
+./azure/dns-destroy.sh
+
+# Skip confirmation
+./azure/dns-destroy.sh --yes
+```
+
+> **Warning:** Deleting the DNS zone means `stream.port-80.com` stops resolving. If you recreate it later, Azure assigns **new** nameservers and you'll need to update GoDaddy again.
+
 ### What Gets Deployed
 
 ```
@@ -76,10 +159,14 @@ Resource Group (rg-rtmpgo)
 ```
 azure/
 ├── deploy.sh                 # One-command deploy (creates everything from scratch)
-├── destroy.sh                # One-command teardown (deletes resource group)
+├── destroy.sh                # One-command teardown (deletes app resource group)
+├── dns-deploy.sh             # DNS zone + CNAME record deployment
+├── dns-destroy.sh            # DNS zone teardown (separate from app destroy)
 ├── infra/
 │   ├── main.bicep            # All Azure resources (Bicep IaC)
-│   └── main.parameters.json  # Default parameter values
+│   ├── main.parameters.json  # Default parameter values
+│   ├── dns.bicep             # DNS Zone + CNAME record (Bicep IaC)
+│   └── dns.parameters.json   # DNS parameter defaults (domain, subdomain)
 └── blob-sidecar/             # Blob upload sidecar (Go module with Dockerfile)
 ```
 

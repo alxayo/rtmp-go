@@ -338,6 +338,7 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: false
         targetPort: 8080
         transport: 'http'
+        allowInsecure: true // Required: rtmp-server sends webhooks over plain HTTP
       }
       secrets: [
         {
