@@ -26,9 +26,9 @@ The script performs the following steps:
 
 1. **Creates a resource group** (`rg-rtmpgo` in `eastus2` by default)
 2. **Deploys Bicep infrastructure** — VNet, Container Apps Environment, ACR, Storage Account, Managed Identity with RBAC roles
-3. **Builds Docker images** in ACR using ACR Tasks (no local Docker required) — `rtmp-server` and `blob-sidecar`
+3. **Builds Docker images** in ACR using ACR Tasks (no local Docker required) — `rtmp-server`, `blob-sidecar`, and `hls-transcoder`
 4. **Redeploys with real images** — updates container apps from placeholder to the built images
-5. **Verifies** both container apps are running and prints the RTMP endpoint
+5. **Verifies** all three container apps are running and prints the RTMP endpoint
 
 On completion it prints the RTMP URL, ffmpeg test command, and OBS Studio settings.
 
@@ -147,11 +147,12 @@ RTMP_APP_FQDN="<new-fqdn>" ./azure/dns-deploy.sh
 Resource Group (rg-rtmpgo)
 ├── Virtual Network          — 10.0.0.0/16 with Container Apps subnet
 ├── Container Apps Environment — with VNet integration for TCP ingress
-├── Container Registry (Basic) — stores rtmp-server and blob-sidecar images
-├── Storage Account            — Azure Files (shared volume) + Blob (recordings archive)
+├── Container Registry (Basic) — stores rtmp-server, blob-sidecar, and hls-transcoder images
+├── Storage Account            — Azure Files (recordings + hls-output shares) + Blob (recordings archive)
 ├── Managed Identity           — AcrPull + Storage Blob Data Contributor roles
 ├── rtmp-server Container App  — TCP ingress on port 1935, token auth, 2-min segment recording
-└── blob-sidecar Container App — watches /recordings, uploads segments to Blob Storage
+├── blob-sidecar Container App — receives segment_complete webhooks, uploads to Blob Storage
+└── hls-transcoder Container App — receives publish_start/stop webhooks, runs FFmpeg ABR transcoding
 ```
 
 ### File Structure
@@ -168,6 +169,7 @@ azure/
 │   ├── dns.bicep             # DNS Zone + CNAME record (Bicep IaC)
 │   └── dns.parameters.json   # DNS parameter defaults (domain, subdomain)
 └── blob-sidecar/             # Blob upload sidecar (Go module with Dockerfile)
+└── hls-transcoder/           # HLS transcoding service (Go module with Dockerfile)
 ```
 
 ---
