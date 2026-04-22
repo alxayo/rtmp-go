@@ -517,11 +517,11 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             '-hls-dir'
             '/hls-output'
             '-rtmp-host'
-            '${rtmpAppName}.internal.${containerEnv.properties.defaultDomain}'
+            '${rtmpAppName}.${containerEnv.properties.defaultDomain}'
             '-rtmp-port'
             '1935'
             '-rtmp-token'
-            rtmpAuthToken
+            last(split(rtmpAuthToken, '='))
             '-mode'
             'abr'
             '-blob-webhook-url'
