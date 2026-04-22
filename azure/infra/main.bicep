@@ -9,6 +9,7 @@
 //   - User Managed Identity (AcrPull + Storage Blob Data Contributor)
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
 //   - Container App 2: blob-sidecar (internal HTTP ingress, receives webhook events from rtmp-server)
+//   - Container App 3: hls-transcoder (internal HTTP ingress, converts RTMP to multi-bitrate HLS via FFmpeg)
 //
 // Usage:
 //   az deployment group create -g <rg> -f main.bicep -p main.parameters.json
@@ -34,6 +35,9 @@ param rtmpServerImage string = ''
 @description('Container image for blob-sidecar (set after ACR build)')
 param blobSidecarImage string = ''
 
+@description('Container image for hls-transcoder (set after ACR build)')
+param hlsTranscoderImage string = ''
+
 // ---------- Variables ----------
 
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
@@ -46,6 +50,7 @@ var storageAccountName = 'azst${resourceToken}'
 var identityName = 'azid${resourceToken}'
 var rtmpAppName = 'azapp${resourceToken}1'
 var sidecarAppName = 'azapp${resourceToken}2'
+var hlsAppName = 'azapp${resourceToken}3'
 var blobContainerName = 'recordings'
 var vnetName = 'azvnet${resourceToken}'
 var subnetName = 'containerapps'
@@ -131,6 +136,20 @@ resource recordingsStorage 'Microsoft.App/managedEnvironments/storages@2024-03-0
   }
 }
 
+// HLS output storage for hls-transcoder
+resource hlsStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+  name: 'hls-output'
+  parent: containerEnv
+  properties: {
+    azureFile: {
+      accountName: storageAccount.name
+      accountKey: storageAccount.listKeys().keys[0].value
+      shareName: hlsFileShare.name
+      accessMode: 'ReadWrite'
+    }
+  }
+}
+
 // ---------- Azure Container Registry ----------
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
@@ -188,6 +207,15 @@ resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-0
   parent: fileService
   properties: {
     shareQuota: 10 // 10 GiB quota
+  }
+}
+
+// Azure Files share for HLS output (shared between hls-transcoder and future HLS server)
+resource hlsFileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  name: 'hls-output'
+  parent: fileService
+  properties: {
+    shareQuota: 50 // 50 GiB quota — 3 renditions × 2s segments at ~8 Mbps combined
   }
 }
 
@@ -284,6 +312,10 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             'recording_start=http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-hook-webhook'
             'recording_stop=http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-webhook'
+            'publish_start=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-webhook'
+            'publish_stop=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
           ] : []
@@ -413,12 +445,105 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
   ]
 }
 
+// ---------- Container App: hls-transcoder ----------
+// Converts live RTMP streams to multi-bitrate adaptive HLS via FFmpeg.
+// Receives publish_start/publish_stop webhooks from rtmp-server and manages
+// FFmpeg process lifecycles. Writes HLS segments to the hls-output Azure Files share.
+// In ABR mode: 4 vCPU / 8 GiB for 3-rendition transcoding (1080p/720p/480p).
+// In copy mode: 0.5 vCPU / 1 GiB for remux-only passthrough.
+
+resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: hlsAppName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerEnv.id
+    configuration: {
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      // Internal-only HTTP ingress for receiving webhook events from rtmp-server
+      ingress: {
+        external: false
+        targetPort: 8090
+        transport: 'http'
+        allowInsecure: true // Required: rtmp-server sends webhooks over plain HTTP inside VNet
+      }
+      secrets: [
+        {
+          name: 'rtmp-auth-token'
+          value: rtmpAuthToken
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'hls-transcoder'
+          image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          resources: {
+            // ABR transcoding: ~2 vCPU for 1080p, ~1 for 720p, ~0.5 for 480p
+            cpu: json('4')
+            memory: '8Gi'
+          }
+          command: !empty(hlsTranscoderImage) ? [
+            '/hls-transcoder'
+            '-listen-addr'
+            ':8090'
+            '-hls-dir'
+            '/hls-output'
+            '-rtmp-host'
+            '${rtmpAppName}.internal.${containerEnv.properties.defaultDomain}'
+            '-rtmp-port'
+            '1935'
+            '-rtmp-token'
+            rtmpAuthToken
+            '-mode'
+            'abr'
+            '-log-level'
+            'info'
+          ] : []
+          volumeMounts: [
+            {
+              volumeName: 'hls-output'
+              mountPath: '/hls-output'
+            }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: 'hls-output'
+          storageName: hlsStorage.name
+          storageType: 'AzureFile'
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+  dependsOn: [
+    acrPullRole
+  ]
+}
+
 // ---------- Outputs ----------
 
 output registryLoginServer string = registry.properties.loginServer
 output registryName string = registry.name
 output rtmpAppName string = rtmpApp.name
 output sidecarAppName string = sidecarApp.name
+output hlsAppName string = hlsApp.name
 output rtmpAppFqdn string = rtmpApp.properties.configuration.ingress.fqdn
 output storageAccountName string = storageAccount.name
 output identityClientId string = identity.properties.clientId
