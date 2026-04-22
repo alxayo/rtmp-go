@@ -10,6 +10,7 @@
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
 //   - Container App 2: blob-sidecar (internal HTTP ingress, receives webhook events from rtmp-server)
 //   - Container App 3: hls-transcoder (internal HTTP ingress, converts RTMP to multi-bitrate HLS via FFmpeg)
+//   - Container App 4: hls-blob-sidecar (internal HTTP ingress, uploads HLS segments to Blob Storage)
 //
 // Usage:
 //   az deployment group create -g <rg> -f main.bicep -p main.parameters.json
@@ -51,13 +52,19 @@ var identityName = 'azid${resourceToken}'
 var rtmpAppName = 'azapp${resourceToken}1'
 var sidecarAppName = 'azapp${resourceToken}2'
 var hlsAppName = 'azapp${resourceToken}3'
+var hlsSidecarAppName = 'azapp${resourceToken}4'
 var blobContainerName = 'recordings'
+var hlsBlobContainerName = 'hls-content'
 var vnetName = 'azvnet${resourceToken}'
 var subnetName = 'containerapps'
 
 // Tenant config for the blob-sidecar (uses managed identity to access blob storage)
 #disable-next-line secure-secrets-in-params
 var tenantsJsonValue = '{"tenants":{"live":{"storage_account":"https://${storageAccountName}.blob.core.windows.net","container":"recordings","credential":"managed-identity"}},"default":{"storage_account":"https://${storageAccountName}.blob.core.windows.net","container":"recordings","credential":"managed-identity"},"api_fallback":{"enabled":false}}'
+
+// Tenant config for the HLS blob-sidecar — routes "hls/*" stream keys to hls-content container
+#disable-next-line secure-secrets-in-params
+var hlsTenantsJsonValue = '{"tenants":{"hls":{"storage_account":"https://${storageAccountName}.blob.core.windows.net","container":"hls-content","credential":"managed-identity"}},"default":{"storage_account":"https://${storageAccountName}.blob.core.windows.net","container":"hls-content","credential":"managed-identity"},"api_fallback":{"enabled":false}}'
 
 // ---------- Virtual Network (required for TCP ingress) ----------
 
@@ -190,6 +197,15 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 
 resource blobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   name: blobContainerName
+  parent: blobService
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Blob container for HLS segments and playlists
+resource hlsBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: hlsBlobContainerName
   parent: blobService
   properties: {
     publicAccess: 'None'
@@ -508,6 +524,8 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             rtmpAuthToken
             '-mode'
             'abr'
+            '-blob-webhook-url'
+            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
           ] : []
@@ -537,6 +555,111 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
   ]
 }
 
+// ---------- Container App: hls-blob-sidecar ----------
+// Dedicated blob-sidecar instance for uploading HLS segments and playlists
+// to Azure Blob Storage. Reuses the same blob-sidecar image but with:
+//   - cleanup disabled (FFmpeg manages segment rotation on the Files share)
+//   - HLS-specific tenant config routing to the hls-content blob container
+//   - hls-output volume mounted for reading HLS files
+
+resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: hlsSidecarAppName
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${identity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerEnv.id
+    configuration: {
+      registries: [
+        {
+          server: registry.properties.loginServer
+          identity: identity.id
+        }
+      ]
+      // Internal-only HTTP ingress for receiving webhook events from hls-transcoder
+      ingress: {
+        external: false
+        targetPort: 8080
+        transport: 'http'
+        allowInsecure: true
+      }
+      secrets: [
+        {
+          name: 'hls-tenants-json'
+          #disable-next-line use-secure-value-for-secure-inputs
+          value: hlsTenantsJsonValue
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'hls-blob-sidecar'
+          image: !empty(blobSidecarImage) ? blobSidecarImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          command: !empty(blobSidecarImage) ? [
+            '/blob-sidecar'
+            '-mode'
+            'webhook'
+            '-listen-addr'
+            ':8080'
+            '-config'
+            '/config/hls-tenants-json'
+            '-workers'
+            '4'
+            '-cleanup'
+            'false'
+            '-log-level'
+            'info'
+          ] : []
+          env: [
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'hls-output'
+              mountPath: '/hls-output'
+            }
+            {
+              volumeName: 'sidecar-config'
+              mountPath: '/config'
+            }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: 'hls-output'
+          storageName: hlsStorage.name
+          storageType: 'AzureFile'
+        }
+        {
+          name: 'sidecar-config'
+          storageType: 'Secret'
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+  dependsOn: [
+    acrPullRole
+    storageBlobRole
+  ]
+}
+
 // ---------- Outputs ----------
 
 output registryLoginServer string = registry.properties.loginServer
@@ -544,6 +667,7 @@ output registryName string = registry.name
 output rtmpAppName string = rtmpApp.name
 output sidecarAppName string = sidecarApp.name
 output hlsAppName string = hlsApp.name
+output hlsSidecarAppName string = hlsSidecarApp.name
 output rtmpAppFqdn string = rtmpApp.properties.configuration.ingress.fqdn
 output storageAccountName string = storageAccount.name
 output identityClientId string = identity.properties.clientId
