@@ -506,9 +506,9 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'hls-transcoder'
           image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
-            // ABR transcoding: ~2 vCPU for 1080p, ~1 for 720p, ~0.5 for 480p
-            cpu: json('4')
-            memory: '8Gi'
+            // ABR transcoding (Consumption tier max: 2 vCPU / 4Gi)
+            cpu: json('2')
+            memory: '4Gi'
           }
           command: !empty(hlsTranscoderImage) ? [
             '/hls-transcoder'
