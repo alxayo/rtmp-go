@@ -125,6 +125,7 @@ echo ">>> Step 5/5: Verifying deployment..."
 RTMP_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['rtmpAppName']['value'])")
 SIDECAR_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['sidecarAppName']['value'])")
 HLS_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['hlsAppName']['value'])")
+HLS_SIDECAR_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['hlsSidecarAppName']['value'])")
 
 RTMP_STATUS=$(az containerapp show --name "$RTMP_APP_NAME" --resource-group "$RESOURCE_GROUP" \
   --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
@@ -132,10 +133,13 @@ SIDECAR_STATUS=$(az containerapp show --name "$SIDECAR_APP_NAME" --resource-grou
   --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
 HLS_STATUS=$(az containerapp show --name "$HLS_APP_NAME" --resource-group "$RESOURCE_GROUP" \
   --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
+HLS_SIDECAR_STATUS=$(az containerapp show --name "$HLS_SIDECAR_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
 
-echo "    rtmp-server:     $RTMP_STATUS"
-echo "    blob-sidecar:    $SIDECAR_STATUS"
-echo "    hls-transcoder:  $HLS_STATUS"
+echo "    rtmp-server:       $RTMP_STATUS"
+echo "    blob-sidecar:      $SIDECAR_STATUS"
+echo "    hls-transcoder:    $HLS_STATUS"
+echo "    hls-blob-sidecar:  $HLS_SIDECAR_STATUS"
 
 SUBSCRIPTION=$(az account show --query 'id' --output tsv)
 
