@@ -93,6 +93,14 @@ az acr build \
   "$PROJECT_ROOT/azure/blob-sidecar" \
   --no-logs --output none
 
+echo "    Building hls-transcoder..."
+az acr build \
+  --registry "$ACR_NAME" \
+  --image hls-transcoder:latest \
+  --file "$PROJECT_ROOT/azure/hls-transcoder/Dockerfile" \
+  "$PROJECT_ROOT/azure/hls-transcoder" \
+  --no-logs --output none
+
 echo "    Images built and pushed."
 
 # --- Step 5: Redeploy Bicep with real container images ---
@@ -105,6 +113,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
   --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:latest" \
   --parameters blobSidecarImage="${ACR_LOGIN_SERVER}/blob-sidecar:latest" \
+  --parameters hlsTranscoderImage="${ACR_LOGIN_SERVER}/hls-transcoder:latest" \
   --query 'properties.outputs' \
   --output json)
 
@@ -115,14 +124,18 @@ echo ""
 echo ">>> Step 5/5: Verifying deployment..."
 RTMP_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['rtmpAppName']['value'])")
 SIDECAR_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['sidecarAppName']['value'])")
+HLS_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['hlsAppName']['value'])")
 
 RTMP_STATUS=$(az containerapp show --name "$RTMP_APP_NAME" --resource-group "$RESOURCE_GROUP" \
   --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
 SIDECAR_STATUS=$(az containerapp show --name "$SIDECAR_APP_NAME" --resource-group "$RESOURCE_GROUP" \
   --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
+HLS_STATUS=$(az containerapp show --name "$HLS_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
 
-echo "    rtmp-server:  $RTMP_STATUS"
-echo "    blob-sidecar: $SIDECAR_STATUS"
+echo "    rtmp-server:     $RTMP_STATUS"
+echo "    blob-sidecar:    $SIDECAR_STATUS"
+echo "    hls-transcoder:  $HLS_STATUS"
 
 SUBSCRIPTION=$(az account show --query 'id' --output tsv)
 
