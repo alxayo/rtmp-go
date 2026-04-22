@@ -15,6 +15,7 @@ package main
 // and waits for it to exit cleanly.
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,34 +28,38 @@ import (
 
 // TranscoderConfig holds the configuration for FFmpeg process construction.
 type TranscoderConfig struct {
-	HLSDir    string // Root directory for HLS output
-	RTMPHost  string // RTMP server hostname
-	RTMPPort  int    // RTMP server port
-	RTMPToken string // Auth token for subscribing (optional)
-	Mode      string // "abr" or "copy"
+	HLSDir         string // Root directory for HLS output
+	RTMPHost       string // RTMP server hostname
+	RTMPPort       int    // RTMP server port
+	RTMPToken      string // Auth token for subscribing (optional)
+	Mode           string // "abr" or "copy"
+	BlobWebhookURL string // Webhook URL for blob-sidecar (empty = no blob upload)
 }
 
 // streamProcess tracks a running FFmpeg process for a single stream.
 type streamProcess struct {
-	cmd       *exec.Cmd
-	streamKey string
-	outputDir string
+	cmd          *exec.Cmd
+	streamKey    string
+	outputDir    string
+	cancelNotify context.CancelFunc // cancels the segment notifier goroutine
 }
 
 // Transcoder manages FFmpeg processes for active streams.
 type Transcoder struct {
-	config  TranscoderConfig
-	logger  *slog.Logger
-	mu      sync.Mutex
-	streams map[string]*streamProcess // keyed by stream key
+	config   TranscoderConfig
+	logger   *slog.Logger
+	notifier *SegmentNotifier
+	mu       sync.Mutex
+	streams  map[string]*streamProcess // keyed by stream key
 }
 
 // NewTranscoder creates a transcoder with the given configuration.
 func NewTranscoder(cfg TranscoderConfig, logger *slog.Logger) *Transcoder {
 	return &Transcoder{
-		config:  cfg,
-		logger:  logger,
-		streams: make(map[string]*streamProcess),
+		config:   cfg,
+		logger:   logger,
+		notifier: NewSegmentNotifier(cfg.BlobWebhookURL, logger),
+		streams:  make(map[string]*streamProcess),
 	}
 }
 
@@ -110,10 +115,19 @@ func (t *Transcoder) Start(streamKey string) {
 		return
 	}
 
+	// Start segment notifier goroutine for blob upload (if configured)
+	var cancelNotify context.CancelFunc
+	if t.notifier.Enabled() {
+		notifyCtx, cancel := context.WithCancel(context.Background())
+		cancelNotify = cancel
+		go t.notifier.WatchStream(notifyCtx, streamKey, outputDir)
+	}
+
 	sp := &streamProcess{
-		cmd:       cmd,
-		streamKey: streamKey,
-		outputDir: outputDir,
+		cmd:          cmd,
+		streamKey:    streamKey,
+		outputDir:    outputDir,
+		cancelNotify: cancelNotify,
 	}
 	t.streams[streamKey] = sp
 
@@ -135,6 +149,11 @@ func (t *Transcoder) Stop(streamKey string) {
 	}
 	delete(t.streams, streamKey)
 	t.mu.Unlock()
+
+	// Stop segment notifier first (stops sending events for this stream)
+	if sp.cancelNotify != nil {
+		sp.cancelNotify()
+	}
 
 	t.logger.Info("stopping FFmpeg transcoder", "stream_key", streamKey, "pid", sp.cmd.Process.Pid)
 

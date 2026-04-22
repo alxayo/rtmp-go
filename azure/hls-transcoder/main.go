@@ -35,6 +35,7 @@ func main() {
 	rtmpPort := flag.Int("rtmp-port", 1935, "RTMP server port")
 	rtmpToken := flag.String("rtmp-token", "", "Auth token for RTMP subscribe access")
 	mode := flag.String("mode", "abr", "Transcoding mode: abr (multi-bitrate) or copy (remux)")
+	blobWebhookURL := flag.String("blob-webhook-url", "", "Webhook URL for blob-sidecar segment upload (empty = no blob upload)")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 
 	flag.Parse()
@@ -63,11 +64,12 @@ func main() {
 
 	// Build transcoder configuration
 	cfg := TranscoderConfig{
-		HLSDir:    *hlsDir,
-		RTMPHost:  *rtmpHost,
-		RTMPPort:  *rtmpPort,
-		RTMPToken: *rtmpToken,
-		Mode:      *mode,
+		HLSDir:         *hlsDir,
+		RTMPHost:       *rtmpHost,
+		RTMPPort:       *rtmpPort,
+		RTMPToken:      *rtmpToken,
+		Mode:           *mode,
+		BlobWebhookURL: *blobWebhookURL,
 	}
 
 	transcoder := NewTranscoder(cfg, logger)
@@ -94,6 +96,7 @@ func main() {
 		"hls_dir", *hlsDir,
 		"rtmp_host", *rtmpHost,
 		"rtmp_port", *rtmpPort,
+		"blob_upload", *blobWebhookURL != "",
 	)
 
 	if err := listener.Run(ctx); err != nil && err != context.Canceled {
