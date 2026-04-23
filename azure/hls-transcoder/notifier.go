@@ -57,7 +57,7 @@ func (n *SegmentNotifier) WatchStream(ctx context.Context, streamKey, outputDir 
 		return
 	}
 
-	seen := make(map[string]struct{})         // .ts segments (immutable once written)
+	seen := make(map[string]int64)             // .ts segments: path → size on first sight (-1 = notified)
 	playlistMods := make(map[string]time.Time) // .m3u8 last-seen mod times
 
 	safeKey := sanitizeStreamKey(streamKey)
@@ -97,7 +97,7 @@ func (n *SegmentNotifier) ensureMasterPlaylist(outputDir string) {
 }
 
 // scanDir walks the output directory tree and fires events for new files.
-func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen map[string]struct{}, playlistMods map[string]time.Time) {
+func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen map[string]int64, playlistMods map[string]time.Time) {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip inaccessible paths
@@ -109,11 +109,33 @@ func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen
 		ext := strings.ToLower(filepath.Ext(path))
 		switch ext {
 		case ".ts":
-			// Segments are immutable — upload once when first seen
-			if _, ok := seen[path]; !ok {
-				seen[path] = struct{}{}
-				n.notify(ctx, safeKey, dir, path)
+			size := info.Size()
+
+			// Reject empty or undersized segments — definitely corrupt or incomplete.
+			// A real 3-second HLS segment at even 480p is ~375KB minimum.
+			if size < 1024 {
+				return nil
 			}
+
+			prevSize, exists := seen[path]
+			if !exists {
+				// First sighting: record size, wait for next poll to confirm stability.
+				// FFmpeg may still be writing to this file on the SMB mount.
+				seen[path] = size
+				return nil
+			}
+			if prevSize == -1 {
+				// Already notified — skip.
+				return nil
+			}
+			if size != prevSize {
+				// File is still growing — update recorded size, wait another cycle.
+				seen[path] = size
+				return nil
+			}
+			// Size stable across two polls — segment is fully written.
+			seen[path] = -1
+			n.notify(ctx, safeKey, dir, path)
 		case ".m3u8":
 			// Playlists are rewritten as new segments arrive — re-upload on change
 			lastMod, ok := playlistMods[path]
