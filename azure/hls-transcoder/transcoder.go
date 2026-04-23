@@ -280,13 +280,15 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		"-f", "hls",
 		"-hls_time", "2",
 		"-hls_list_size", "10",
-		"-hls_flags", "delete_segments+temp_file",
+		"-hls_flags", "delete_segments",
 
 		// Multi-variant stream map — produces separate directories per rendition
 		"-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2",
 
-		// Master playlist
-		"-master_pl_name", "master.m3u8",
+		// Master playlist is written by writeMasterPlaylist() before FFmpeg starts.
+		// Do NOT use -master_pl_name here: combined with -hls_flags temp_file,
+		// FFmpeg's rename(master.m3u8.tmp → master.m3u8) fails on Azure Files SMB,
+		// deleting the target file first then failing the rename — leaving no file.
 
 		// Segment and playlist output pattern
 		"-hls_segment_filename", filepath.Join(outputDir, "stream_%v", "seg_%05d.ts"),
@@ -312,7 +314,7 @@ func (t *Transcoder) buildCopyArgs(rtmpURL, outputDir string) []string {
 		"-f", "hls",
 		"-hls_time", "2",
 		"-hls_list_size", "10",
-		"-hls_flags", "delete_segments+temp_file",
+		"-hls_flags", "delete_segments",
 
 		// Segment and playlist output
 		"-hls_segment_filename", filepath.Join(outputDir, "seg_%05d.ts"),
