@@ -52,10 +52,10 @@ var containerEnvName = 'azenv${resourceToken}'
 var registryName = 'azacr${resourceToken}'
 var storageAccountName = 'azst${resourceToken}'
 var identityName = 'azid${resourceToken}'
-var rtmpAppName = 'azapp${resourceToken}1'
-var sidecarAppName = 'azapp${resourceToken}2'
-var hlsAppName = 'azapp${resourceToken}3'
-var hlsSidecarAppName = 'azapp${resourceToken}4'
+var rtmpAppName = 'rtmp-server-${resourceToken}'
+var sidecarAppName = 'rec-blob-sidecar-${resourceToken}'
+var hlsAppName = 'hls-transcoder-${resourceToken}'
+var hlsSidecarAppName = 'hls-blob-sidecar-${resourceToken}'
 var blobContainerName = 'recordings'
 var hlsBlobContainerName = 'hls-content'
 var vnetName = 'azvnet${resourceToken}'
@@ -272,6 +272,10 @@ resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: rtmpAppName
   location: location
+  tags: {
+    role: 'rtmp-server'
+    component: 'rtmp-go'
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -376,6 +380,10 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
 resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: sidecarAppName
   location: location
+  tags: {
+    role: 'rec-blob-sidecar'
+    component: 'rtmp-go'
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -481,6 +489,10 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
 resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: hlsAppName
   location: location
+  tags: {
+    role: 'hls-transcoder'
+    component: 'rtmp-go'
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -575,6 +587,10 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
 resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: hlsSidecarAppName
   location: location
+  tags: {
+    role: 'hls-blob-sidecar'
+    component: 'rtmp-go'
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
