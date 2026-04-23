@@ -93,6 +93,9 @@ func TestTranscoder_BuildABRArgs(t *testing.T) {
 	argStr := strings.Join(args, " ")
 
 	checks := []string{
+		"-fflags +genpts+discardcorrupt",
+		"-err_detect ignore_err",
+		"-ec deblock+guess_mvs",
 		"-i rtmp://rtmp-server:1935/live/test",
 		"-var_stream_map",
 		"v:0,a:0 v:1,a:1 v:2,a:2",
@@ -139,6 +142,8 @@ func TestTranscoder_BuildCopyArgs(t *testing.T) {
 	argStr := strings.Join(args, " ")
 
 	checks := []string{
+		"-fflags +genpts+discardcorrupt",
+		"-err_detect ignore_err",
 		"-i rtmp://rtmp-server:1935/live/test",
 		"-c copy",
 		"-f hls",
@@ -153,12 +158,15 @@ func TestTranscoder_BuildCopyArgs(t *testing.T) {
 		}
 	}
 
-	// Copy mode should NOT have var_stream_map or master playlist
+	// Copy mode should NOT have var_stream_map, master playlist, or error concealment
 	if strings.Contains(argStr, "-var_stream_map") {
 		t.Error("Copy args should not contain -var_stream_map")
 	}
 	if strings.Contains(argStr, "-master_pl_name") {
 		t.Error("Copy args should not contain -master_pl_name")
+	}
+	if strings.Contains(argStr, "-ec ") {
+		t.Error("Copy args should not contain -ec (error concealment requires decoding)")
 	}
 }
 

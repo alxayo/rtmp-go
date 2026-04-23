@@ -252,6 +252,15 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		"-hide_banner",
 		"-loglevel", "warning",
 
+		// Input error handling — must come BEFORE -i.
+		// Source encoders using Main/High profile send B-frames that cause
+		// H.264 decoder errors (reference count overflow, illegal reordering,
+		// corrupted NAL units). These flags prevent corrupted frames from
+		// propagating into output segments.
+		"-fflags", "+genpts+discardcorrupt", // regenerate PTS + discard corrupt packets
+		"-err_detect", "ignore_err",          // continue decoding on reference errors
+		"-ec", "deblock+guess_mvs",           // error concealment: reconstruct damaged frames
+
 		// Input
 		"-i", rtmpURL,
 
@@ -323,6 +332,11 @@ func (t *Transcoder) buildCopyArgs(rtmpURL, outputDir string) []string {
 	return []string{
 		"-hide_banner",
 		"-loglevel", "warning",
+
+		// Input error handling — must come BEFORE -i (see buildABRArgs for rationale).
+		// No -ec flag in copy mode: error concealment requires decoding.
+		"-fflags", "+genpts+discardcorrupt",
+		"-err_detect", "ignore_err",
 
 		// Input
 		"-i", rtmpURL,
