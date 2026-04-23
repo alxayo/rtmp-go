@@ -278,16 +278,29 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		"-force_key_frames", "expr:gte(t,n_forced*2)",
 		"-sc_threshold", "0",
 
+		// Timestamp correction — fixes non-monotonic DTS from source encoders
+		// that send B-frames or irregular audio timestamps. Without these,
+		// FFmpeg outputs "Non-monotonic DTS" warnings and produces segments
+		// with micro-gaps that cause choppy playback.
+		"-async", "1",
+		"-vsync", "cfr",
+
 		// Audio encoding per rendition
 		"-c:a:0", "aac", "-b:a:0", "192k", "-ar:a:0", "48000",
 		"-c:a:1", "aac", "-b:a:1", "128k", "-ar:a:1", "48000",
 		"-c:a:2", "aac", "-b:a:2", "96k", "-ar:a:2", "48000",
 
 		// HLS output settings
+		// - hls_time 3: gives buffer margin for SMB write → sidecar poll → blob upload pipeline
+		// - hls_list_size 6: 6 × 3s = 18s playlist window (adequate for live)
+		// - independent_segments: signals each segment is independently decodable;
+		//   we do NOT use delete_segments because the blob-sidecar manages segment
+		//   lifecycle via upload-once semantics, and FFmpeg's delete races with the
+		//   sidecar's polling on Azure Files SMB mounts.
 		"-f", "hls",
-		"-hls_time", "2",
-		"-hls_list_size", "10",
-		"-hls_flags", "delete_segments",
+		"-hls_time", "3",
+		"-hls_list_size", "6",
+		"-hls_flags", "independent_segments",
 
 		// Multi-variant stream map — produces separate directories per rendition
 		"-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2",
@@ -317,11 +330,11 @@ func (t *Transcoder) buildCopyArgs(rtmpURL, outputDir string) []string {
 		// Copy codecs (no transcoding)
 		"-c", "copy",
 
-		// HLS output settings
+		// HLS output settings (see buildABRArgs for rationale)
 		"-f", "hls",
-		"-hls_time", "2",
-		"-hls_list_size", "10",
-		"-hls_flags", "delete_segments",
+		"-hls_time", "3",
+		"-hls_list_size", "6",
+		"-hls_flags", "independent_segments",
 
 		// Segment and playlist output
 		"-hls_segment_filename", filepath.Join(outputDir, "seg_%05d.ts"),

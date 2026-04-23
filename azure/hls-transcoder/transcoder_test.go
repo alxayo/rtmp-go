@@ -96,7 +96,6 @@ func TestTranscoder_BuildABRArgs(t *testing.T) {
 		"-i rtmp://rtmp-server:1935/live/test",
 		"-var_stream_map",
 		"v:0,a:0 v:1,a:1 v:2,a:2",
-		"-master_pl_name master.m3u8",
 		"-c:v:0 libx264",
 		"-s:v:0 1920x1080",
 		"-b:v:0 5000k",
@@ -107,9 +106,11 @@ func TestTranscoder_BuildABRArgs(t *testing.T) {
 		"-s:v:2 854x480",
 		"-b:v:2 1000k",
 		"-force_key_frames",
-		"-hls_time 2",
-		"-hls_list_size 10",
-		"-hls_flags delete_segments+temp_file",
+		"-async 1",
+		"-vsync cfr",
+		"-hls_time 3",
+		"-hls_list_size 6",
+		"-hls_flags independent_segments",
 	}
 
 	for _, check := range checks {
@@ -141,9 +142,9 @@ func TestTranscoder_BuildCopyArgs(t *testing.T) {
 		"-i rtmp://rtmp-server:1935/live/test",
 		"-c copy",
 		"-f hls",
-		"-hls_time 2",
-		"-hls_list_size 10",
-		"-hls_flags delete_segments+temp_file",
+		"-hls_time 3",
+		"-hls_list_size 6",
+		"-hls_flags independent_segments",
 	}
 
 	for _, check := range checks {

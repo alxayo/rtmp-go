@@ -38,7 +38,7 @@ func NewSegmentNotifier(webhookURL string, logger *slog.Logger) *SegmentNotifier
 	return &SegmentNotifier{
 		webhookURL:   webhookURL,
 		logger:       logger,
-		pollInterval: 3 * time.Second, // Slightly longer than HLS segment duration (2s)
+		pollInterval: 4 * time.Second, // Must exceed hls_time (3s) so segments are fully written before scanning
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
