@@ -258,8 +258,8 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		// corrupted NAL units). These flags prevent corrupted frames from
 		// propagating into output segments.
 		"-fflags", "+genpts+discardcorrupt", // regenerate PTS + discard corrupt packets
-		"-err_detect", "ignore_err",          // continue decoding on reference errors
-		"-ec", "deblock+guess_mvs",           // error concealment: reconstruct damaged frames
+		"-err_detect", "ignore_err", // continue decoding on reference errors
+		"-ec", "deblock+guess_mvs", // error concealment: reconstruct damaged frames
 
 		// Input
 		"-i", rtmpURL,
