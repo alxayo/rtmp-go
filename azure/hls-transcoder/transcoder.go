@@ -344,9 +344,9 @@ func sanitizeURL(url string) string {
 }
 
 // writeMasterPlaylist writes a static HLS master playlist that references the
-// three ABR renditions. This is written before FFmpeg starts to guarantee the
-// file exists on Azure Files SMB mounts, where FFmpeg's -master_pl_name with
-// -hls_flags temp_file can fail to persist the rename.
+// three ABR renditions. Uses explicit f.Sync() to force the SMB client to
+// flush data to the Azure Files server — os.WriteFile alone only writes to
+// the local SMB cache which may never commit to the server.
 //
 // The content matches what FFmpeg would generate with the ABR settings in
 // buildABRArgs: 1080p (stream_0), 720p (stream_1), 480p (stream_2).
@@ -360,7 +360,33 @@ stream_1/index.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480
 stream_2/index.m3u8
 `
-	return os.WriteFile(filepath.Join(outputDir, "master.m3u8"), []byte(masterContent), 0o644)
+	masterPath := filepath.Join(outputDir, "master.m3u8")
+
+	// Use explicit Open → Write → Sync → Close to force SMB FLUSH.
+	f, err := os.OpenFile(masterPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("open master.m3u8: %w", err)
+	}
+	if _, err := f.WriteString(masterContent); err != nil {
+		f.Close()
+		return fmt.Errorf("write master.m3u8: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("sync master.m3u8: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close master.m3u8: %w", err)
+	}
+
+	// Also sync the parent directory to flush the new directory entry.
+	dir, err := os.Open(outputDir)
+	if err == nil {
+		_ = dir.Sync()
+		dir.Close()
+	}
+
+	return nil
 }
 
 // BuildABRArgs exposes ABR argument construction for testing.
