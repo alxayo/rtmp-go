@@ -8,6 +8,7 @@
 
 ## Table of Contents
 
+0. [Step-by-Step Deployment Runbook](#0-step-by-step-deployment-runbook)
 1. [Architecture Overview](#1-architecture-overview)
 2. [Azure Services Inventory](#2-azure-services-inventory)
 3. [Resource Naming Convention](#3-resource-naming-convention)
@@ -26,6 +27,243 @@
 16. [Teardown Procedures](#16-teardown-procedures)
 17. [Cost Analysis](#17-cost-analysis)
 18. [Quick Reference Card](#18-quick-reference-card)
+
+---
+
+## 0. Step-by-Step Deployment Runbook
+
+> **Copy-paste deployment guide.** Follow these steps in order to go from zero to a fully deployed system with custom DNS names on `port-80.com`. Total time: ~25-35 minutes.
+
+### 0.1 Prerequisites Checklist
+
+Verify all required tools are installed:
+
+```bash
+az --version          # Azure CLI 2.50+
+python3 --version     # Python 3 (used by deploy scripts to parse JSON)
+openssl version       # OpenSSL (for secret generation)
+```
+
+Log in to Azure and select the correct subscription:
+
+```bash
+az login
+az account set --subscription "Visual Studio Enterprise"
+az account show --query '{Name:name, Id:id}' --output table
+```
+
+### 0.2 Generate Secrets
+
+Generate all secrets up front. **Save these values** — you'll need them across multiple steps and for any future redeployments.
+
+```bash
+# 1. RTMP Auth Token — shared secret for broadcaster publish authentication
+export RTMP_AUTH_TOKEN="$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)"
+echo "RTMP_AUTH_TOKEN=$RTMP_AUTH_TOKEN"
+
+# 2. Playback Signing Secret — HMAC-SHA256 key for JWT tokens
+export PLAYBACK_SIGNING_SECRET="$(openssl rand -hex 32)"
+echo "PLAYBACK_SIGNING_SECRET=$PLAYBACK_SIGNING_SECRET"
+
+# 3. Internal API Key — shared key for platform↔HLS revocation sync
+export INTERNAL_API_KEY="$(openssl rand -base64 24)"
+echo "INTERNAL_API_KEY=$INTERNAL_API_KEY"
+
+# 4. Admin Password Hash — bcrypt hash for the StreamGate admin console
+#    Run interactively (enter a password ≥ 8 characters when prompted):
+cd streamgate
+npm run hash-password
+cd ..
+#    Copy the output hash and export it:
+export ADMIN_PASSWORD_HASH='$2b$12$...'   # ← paste the full hash here
+```
+
+### 0.3 Step 1 — Deploy rtmp-go Infrastructure (~10-15 min)
+
+This creates the Azure resource group, VNet, Container Apps Environment, ACR, Storage Account, Managed Identity, and all four rtmp-go container apps (rtmp-server, blob-sidecar, hls-transcoder, hls-blob-sidecar).
+
+```bash
+cd rtmp-go/azure
+RTMP_AUTH_TOKEN="$RTMP_AUTH_TOKEN" ./deploy.sh
+```
+
+**What happens** (5 automated steps):
+1. Creates resource group `rg-rtmpgo` in `eastus2`
+2. Deploys Bicep template with placeholder container images (creates all infrastructure)
+3. Builds 3 Docker images remotely via ACR Tasks (`rtmp-server`, `blob-sidecar`, `hls-transcoder`)
+4. Redeploys Bicep with the real ACR images
+5. Verifies all 4 container apps are running
+
+**Save from output**: The `RTMP_APP_FQDN` value (e.g., `azappXXX.azurecontainerapps.io`) — needed for DNS setup.
+
+### 0.4 Step 2 — Deploy StreamGate (~10-15 min)
+
+This deploys into the **same resource group**, sharing the ACR, Storage Account, Container Apps Environment, and Managed Identity created by rtmp-go. Creates the StreamGate platform (Next.js) and HLS media server (Express.js) container apps.
+
+```bash
+cd ../../streamgate/azure
+ADMIN_PASSWORD_HASH="$ADMIN_PASSWORD_HASH" \
+PLAYBACK_SIGNING_SECRET="$PLAYBACK_SIGNING_SECRET" \
+INTERNAL_API_KEY="$INTERNAL_API_KEY" \
+./deploy.sh
+```
+
+**What happens** (7 automated steps):
+1. Verifies rtmp-go deployment exists in `rg-rtmpgo`
+2. Discovers shared infrastructure (ACR, Storage, Identity, ACA Env) from rtmp-go outputs
+3. Validates secrets are set (auto-generates `PLAYBACK_SIGNING_SECRET` and `INTERNAL_API_KEY` if not provided)
+4. Deploys Bicep — first pass with placeholder images and URLs
+5. Builds 2 Docker images via ACR Tasks (`streamgate-platform`, `streamgate-hls`)
+6. Redeploys Bicep — second pass with real images, resolved FQDNs, and SAS token
+7. Verifies both container apps are running
+
+**Save from output**: `PLATFORM_FQDN` and `HLS_FQDN` values, plus the `PLAYBACK_SIGNING_SECRET` and `INTERNAL_API_KEY` if they were auto-generated.
+
+### 0.5 Step 3 — Create DNS Zone & RTMP CNAME (~2 min)
+
+The DNS zone lives in a **separate resource group** (`rg-dns`) so it survives teardowns. If the zone already exists (from a previous deployment), this step just adds/updates the CNAME record.
+
+```bash
+cd ../../rtmp-go/azure
+
+# Create/update the DNS zone + add stream.port-80.com CNAME
+# Replace the FQDN with the value from Step 1 output
+RTMP_APP_FQDN="<rtmp-app-fqdn-from-step1>" ./dns-deploy.sh
+```
+
+**First-time only**: Update your domain registrar (e.g., GoDaddy) with the Azure nameservers printed by the script:
+
+1. Go to `https://dcc.godaddy.com/domains/port-80.com/dns`
+2. **Nameservers** → **Change** → **Enter my own nameservers (advanced)**
+3. Replace all nameservers with Azure's (e.g., `ns1-02.azure-dns.com.`, etc.)
+4. Save and confirm
+
+Verify propagation:
+```bash
+nslookup -type=NS port-80.com
+```
+
+### 0.6 Step 4 — Add StreamGate DNS CNAMEs (~1 min)
+
+```bash
+cd ../../streamgate/azure
+
+# Replace FQDNs with values from Step 2 output
+PLATFORM_APP_FQDN="<platform-fqdn-from-step2>" \
+HLS_SERVER_FQDN="<hls-fqdn-from-step2>" \
+./dns-deploy.sh
+```
+
+This creates:
+- `watch.port-80.com` → StreamGate Platform App
+- `hls.port-80.com` → StreamGate HLS Server
+
+### 0.7 Step 5 — Redeploy StreamGate with Custom Domains & Managed SSL (~10 min)
+
+After DNS records are created, redeploy StreamGate so it uses the custom domain URLs for CORS, HLS base URL, and platform↔HLS communication. The deploy script auto-detects custom domains from the DNS zone **and automatically binds them with Azure managed SSL certificates**.
+
+```bash
+cd streamgate/azure   # (if not already there)
+
+ADMIN_PASSWORD_HASH="$ADMIN_PASSWORD_HASH" \
+PLAYBACK_SIGNING_SECRET="$PLAYBACK_SIGNING_SECRET" \
+INTERNAL_API_KEY="$INTERNAL_API_KEY" \
+./deploy.sh
+```
+
+The script will detect the DNS CNAMEs and automatically:
+1. Configure env vars: `HLS_SERVER_BASE_URL`, `CORS_ALLOWED_ORIGIN`, `PLATFORM_APP_URL`
+2. Bind `watch.port-80.com` to `sg-platform` with a managed SSL certificate
+3. Bind `hls.port-80.com` to `sg-hls` with a managed SSL certificate
+
+Managed certificate provisioning takes **up to 20 minutes** per domain (Azure ACME domain validation). The binding uses CNAME validation — no additional TXT records are needed beyond the CNAMEs created in Step 4.
+
+> **Note**: `stream.port-80.com` does NOT get a custom domain binding because the RTMP server uses TCP transport (port 1935), not HTTPS. The CNAME record alone is sufficient for RTMP.
+
+Alternatively, set custom domain URLs explicitly to override auto-detection:
+```bash
+HLS_SERVER_BASE_URL="https://hls.port-80.com" \
+CORS_ALLOWED_ORIGIN="https://watch.port-80.com" \
+ADMIN_PASSWORD_HASH="$ADMIN_PASSWORD_HASH" \
+PLAYBACK_SIGNING_SECRET="$PLAYBACK_SIGNING_SECRET" \
+INTERNAL_API_KEY="$INTERNAL_API_KEY" \
+./deploy.sh
+```
+
+### 0.8 Step 6 — Validate the Deployment
+
+```bash
+# Verify all 6 container apps are running
+az containerapp list --resource-group rg-rtmpgo \
+  --query '[].{Name:name, Status:properties.runningStatus}' --output table
+
+# Verify DNS resolution
+nslookup stream.port-80.com
+nslookup watch.port-80.com
+nslookup hls.port-80.com
+
+# Verify managed SSL certificates (both should show "Succeeded")
+az containerapp env certificate list -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+  --query "[].{name:name, subject:properties.subjectName, state:properties.provisioningState}" -o table
+
+# Verify custom domain bindings (should show "SniEnabled")
+az containerapp hostname list -g rg-rtmpgo -n sg-platform-olog3klyrk7fw -o table
+az containerapp hostname list -g rg-rtmpgo -n sg-hls-olog3klyrk7fw -o table
+
+# Verify HTTPS with TLS (should show TLSv1.3 and valid cert)
+curl -sv https://watch.port-80.com 2>&1 | grep -E "SSL|subject|HTTP/"
+curl -sv https://hls.port-80.com/health 2>&1 | grep -E "SSL|subject|HTTP/"
+
+# Health check HLS server
+curl -s https://hls.port-80.com/health
+
+# Health check Platform
+curl -s -o /dev/null -w "HTTP %{http_code}\n" https://watch.port-80.com
+```
+
+### 0.9 Step 7 — End-to-End Streaming Test
+
+```bash
+# Publish a test RTMP stream (recommended: transcode-friendly flags)
+ffmpeg -re -i test.mp4 \
+  -c:v libx264 -profile:v baseline -bf 0 -g 60 -keyint_min 60 \
+  -b:v 4500k -maxrate 5000k -bufsize 9000k -preset veryfast \
+  -c:a aac -b:a 128k -ar 48000 \
+  -f flv "rtmp://stream.port-80.com/live/test_stream?token=$RTMP_AUTH_TOKEN"
+```
+
+Then in the StreamGate admin console:
+1. Open `https://watch.port-80.com/admin` and log in
+2. Create an event with stream key `test_stream`
+3. Generate viewer tokens
+4. Open `https://watch.port-80.com` in a new browser tab
+5. Enter a token code → video should play
+
+### 0.10 Quick Reference: All Scripts
+
+| Script | Location | Purpose |
+|--------|----------|---------|
+| `deploy.sh` | `rtmp-go/azure/` | Deploy rtmp-go infrastructure + apps |
+| `destroy.sh` | `rtmp-go/azure/` | Delete entire `rg-rtmpgo` resource group |
+| `dns-deploy.sh` | `rtmp-go/azure/` | Create DNS zone + `stream` CNAME |
+| `dns-destroy.sh` | `rtmp-go/azure/` | Delete DNS zone |
+| `deploy.sh` | `streamgate/azure/` | Deploy StreamGate into existing rtmp-go env |
+| `destroy.sh` | `streamgate/azure/` | Remove only StreamGate components (keeps rtmp-go) |
+| `dns-deploy.sh` | `streamgate/azure/` | Add `watch` + `hls` CNAMEs to existing zone |
+| `dns-destroy.sh` | `streamgate/azure/` | Remove StreamGate DNS records |
+
+### 0.11 Teardown
+
+```bash
+# Remove StreamGate only (keeps rtmp-go running):
+cd streamgate/azure && ./destroy.sh
+
+# Remove everything (deletes entire rg-rtmpgo resource group):
+cd rtmp-go/azure && ./destroy.sh
+
+# Remove DNS zone (requires re-configuring registrar nameservers if recreated):
+cd rtmp-go/azure && ./dns-destroy.sh
+```
 
 ---
 
@@ -305,15 +543,21 @@ export INTERNAL_API_KEY="your-api-key"
 | 3/7 | Configure secrets | Auto-generates `PLAYBACK_SIGNING_SECRET` and `INTERNAL_API_KEY` if not set; prompts for `ADMIN_PASSWORD_HASH` |
 | 4/7 | Deploy Bicep (first pass) | Creates StreamGate-specific resources with placeholder images; uses `PLACEHOLDER` for cross-app URLs |
 | 5/7 | Build Docker images | Builds `streamgate-platform` and `streamgate-hls` via ACR Tasks |
-| 6/7 | Redeploy Bicep (second pass) | Real images + resolved FQDNs + SAS token for blob proxy |
+| 6/7 | Redeploy Bicep (second pass) | Real images + resolved FQDNs + SAS token for blob proxy; then binds custom domains with managed SSL certificates (if DNS CNAMEs detected) |
 | 7/7 | Verify | Checks running status of both container apps |
 
-### 6.3 Two-Pass Deploy Pattern
+### 6.3 Two-Pass Deploy Pattern + Custom Domain Binding
 
 StreamGate uses a **two-pass Bicep deployment** because of circular dependencies:
 
 - **Pass 1**: Creates both container apps with placeholder URLs. The HLS server needs the platform FQDN for revocation polling, but the platform FQDN doesn't exist until the app is created.
 - **Pass 2**: Now that both apps exist and have FQDNs, redeploy with correct `platformAppUrl`, `corsAllowedOrigin`, `hlsServerBaseUrl`, real container images, and a SAS token.
+
+**Custom domain binding** (after Pass 2): If the deploy script detects DNS CNAME records for `watch.port-80.com` and/or `hls.port-80.com`, it automatically:
+1. Adds the hostname to the container app via `az containerapp hostname add`
+2. Binds a managed SSL certificate via `az containerapp hostname bind --validation-method CNAME`
+
+This is done via Azure CLI (not Bicep) because managed certificate provisioning is an async operation that doesn't fit well in declarative Bicep templates. The binding is **idempotent** — if the hostname is already bound, it skips the operation.
 
 ### 6.4 Environment Variables for deploy.sh
 
@@ -324,8 +568,11 @@ StreamGate uses a **two-pass Bicep deployment** because of circular dependencies
 | `ADMIN_PASSWORD_HASH` | *(required)* | bcrypt hash of admin console password |
 | `PLAYBACK_SIGNING_SECRET` | *(auto-generated)* | HMAC-SHA256 key for JWT tokens |
 | `INTERNAL_API_KEY` | *(auto-generated)* | Shared key for platform↔HLS revocation sync |
-| `HLS_SERVER_BASE_URL` | *(derived from FQDN)* | Override HLS server public URL (for custom domains) |
-| `CORS_ALLOWED_ORIGIN` | *(derived from FQDN)* | Override CORS origin (for custom domains) |
+| `HLS_SERVER_BASE_URL` | *(auto-detected from DNS)* | Override HLS server public URL (for custom domains) |
+| `CORS_ALLOWED_ORIGIN` | *(auto-detected from DNS)* | Override CORS origin (for custom domains) |
+| `PLATFORM_APP_URL` | *(auto-detected from DNS)* | Override platform URL for HLS→Platform revocation sync |
+| `DNS_RESOURCE_GROUP` | `rg-dns` | Resource group containing DNS zone (for auto-detection) |
+| `DNS_ZONE_NAME` | `port-80.com` | Domain name (for auto-detection) |
 | `ADMIN_ALLOWED_IP` | *(auto-detected)* | IP restriction for /admin console |
 
 ### 6.5 SAS Token Generation
@@ -409,13 +656,20 @@ HLS_SERVER_FQDN="sg-hls-olog3klyrk7fw.azurecontainerapps.io" \
 ./dns-deploy.sh
 ```
 
-### 7.5 Step 5: Redeploy StreamGate with Custom Domain URLs
+### 7.5 Step 5: Redeploy StreamGate with Custom Domains & SSL
 
-After DNS propagates, redeploy StreamGate so the HLS server and platform use custom domain URLs:
+After DNS propagates, redeploy StreamGate so the HLS server and platform use custom domain URLs. The script also automatically binds custom domains with managed SSL certificates:
 
 ```bash
 cd streamgate/azure
 
+# Just re-run deploy.sh — it auto-detects CNAMEs, binds custom domains, and provisions SSL
+ADMIN_PASSWORD_HASH='$2b$12$...' \
+PLAYBACK_SIGNING_SECRET="..." \
+INTERNAL_API_KEY="..." \
+./deploy.sh
+
+# Or explicitly override URLs:
 HLS_SERVER_BASE_URL="https://hls.port-80.com" \
 CORS_ALLOWED_ORIGIN="https://watch.port-80.com" \
 ADMIN_PASSWORD_HASH='$2b$12$...' \
@@ -424,7 +678,30 @@ INTERNAL_API_KEY="..." \
 ./deploy.sh
 ```
 
-### 7.6 DNS Records Summary
+### 7.6 Custom Domain SSL Binding
+
+After DNS records are deployed, the StreamGate `deploy.sh` script automatically binds custom domains with **Azure managed SSL certificates**. This happens during Step 6/7 (after the second Bicep pass).
+
+| Domain | Container App | Binding | SSL |
+|--------|--------------|---------|-----|
+| `watch.port-80.com` | sg-platform | SniEnabled | Managed cert (auto-provisioned) |
+| `hls.port-80.com` | sg-hls | SniEnabled | Managed cert (auto-provisioned) |
+| `stream.port-80.com` | rtmp-server | N/A | None (TCP transport, not HTTPS) |
+
+Managed certificates are provisioned via ACME domain validation using the CNAME records. Provisioning takes **up to 20 minutes** per domain. The `deploy.sh` script starts the provisioning but does not wait for completion — certificates finish provisioning asynchronously.
+
+To check certificate status after deployment:
+```bash
+az containerapp env certificate list -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+  --query "[].{subject:properties.subjectName, state:properties.provisioningState}" -o table
+```
+
+To check hostname bindings:
+```bash
+az containerapp hostname list -g rg-rtmpgo -n <app-name> -o table
+```
+
+### 7.7 DNS Records Summary
 
 | Subdomain | Record Type | Target | Deployed By |
 |-----------|-------------|--------|-------------|
@@ -611,14 +888,14 @@ The rtmp-server container uses **CLI arguments** in its command array:
 
 ### 10.1 Ingress Configuration
 
-| App | Transport | Port | External? | Description |
-|-----|-----------|------|-----------|-------------|
-| rtmp-server | TCP | 1935 | Yes (external) | Public RTMP ingest endpoint |
-| blob-sidecar | HTTP | 8080 | No (internal) | Only receives webhooks from rtmp-server |
-| hls-transcoder | HTTP | 8090 | No (internal) | Only receives webhooks from rtmp-server |
-| hls-blob-sidecar | HTTP | 8080 | No (internal) | Only receives webhooks from hls-transcoder |
-| sg-platform | HTTP | 3000 | Yes (external) | Public viewer portal + admin |
-| sg-hls | HTTP | 4000 | Yes (external) | Public HLS media delivery |
+| App | Transport | Port | External? | Custom Domain | Description |
+|-----|-----------|------|-----------|---------------|-------------|
+| rtmp-server | TCP | 1935 | Yes (external) | `stream.port-80.com` (CNAME only, no SSL) | Public RTMP ingest endpoint |
+| blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from rtmp-server |
+| hls-transcoder | HTTP | 8090 | No (internal) | — | Only receives webhooks from rtmp-server |
+| hls-blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from hls-transcoder |
+| sg-platform | HTTP | 3000 | Yes (external) | `watch.port-80.com` (managed SSL) | Public viewer portal + admin |
+| sg-hls | HTTP | 4000 | Yes (external) | `hls.port-80.com` (managed SSL) | Public HLS media delivery |
 
 ### 10.2 Resource Allocation
 
@@ -817,7 +1094,30 @@ nslookup watch.port-80.com
 nslookup hls.port-80.com
 ```
 
-### 13.7 Verify Managed Identity RBAC
+### 13.7 Verify Custom Domains & SSL Certificates
+
+```bash
+# Check managed certificate provisioning status (both should show "Succeeded")
+az containerapp env certificate list -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+  --query "[].{subject:properties.subjectName, state:properties.provisioningState}" -o table
+
+# Check hostname bindings (should show "SniEnabled")
+az containerapp hostname list -g rg-rtmpgo -n sg-platform-olog3klyrk7fw -o table
+az containerapp hostname list -g rg-rtmpgo -n sg-hls-olog3klyrk7fw -o table
+
+# Verify HTTPS/TLS on custom domains
+curl -sv https://watch.port-80.com 2>&1 | grep -E "SSL|subject|HTTP/"
+curl -sv https://hls.port-80.com/health 2>&1 | grep -E "SSL|subject|HTTP/"
+
+# Expected output includes:
+#   SSL connection using TLSv1.3 / AEAD-CHACHA20-POLY1305-SHA256
+#   subject: CN=watch.port-80.com
+#   SSL certificate verify ok.
+```
+
+> **Note**: `stream.port-80.com` (RTMP server) does NOT have an SSL certificate binding because it uses TCP transport on port 1935, not HTTPS. The CNAME record alone provides the custom domain for RTMP.
+
+### 13.8 Verify Managed Identity RBAC
 
 ```bash
 IDENTITY_NAME="aziddu7fhxanu5cak"
@@ -1090,7 +1390,7 @@ ContainerAppConsoleLogs_CL
 
 ---
 
-### 15.12 Choppy / Stuttering HLS Playback
+### 15.13 Choppy / Stuttering HLS Playback
 
 **Symptom**: Video plays but drops frames, stutters, or has periodic glitches. Resource utilization (CPU/memory) looks normal.
 
@@ -1127,6 +1427,57 @@ ffmpeg -re -i input.mp4 \
 ```
 
 **Recommended OBS settings**: See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md)
+
+### 15.14 Managed SSL Certificate Stuck in "Pending"
+
+**Symptom**: After deploying with custom domains, the managed certificate stays in `Pending` state for over 20 minutes.
+
+```bash
+az containerapp env certificate list -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+  --query "[].{subject:properties.subjectName, state:properties.provisioningState}" -o table
+```
+
+**Checks**:
+1. Verify the CNAME record resolves to the correct ACA FQDN:
+   ```bash
+   nslookup watch.port-80.com   # should resolve to the ACA environment IP
+   ```
+2. Verify the domain verification ID matches (TXT record is optional with CNAME validation, but check if one exists):
+   ```bash
+   az containerapp env show -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+     --query "properties.customDomainConfiguration.customDomainVerificationId" -o tsv
+   ```
+3. If stuck, delete and re-create the binding:
+   ```bash
+   az containerapp hostname delete -g rg-rtmpgo -n <app-name> --hostname <domain> --yes
+   az containerapp hostname add -g rg-rtmpgo -n <app-name> --hostname <domain>
+   az containerapp hostname bind -g rg-rtmpgo -n <app-name> \
+     --hostname <domain> --environment <env-name> --validation-method CNAME
+   ```
+
+### 15.15 Azure CLI PascalCase JSON Keys (v2.85+ Breaking Change)
+
+**Symptom**: Deploy script fails to parse DNS CNAME records; `az network dns record-set cname show` returns empty results when querying `cnameRecord.cname`.
+
+**Root Cause**: Azure CLI v2.85+ changed JSON output to use **PascalCase** property names (`CNAMERecord.cname`) instead of the previously documented **camelCase** (`cnameRecord.cname`).
+
+**Fix Applied**: The `deploy.sh` script queries `CNAMERecord.cname` (uppercase). If your Azure CLI version uses a different case, update the JMESPath query accordingly:
+
+```bash
+# Azure CLI v2.85+:
+az network dns record-set cname show --query 'CNAMERecord.cname' ...
+
+# Older Azure CLI versions:
+az network dns record-set cname show --query 'cnameRecord.cname' ...
+```
+
+### 15.16 Custom Domain Not Binding (RTMP Server)
+
+**Symptom**: Attempting to bind `stream.port-80.com` to the RTMP server fails.
+
+**Root Cause**: The RTMP server uses **TCP transport** on port 1935. Azure Container Apps managed certificates and custom domain bindings with SSL only work for HTTP/HTTPS ingress. TCP-only apps cannot have managed certificates.
+
+**Solution**: No SSL binding is needed or possible for `stream.port-80.com`. The CNAME record alone routes RTMP traffic. Clients connect via `rtmp://stream.port-80.com:1935/...` (unencrypted RTMP protocol).
 
 ---
 
@@ -1248,13 +1599,18 @@ RTMP_APP_FQDN="<fqdn>" ./dns-deploy.sh             # Add stream CNAME
 cd ../../streamgate/azure
 PLATFORM_APP_FQDN="<fqdn>" HLS_SERVER_FQDN="<fqdn>" ./dns-deploy.sh
 
-# 4. Redeploy StreamGate with custom domain URLs
-HLS_SERVER_BASE_URL="https://hls.port-80.com" \
-CORS_ALLOWED_ORIGIN="https://watch.port-80.com" \
+# 4. Redeploy StreamGate with custom domains + managed SSL
+#    (auto-detects CNAMEs, binds custom domains, provisions SSL certs)
 ADMIN_PASSWORD_HASH='$2b$12$...' \
 PLAYBACK_SIGNING_SECRET="<saved-secret>" \
 INTERNAL_API_KEY="<saved-key>" \
 ./deploy.sh
+
+# 5. Verify SSL certificates (wait up to 20 min for provisioning)
+az containerapp env certificate list -g rg-rtmpgo -n azenvdu7fhxanu5cak \
+  --query "[].{subject:properties.subjectName, state:properties.provisioningState}" -o table
+curl -sv https://watch.port-80.com 2>&1 | grep -E "SSL|subject"
+curl -sv https://hls.port-80.com/health 2>&1 | grep -E "SSL|subject"
 ```
 
 ### Test Publish
