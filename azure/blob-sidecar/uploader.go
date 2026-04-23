@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,8 +123,17 @@ func (u *Uploader) upload(ctx context.Context, job UploadJob) error {
 		return fmt.Errorf("stat file: %w", err)
 	}
 
-	// Build blob name: {path_prefix}/{stream_key}/{filename}
+	// Defense-in-depth: reject empty or undersized .ts segments.
+	// A valid 3-second HLS segment is hundreds of KB minimum. Sub-1KB files
+	// are either partially written (SMB cache not flushed) or corrupt.
 	filename := filepath.Base(job.FilePath)
+	if strings.HasSuffix(strings.ToLower(filename), ".ts") && info.Size() < 1024 {
+		u.logger.Warn("skipping undersized segment",
+			"path", job.FilePath, "size_bytes", info.Size(), "stream_key", job.StreamKey)
+		return nil
+	}
+
+	// Build blob name: {path_prefix}/{stream_key}/{filename}
 	blobName := filepath.Join(job.Tenant.PathPrefix, job.StreamKey, filename)
 	// Normalize to forward slashes for blob paths
 	blobName = filepath.ToSlash(blobName)
