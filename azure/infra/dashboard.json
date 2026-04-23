@@ -1,0 +1,1200 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "12974462383618935333"
+    }
+  },
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().name]",
+      "metadata": {
+        "description": "Resource group containing all resources"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the dashboard resource"
+      }
+    },
+    "rtmpServerApp": {
+      "type": "string"
+    },
+    "recBlobSidecarApp": {
+      "type": "string"
+    },
+    "hlsTranscoderApp": {
+      "type": "string"
+    },
+    "hlsBlobSidecarApp": {
+      "type": "string"
+    },
+    "sgHlsServerApp": {
+      "type": "string"
+    },
+    "sgPlatformApp": {
+      "type": "string"
+    },
+    "storageAccountName": {
+      "type": "string"
+    },
+    "logAnalyticsName": {
+      "type": "string"
+    },
+    "containerEnvName": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "sub": "[subscription().subscriptionId]",
+    "rg": "[parameters('resourceGroupName')]",
+    "base": "[format('/subscriptions/{0}/resourceGroups/{1}/providers', variables('sub'), variables('rg'))]",
+    "app1": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('rtmpServerApp'))]",
+    "app2": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('recBlobSidecarApp'))]",
+    "app3": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('hlsTranscoderApp'))]",
+    "app4": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('hlsBlobSidecarApp'))]",
+    "app5": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('sgHlsServerApp'))]",
+    "app6": "[format('{0}/Microsoft.App/containerApps/{1}', variables('base'), parameters('sgPlatformApp'))]",
+    "stor": "[format('{0}/Microsoft.Storage/storageAccounts/{1}', variables('base'), parameters('storageAccountName'))]",
+    "ns": "Microsoft.App/containerApps",
+    "stoNs": "Microsoft.Storage/storageAccounts",
+    "cpuMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "UsageNanoCores",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "memMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "WorkingSetBytes",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "txMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "TxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "rxMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "RxBytes",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "sgHttpMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "rtmpHttpMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "Requests",
+        "aggregationType": 1,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      }
+    ],
+    "replicaMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "Replicas",
+        "aggregationType": 4,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "restartMetrics": [
+      {
+        "resourceMetadata": {
+          "id": "[variables('app1')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "RTMP Server",
+          "resourceDisplayName": "RTMP Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app2')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "Rec Blob Sidecar",
+          "resourceDisplayName": "Rec Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app3')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Transcoder",
+          "resourceDisplayName": "HLS Transcoder"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app4')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "HLS Blob Sidecar",
+          "resourceDisplayName": "HLS Blob Sidecar"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app5')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG HLS Server",
+          "resourceDisplayName": "SG HLS Server"
+        }
+      },
+      {
+        "resourceMetadata": {
+          "id": "[variables('app6')]"
+        },
+        "name": "RestartCount",
+        "aggregationType": 3,
+        "namespace": "[variables('ns')]",
+        "metricVisualization": {
+          "displayName": "SG Platform",
+          "resourceDisplayName": "SG Platform"
+        }
+      }
+    ],
+    "timespan24h": {
+      "relative": {
+        "duration": 86400000
+      },
+      "showUTCTime": false,
+      "grain": 1
+    },
+    "lineChart": 2,
+    "sharedTimeRangeInput": [
+      {
+        "name": "sharedTimeRange",
+        "isOptional": true
+      }
+    ],
+    "legendRight": {
+      "isVisible": true,
+      "position": 2,
+      "hideSubtitle": false
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Portal/dashboards",
+      "apiVersion": "2020-09-01-preview",
+      "name": "rtmpgo-streamgate-monitor",
+      "location": "[parameters('location')]",
+      "tags": {
+        "hidden-title": "RTMP-Go & StreamGate Monitoring",
+        "component": "monitoring"
+      },
+      "properties": {
+        "lenses": [
+          {
+            "order": 0,
+            "parts": [
+              {
+                "position": {
+                  "x": 0,
+                  "y": 0,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "[format('## RTMP-Go & StreamGate — Live Monitoring\n**Resource Group:** `{0}` | **Region:** `{1}` | **Environment:** `{2}`', variables('rg'), parameters('location'), parameters('containerEnvName'))]",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 1,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### CPU Utilization",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 2,
+                  "colSpan": 12,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "CPU Usage (NanoCores) — All Container Apps",
+                          "titleKind": 1,
+                          "metrics": "[variables('cpuMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]",
+                            "axisVisualization": {
+                              "x": {
+                                "isVisible": true,
+                                "axisType": 2
+                              },
+                              "y": {
+                                "isVisible": true,
+                                "axisType": 1
+                              }
+                            }
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 6,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### Memory Utilization",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 7,
+                  "colSpan": 12,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Memory Working Set (Bytes) — All Container Apps",
+                          "titleKind": 1,
+                          "metrics": "[variables('memMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]",
+                            "axisVisualization": {
+                              "x": {
+                                "isVisible": true,
+                                "axisType": 2
+                              },
+                              "y": {
+                                "isVisible": true,
+                                "axisType": 1
+                              }
+                            }
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 11,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### Network I/O",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 12,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Network TX (Bytes)",
+                          "titleKind": 1,
+                          "metrics": "[variables('txMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 6,
+                  "y": 12,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Network RX (Bytes)",
+                          "titleKind": 1,
+                          "metrics": "[variables('rxMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 16,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### HTTP Request Traffic",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 17,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "HTTP Requests — StreamGate",
+                          "titleKind": 1,
+                          "metrics": "[variables('sgHttpMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 6,
+                  "y": 17,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "HTTP Requests — rtmp-go Services",
+                          "titleKind": 1,
+                          "metrics": "[variables('rtmpHttpMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 21,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### Replica Count & Restarts",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 22,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Replica Count",
+                          "titleKind": 1,
+                          "metrics": "[variables('replicaMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 6,
+                  "y": 22,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Container Restarts",
+                          "titleKind": 1,
+                          "metrics": "[variables('restartMetrics')]",
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 26,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### Azure Storage (Blob & Files)",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 27,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Storage Transactions",
+                          "titleKind": 1,
+                          "metrics": [
+                            {
+                              "resourceMetadata": {
+                                "id": "[variables('stor')]"
+                              },
+                              "name": "Transactions",
+                              "aggregationType": 1,
+                              "namespace": "[variables('stoNs')]",
+                              "metricVisualization": {
+                                "displayName": "Transactions",
+                                "resourceDisplayName": "[parameters('storageAccountName')]"
+                              }
+                            }
+                          ],
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 6,
+                  "y": 27,
+                  "colSpan": 6,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MonitorChartPart",
+                  "inputs": "[variables('sharedTimeRangeInput')]",
+                  "settings": {
+                    "content": {
+                      "options": {
+                        "chart": {
+                          "title": "Storage Bandwidth (Ingress / Egress)",
+                          "titleKind": 1,
+                          "metrics": [
+                            {
+                              "resourceMetadata": {
+                                "id": "[variables('stor')]"
+                              },
+                              "name": "Ingress",
+                              "aggregationType": 1,
+                              "namespace": "[variables('stoNs')]",
+                              "metricVisualization": {
+                                "displayName": "Ingress",
+                                "resourceDisplayName": "[parameters('storageAccountName')]"
+                              }
+                            },
+                            {
+                              "resourceMetadata": {
+                                "id": "[variables('stor')]"
+                              },
+                              "name": "Egress",
+                              "aggregationType": 1,
+                              "namespace": "[variables('stoNs')]",
+                              "metricVisualization": {
+                                "displayName": "Egress",
+                                "resourceDisplayName": "[parameters('storageAccountName')]"
+                              }
+                            }
+                          ],
+                          "visualization": {
+                            "chartType": "[variables('lineChart')]",
+                            "legendVisualization": "[variables('legendRight')]"
+                          },
+                          "timespan": "[variables('timespan24h')]"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 31,
+                  "colSpan": 12,
+                  "rowSpan": 1
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "### Resource Inventory",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "position": {
+                  "x": 0,
+                  "y": 32,
+                  "colSpan": 12,
+                  "rowSpan": 4
+                },
+                "metadata": {
+                  "type": "Extension/HubsExtension/PartType/MarkdownPart",
+                  "inputs": [],
+                  "settings": {
+                    "content": {
+                      "settings": {
+                        "content": "[format('| Container App | Role | Component | CPU | Memory |\n|---|---|---|---|---|\n| `{0}` | RTMP Server | rtmp-go | 0.5 vCPU | 1 GiB |\n| `{1}` | Rec Blob Sidecar | rtmp-go | 0.25 vCPU | 0.5 GiB |\n| `{2}` | HLS Transcoder | rtmp-go | 2.0 vCPU | 4 GiB |\n| `{3}` | HLS Blob Sidecar | rtmp-go | 0.25 vCPU | 0.5 GiB |\n| `{4}` | HLS Server | StreamGate | 0.5 vCPU | 1 GiB |\n| `{5}` | Platform | StreamGate | 0.5 vCPU | 1 GiB |\n\n**Storage:** `{6}` · **Log Analytics:** `{7}` · **Environment:** `{8}`', parameters('rtmpServerApp'), parameters('recBlobSidecarApp'), parameters('hlsTranscoderApp'), parameters('hlsBlobSidecarApp'), parameters('sgHlsServerApp'), parameters('sgPlatformApp'), parameters('storageAccountName'), parameters('logAnalyticsName'), parameters('containerEnvName'))]",
+                        "title": "",
+                        "subtitle": "",
+                        "markdownSource": 1,
+                        "markdownUri": null
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "metadata": {
+          "model": {
+            "timeRange": {
+              "value": {
+                "relative": {
+                  "duration": 24,
+                  "timeUnit": 1
+                }
+              },
+              "type": "MsPortalFx.Composition.Configuration.ValueTypes.TimeRange"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "dashboardId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Portal/dashboards', 'rtmpgo-streamgate-monitor')]"
+    },
+    "dashboardName": {
+      "type": "string",
+      "value": "rtmpgo-streamgate-monitor"
+    },
+    "portalUrl": {
+      "type": "string",
+      "value": "[format('https://portal.azure.com/#@/dashboard/arm{0}', resourceId('Microsoft.Portal/dashboards', 'rtmpgo-streamgate-monitor'))]"
+    }
+  }
+}
