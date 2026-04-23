@@ -184,7 +184,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   properties: {
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
-    allowBlobPublicAccess: false
+    allowBlobPublicAccess: true
     // Key access needed for Azure Files mount; blob access via managed identity
     allowSharedKeyAccess: true
   }
@@ -208,7 +208,7 @@ resource hlsBlobContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
   name: hlsBlobContainerName
   parent: blobService
   properties: {
-    publicAccess: 'None'
+    publicAccess: 'Blob'
   }
 }
 

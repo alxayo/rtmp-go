@@ -85,6 +85,17 @@ func (t *Transcoder) Start(streamKey string) {
 		return
 	}
 
+	// Write master.m3u8 explicitly for ABR mode before starting FFmpeg.
+	// FFmpeg's -master_pl_name writes to a temp file first (due to -hls_flags temp_file),
+	// which can fail silently on Azure Files SMB mounts. Writing it ourselves guarantees
+	// the master playlist exists on the shared filesystem for downstream consumers.
+	if t.config.Mode != "copy" {
+		if err := writeMasterPlaylist(outputDir); err != nil {
+			t.logger.Error("failed to write master playlist", "dir", outputDir, "error", err)
+			return
+		}
+	}
+
 	// Build the RTMP source URL
 	rtmpURL := t.buildRTMPURL(streamKey)
 
@@ -321,6 +332,26 @@ func sanitizeURL(url string) string {
 		return url[:idx] + "?token=***"
 	}
 	return url
+}
+
+// writeMasterPlaylist writes a static HLS master playlist that references the
+// three ABR renditions. This is written before FFmpeg starts to guarantee the
+// file exists on Azure Files SMB mounts, where FFmpeg's -master_pl_name with
+// -hls_flags temp_file can fail to persist the rename.
+//
+// The content matches what FFmpeg would generate with the ABR settings in
+// buildABRArgs: 1080p (stream_0), 720p (stream_1), 480p (stream_2).
+func writeMasterPlaylist(outputDir string) error {
+	const masterContent = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-STREAM-INF:BANDWIDTH=5192000,RESOLUTION=1920x1080
+stream_0/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720
+stream_1/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480
+stream_2/index.m3u8
+`
+	return os.WriteFile(filepath.Join(outputDir, "master.m3u8"), []byte(masterContent), 0o644)
 }
 
 // BuildABRArgs exposes ABR argument construction for testing.
