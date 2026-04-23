@@ -30,6 +30,9 @@ param location string = resourceGroup().location
 @secure()
 param rtmpAuthToken string
 
+@description('RTMP auth callback URL for delegated authentication (e.g. https://platform.example.com/api/rtmp/auth). When set, overrides token-based auth.')
+param rtmpAuthCallbackUrl string = ''
+
 @description('Container image for rtmp-server (set after ACR build)')
 param rtmpServerImage string = ''
 
@@ -308,14 +311,21 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
-          command: !empty(rtmpServerImage) ? [
+          command: !empty(rtmpServerImage) ? concat([
             '/rtmp-server'
             '-listen'
             ':1935'
+          ], !empty(rtmpAuthCallbackUrl) ? [
+            '-auth-mode'
+            'callback'
+            '-auth-callback'
+            rtmpAuthCallbackUrl
+          ] : [
             '-auth-mode'
             'token'
             '-auth-token'
             rtmpAuthToken
+          ], [
             '-record-all'
             'true'
             '-record-dir'
@@ -334,7 +344,7 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             'publish_stop=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
-          ] : []
+          ]) : []
           volumeMounts: [
             {
               volumeName: 'recordings'
