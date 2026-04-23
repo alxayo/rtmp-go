@@ -833,15 +833,26 @@ az role assignment list \
 
 ### 14.1 RTMP Publish Test
 
-```bash
-# Using ACA FQDN
-ffmpeg -re -i test.mp4 -c copy -f flv \
-  "rtmp://azappdu7fhxanu5cak1.azurecontainerapps.io/live/test_stream?token=YourSecretToken"
+For best results, use encoder flags that produce a clean RTMP source stream. Avoid B-frames and ensure fixed keyframe intervals (see [OBS Streaming Guide](../../docs/obs-streaming-guide.md) for full recommendations).
 
-# Using custom domain
+```bash
+# Recommended: transcode-friendly flags (baseline profile, no B-frames, fixed GOP)
+ffmpeg -re -i test.mp4 \
+  -c:v libx264 -profile:v baseline -bf 0 -g 60 -keyint_min 60 \
+  -b:v 4500k -maxrate 5000k -bufsize 9000k -preset veryfast \
+  -c:a aac -b:a 128k -ar 48000 \
+  -f flv "rtmp://stream.port-80.com/live/test_stream?token=YourSecretToken"
+
+# Quick test (copy mode — no re-encoding, but source must be well-formed):
 ffmpeg -re -i test.mp4 -c copy -f flv \
   "rtmp://stream.port-80.com/live/test_stream?token=YourSecretToken"
+
+# Using ACA FQDN (before DNS setup):
+ffmpeg -re -i test.mp4 -c copy -f flv \
+  "rtmp://azappdu7fhxanu5cak1.azurecontainerapps.io/live/test_stream?token=YourSecretToken"
 ```
+
+> **OBS Studio:** See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md) for detailed OBS settings that produce the cleanest source stream for the ABR transcoder.
 
 ### 14.2 Verify HLS Output
 
@@ -1076,6 +1087,46 @@ ContainerAppConsoleLogs_CL
 | order by TimeGenerated desc
 | take 100
 ```
+
+---
+
+### 15.12 Choppy / Stuttering HLS Playback
+
+**Symptom**: Video plays but drops frames, stutters, or has periodic glitches. Resource utilization (CPU/memory) looks normal.
+
+**Root Causes** (in order of likelihood):
+
+1. **Non-monotonic DTS timestamps from source encoder**
+   - **Logs**: `[hls] Non-monotonic DTS in output stream`, `[aac] Queue input is backward in time`
+   - **Cause**: Source encoder sends audio frames with backwards timestamps (common with B-frames or variable-frame-rate sources)
+   - **Fix (transcoder)**: `-async 1 -vsync cfr` flags in FFmpeg force audio resample and constant frame rate (applied in `buildABRArgs`)
+   - **Fix (source)**: Use baseline H.264 profile with B-frames disabled (see below)
+
+2. **H.264 decoder reference frame errors**
+   - **Logs**: `[h264] co located POCs unavailable`, `[h264] mmco: unref short failure`, `[h264] Missing reference picture`
+   - **Cause**: Source encoder sends B-frames or irregular reference chains that the transcoder's H.264 decoder can't resolve
+   - **Fix (source)**: Configure encoder with `-profile:v baseline -bf 0` (FFmpeg) or Profile=Baseline, B-frames=0 (OBS)
+
+3. **SMB mount segment deletion conflicts**
+   - **Logs**: `[hls muxer] failed to delete old segment ... No such file or directory`
+   - **Cause**: FFmpeg's `-hls_flags delete_segments` races with the blob-sidecar's segment polling on Azure Files SMB
+   - **Fix (transcoder)**: Use `-hls_flags independent_segments` instead (blob-sidecar manages segment lifecycle)
+
+4. **Segment duration too short for the upload pipeline**
+   - **Cause**: 2-second segments may not complete the full pipeline (SMB write → sidecar poll → blob upload → player fetch) before the next segment is due
+   - **Fix (transcoder)**: Use `-hls_time 3` for 3-second segments
+
+**Recommended source encoder settings** (FFmpeg):
+```bash
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -profile:v baseline -bf 0 \
+  -g 60 -keyint_min 60 \
+  -b:v 4500k -preset veryfast \
+  -c:a aac -b:a 128k -ar 48000 \
+  -f flv "rtmp://stream.port-80.com/live/stream?token=SECRET"
+```
+
+**Recommended OBS settings**: See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md)
 
 ---
 
