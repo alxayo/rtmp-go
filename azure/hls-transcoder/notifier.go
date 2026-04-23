@@ -73,8 +73,26 @@ func (n *SegmentNotifier) WatchStream(ctx context.Context, streamKey, outputDir 
 			n.logger.Info("segment notifier stopped", "stream_key", streamKey)
 			return
 		case <-ticker.C:
+			// Self-heal: re-create master.m3u8 if it's been deleted.
+			// Azure Files SMB can lose files due to rename/caching quirks.
+			n.ensureMasterPlaylist(outputDir)
 			n.scanDir(ctx, safeKey, outputDir, seen, playlistMods)
 		}
+	}
+}
+
+// ensureMasterPlaylist re-creates master.m3u8 if it's missing from the output
+// directory. This provides self-healing on Azure Files SMB where the file can
+// be lost due to caching or rename anomalies.
+func (n *SegmentNotifier) ensureMasterPlaylist(outputDir string) {
+	masterPath := filepath.Join(outputDir, "master.m3u8")
+	if _, err := os.Stat(masterPath); err == nil {
+		return // file exists, nothing to do
+	}
+	if err := writeMasterPlaylist(outputDir); err != nil {
+		n.logger.Warn("failed to re-create master.m3u8", "dir", outputDir, "error", err)
+	} else {
+		n.logger.Warn("re-created missing master.m3u8", "dir", outputDir)
 	}
 }
 

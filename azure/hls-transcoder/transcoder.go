@@ -94,6 +94,13 @@ func (t *Transcoder) Start(streamKey string) {
 			t.logger.Error("failed to write master playlist", "dir", outputDir, "error", err)
 			return
 		}
+		// Verify the file persists on the filesystem (Azure Files SMB sanity check)
+		masterPath := filepath.Join(outputDir, "master.m3u8")
+		if info, err := os.Stat(masterPath); err != nil {
+			t.logger.Error("master.m3u8 written but stat failed", "path", masterPath, "error", err)
+		} else {
+			t.logger.Info("master.m3u8 written successfully", "path", masterPath, "size", info.Size())
+		}
 	}
 
 	// Build the RTMP source URL
