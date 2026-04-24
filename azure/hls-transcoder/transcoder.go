@@ -34,6 +34,15 @@ type TranscoderConfig struct {
 	RTMPToken      string // Auth token for subscribing (optional)
 	Mode           string // "abr" or "copy"
 	BlobWebhookURL string // Webhook URL for blob-sidecar (empty = no blob upload)
+
+	// HTTP output mode (Phase 2)
+	// OutputMode: "file" (default, writes to local disk) or "http" (streams to blob-sidecar)
+	OutputMode string // Output destination: "file" or "http"
+	// IngestURL: Base URL for blob-sidecar HTTP ingest endpoint (required when OutputMode="http")
+	// Format: "http://blob-sidecar:8081/ingest/" (with trailing slash)
+	IngestURL string // HTTP ingest base URL (required if OutputMode="http")
+	// IngestToken: Optional bearer token for authentication to blob-sidecar (for secure deployments)
+	IngestToken string // Bearer token for HTTP ingest (optional)
 }
 
 // streamProcess tracks a running FFmpeg process for a single stream.
@@ -63,10 +72,28 @@ func NewTranscoder(cfg TranscoderConfig, logger *slog.Logger) *Transcoder {
 	}
 }
 
+// ValidateHTTPConfig validates that HTTP output mode has all required configuration.
+// Returns an error if OutputMode is "http" but IngestURL is not set.
+// Called before Start() to catch configuration errors early.
+func (cfg *TranscoderConfig) ValidateHTTPConfig() error {
+	if cfg.OutputMode != "http" {
+		return nil // Validation only applies to HTTP mode
+	}
+	if cfg.IngestURL == "" {
+		return fmt.Errorf("HTTP output mode requires IngestURL to be set")
+	}
+	return nil
+}
+
 // Start begins HLS transcoding for the given stream key. If transcoding is
 // already active for this key, the call is a no-op (idempotent).
-// The FFmpeg process subscribes to the RTMP stream and writes HLS output
-// to {hlsDir}/{safeStreamKey}/.
+//
+// Behavior depends on OutputMode:
+//   - file mode: FFmpeg writes to {hlsDir}/{safeStreamKey}/ on local disk
+//   - http mode: FFmpeg streams directly to blob-sidecar HTTP ingest endpoint
+//
+// The FFmpeg process subscribes to the RTMP stream and outputs HLS segments
+// according to the configured mode and transcoding settings.
 func (t *Transcoder) Start(streamKey string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -77,42 +104,66 @@ func (t *Transcoder) Start(streamKey string) {
 	}
 
 	safeKey := sanitizeStreamKey(streamKey)
-	outputDir := filepath.Join(t.config.HLSDir, safeKey)
-
-	// Create output directory structure
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		t.logger.Error("failed to create output directory", "dir", outputDir, "error", err)
-		return
-	}
-
-	// Write master.m3u8 explicitly for ABR mode before starting FFmpeg.
-	// FFmpeg's -master_pl_name writes to a temp file first (due to -hls_flags temp_file),
-	// which can fail silently on Azure Files SMB mounts. Writing it ourselves guarantees
-	// the master playlist exists on the shared filesystem for downstream consumers.
-	if t.config.Mode != "copy" {
-		if err := writeMasterPlaylist(outputDir); err != nil {
-			t.logger.Error("failed to write master playlist", "dir", outputDir, "error", err)
-			return
-		}
-		// Verify the file persists on the filesystem (Azure Files SMB sanity check)
-		masterPath := filepath.Join(outputDir, "master.m3u8")
-		if info, err := os.Stat(masterPath); err != nil {
-			t.logger.Error("master.m3u8 written but stat failed", "path", masterPath, "error", err)
-		} else {
-			t.logger.Info("master.m3u8 written successfully", "path", masterPath, "size", info.Size())
-		}
-	}
 
 	// Build the RTMP source URL
 	rtmpURL := t.buildRTMPURL(streamKey)
 
-	// Build FFmpeg command based on mode
+	// Validate HTTP configuration before proceeding
+	if err := t.config.ValidateHTTPConfig(); err != nil {
+		t.logger.Error("invalid transcoder configuration", "error", err)
+		return
+	}
+
+	// Local directory handling — only for file mode
+	// HTTP mode streams directly to blob-sidecar and doesn't need local disk I/O
+	var outputDir string
+	if t.config.OutputMode == "file" {
+		outputDir = filepath.Join(t.config.HLSDir, safeKey)
+		if err := os.MkdirAll(outputDir, 0o755); err != nil {
+			t.logger.Error("failed to create output directory", "dir", outputDir, "error", err)
+			return
+		}
+
+		// Write master.m3u8 explicitly for ABR mode (file mode only)
+		// In HTTP mode, FFmpeg handles this via -master_pl_name
+		if t.config.Mode != "copy" {
+			if err := writeMasterPlaylist(outputDir); err != nil {
+				t.logger.Error("failed to write master playlist", "dir", outputDir, "error", err)
+				return
+			}
+			// Verify the file persists on the filesystem
+			masterPath := filepath.Join(outputDir, "master.m3u8")
+			if info, err := os.Stat(masterPath); err != nil {
+				t.logger.Error("master.m3u8 written but stat failed", "path", masterPath, "error", err)
+			} else {
+				t.logger.Info("master.m3u8 written successfully", "path", masterPath, "size", info.Size())
+			}
+		}
+	} else if t.config.OutputMode != "http" {
+		// Validate output mode — should be caught by ValidateHTTPConfig but double-check
+		t.logger.Error("unknown output mode", "mode", t.config.OutputMode)
+		return
+	}
+
+	// Build FFmpeg command based on output mode and transcoding mode
 	var args []string
-	switch t.config.Mode {
-	case "copy":
-		args = t.buildCopyArgs(rtmpURL, outputDir)
+	switch t.config.OutputMode {
+	case "http":
+		// HTTP mode: stream directly to blob-sidecar
+		switch t.config.Mode {
+		case "copy":
+			args = t.buildCopyArgsHTTP(rtmpURL, streamKey)
+		default:
+			args = t.buildABRArgsHTTP(rtmpURL, streamKey)
+		}
 	default:
-		args = t.buildABRArgs(rtmpURL, outputDir)
+		// File mode: write to local filesystem (default behavior)
+		switch t.config.Mode {
+		case "copy":
+			args = t.buildCopyArgs(rtmpURL, outputDir)
+		default:
+			args = t.buildABRArgs(rtmpURL, outputDir)
+		}
 	}
 
 	cmd := exec.Command("ffmpeg", args...)
@@ -124,6 +175,7 @@ func (t *Transcoder) Start(streamKey string) {
 	t.logger.Info("starting FFmpeg transcoder",
 		"stream_key", streamKey,
 		"mode", t.config.Mode,
+		"output_mode", t.config.OutputMode,
 		"output_dir", outputDir,
 		"rtmp_url", sanitizeURL(rtmpURL),
 	)
@@ -133,9 +185,10 @@ func (t *Transcoder) Start(streamKey string) {
 		return
 	}
 
-	// Start segment notifier goroutine for blob upload (if configured)
+	// Start segment notifier goroutine for blob upload (file mode only)
+	// HTTP mode uses FFmpeg's HTTP PUT directly; no local segment polling needed
 	var cancelNotify context.CancelFunc
-	if t.notifier.Enabled() {
+	if t.config.OutputMode == "file" && t.notifier.Enabled() {
 		notifyCtx, cancel := context.WithCancel(context.Background())
 		cancelNotify = cancel
 		go t.notifier.WatchStream(notifyCtx, streamKey, outputDir)
@@ -328,6 +381,173 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 	}
 }
 
+// buildHTTPOutputPath constructs the HTTP output URL for FFmpeg HLS output to blob-sidecar.
+// FFmpeg uses this URL with -method PUT to upload .m3u8 and .ts files directly.
+//
+// For an event ID "mystream", the resulting URL is:
+//   http://blob-sidecar:8081/ingest/hls/mystream/stream_%v/index.m3u8
+//
+// The %v is replaced by FFmpeg with the variant number (0, 1, 2 for ABR; omitted for copy).
+// If IngestToken is set, it's passed via X-Token header during PUT operations.
+func (t *Transcoder) buildHTTPOutputPath(eventID string) string {
+	// Extract event ID from stream key (e.g., "live/mystream" → "mystream")
+	parts := strings.Split(eventID, "/")
+	safeName := parts[len(parts)-1]
+
+	// Base path: http://blob-sidecar:8081/ingest/hls/{eventId}/stream_%v/index.m3u8
+	// For copy mode, omit /stream_%v: http://blob-sidecar:8081/ingest/hls/{eventId}/index.m3u8
+	if t.config.Mode == "copy" {
+		return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + safeName + "/index.m3u8"
+	}
+	return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + safeName + "/stream_%v/index.m3u8"
+}
+
+// buildABRArgsHTTP constructs FFmpeg arguments for multi-bitrate HLS output via HTTP PUT.
+// Streams HLS segments and playlists directly to blob-sidecar's HTTP ingest endpoint,
+// bypassing local filesystem I/O entirely.
+//
+// Key design decisions:
+//   - -method PUT: FFmpeg uploads each segment and playlist with HTTP PUT requests
+//   - -master_pl_name master.m3u8: Generates master playlist for ABR variant switching
+//   - No local output directory needed: all I/O goes over HTTP
+//   - Same video/audio encoding as buildABRArgs: 3 renditions (1080p/720p/480p)
+//   - SegmentNotifier is NOT used in HTTP mode (no local files to poll)
+func (t *Transcoder) buildABRArgsHTTP(rtmpURL, eventID string) []string {
+	httpPath := t.buildHTTPOutputPath(eventID)
+	httpHeaders := ""
+	if t.config.IngestToken != "" {
+		// If bearer token is configured, FFmpeg will send X-Token header with each PUT
+		httpHeaders = "X-Token: Bearer " + t.config.IngestToken
+	}
+
+	args := []string{
+		"-hide_banner",
+		"-loglevel", "warning",
+
+		// Input error handling — must come BEFORE -i.
+		// Same rationale as buildABRArgs: prevents B-frame and corrupted packets
+		// from propagating into output segments.
+		"-fflags", "+genpts+discardcorrupt",
+		"-err_detect", "ignore_err",
+		"-ec", "deblock+guess_mvs",
+
+		// Input
+		"-i", rtmpURL,
+
+		// Map: 3 video + 3 audio streams for 3 renditions
+		"-map", "0:v", "-map", "0:a",
+		"-map", "0:v", "-map", "0:a",
+		"-map", "0:v", "-map", "0:a",
+
+		// Rendition 0: 1080p — copy video and audio (no transcode)
+		"-c:v:0", "copy",
+		"-c:a:0", "copy",
+
+		// Rendition 1: 720p — transcode to lower bitrate
+		"-c:v:1", "libx264", "-s:v:1", "1280x720",
+		"-b:v:1", "2500k", "-maxrate:v:1", "2750k", "-bufsize:v:1", "5000k",
+		"-preset:v:1", "ultrafast",
+
+		// Rendition 2: 480p — transcode to lowest bitrate
+		"-c:v:2", "libx264", "-s:v:2", "854x480",
+		"-b:v:2", "1000k", "-maxrate:v:2", "1100k", "-bufsize:v:2", "2000k",
+		"-preset:v:2", "ultrafast",
+
+		// Shared video settings for encoded renditions
+		"-r:v:1", "30", "-r:v:2", "30",
+		"-force_key_frames:v:1", "expr:gte(t,n_forced*2)",
+		"-force_key_frames:v:2", "expr:gte(t,n_forced*2)",
+		"-sc_threshold", "0",
+
+		// Timestamp correction — fixes non-monotonic DTS from source encoders
+		"-async", "1",
+		"-fps_mode:v:1", "cfr", "-fps_mode:v:2", "cfr",
+
+		// Audio encoding for transcoded renditions
+		"-c:a:1", "aac", "-b:a:1", "128k", "-ar:a:1", "48000",
+		"-c:a:2", "aac", "-b:a:2", "96k", "-ar:a:2", "48000",
+
+		// HLS output settings (same as buildABRArgs)
+		"-f", "hls",
+		"-hls_time", "3",
+		"-hls_list_size", "6",
+		"-hls_flags", "independent_segments",
+
+		// Multi-variant stream map — produces separate URL paths per rendition
+		"-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2",
+
+		// Master playlist — includes variant streams for adaptive bitrate switching
+		"-master_pl_name", "master.m3u8",
+
+		// HTTP output configuration
+		// - method PUT: Upload segments via HTTP PUT instead of writing to disk
+		// - custom_http_headers: Send auth token if configured (if httpHeaders is set, add these args)
+		"-method", "PUT",
+	}
+
+	// Add auth header if token is configured
+	if httpHeaders != "" {
+		args = append(args, "-custom_http_headers", httpHeaders)
+	}
+
+	// HTTP output path — FFmpeg will upload segments to this URL
+	args = append(args, httpPath)
+
+	return args
+}
+
+// buildCopyArgsHTTP constructs FFmpeg arguments for copy-only (remux) HLS output via HTTP PUT.
+// Streams HLS segments directly to blob-sidecar without transcoding, using minimal CPU.
+//
+// Key design decisions:
+//   - Inherits all HTTP settings from buildABRArgsHTTP (PUT method, HTTP headers, etc.)
+//   - Single-bitrate output: no multi-variant map, single index.m3u8 at root
+//   - No -master_pl_name: copy mode only generates a single playlist
+//   - Same codec copying strategy as buildCopyArgs: -c copy for both video and audio
+func (t *Transcoder) buildCopyArgsHTTP(rtmpURL, eventID string) []string {
+	httpPath := t.buildHTTPOutputPath(eventID)
+	httpHeaders := ""
+	if t.config.IngestToken != "" {
+		httpHeaders = "X-Token: Bearer " + t.config.IngestToken
+	}
+
+	args := []string{
+		"-hide_banner",
+		"-loglevel", "warning",
+
+		// Input error handling — same as buildABRArgsHTTP
+		// Note: no -ec (error concealment) since we're not transcoding
+		"-fflags", "+genpts+discardcorrupt",
+		"-err_detect", "ignore_err",
+
+		// Input
+		"-i", rtmpURL,
+
+		// Copy codecs — no transcoding, minimal CPU usage
+		"-c", "copy",
+
+		// HLS output settings
+		"-f", "hls",
+		"-hls_time", "3",
+		"-hls_list_size", "6",
+		"-hls_flags", "independent_segments",
+
+		// HTTP output configuration
+		"-method", "PUT",
+	}
+
+	// Add auth header if token is configured
+	if httpHeaders != "" {
+		args = append(args, "-custom_http_headers", httpHeaders)
+	}
+
+	// HTTP output path — single playlist at root (no stream_%v subdirectories in copy mode)
+	args = append(args, httpPath)
+
+	return args
+}
+
+
 // buildCopyArgs constructs FFmpeg arguments for remux-only HLS output.
 // No transcoding — copies video and audio codecs directly (-c copy).
 // Produces single-bitrate HLS with minimal CPU usage.
@@ -427,4 +647,19 @@ func (t *Transcoder) BuildABRArgs(rtmpURL, outputDir string) []string {
 // BuildCopyArgs exposes copy argument construction for testing.
 func (t *Transcoder) BuildCopyArgs(rtmpURL, outputDir string) []string {
 	return t.buildCopyArgs(rtmpURL, outputDir)
+}
+
+// BuildABRArgsHTTP exposes HTTP ABR argument construction for testing.
+func (t *Transcoder) BuildABRArgsHTTP(rtmpURL, eventID string) []string {
+	return t.buildABRArgsHTTP(rtmpURL, eventID)
+}
+
+// BuildCopyArgsHTTP exposes HTTP copy argument construction for testing.
+func (t *Transcoder) BuildCopyArgsHTTP(rtmpURL, eventID string) []string {
+	return t.buildCopyArgsHTTP(rtmpURL, eventID)
+}
+
+// BuildHTTPOutputPath exposes HTTP output path construction for testing.
+func (t *Transcoder) BuildHTTPOutputPath(eventID string) string {
+	return t.buildHTTPOutputPath(eventID)
 }
