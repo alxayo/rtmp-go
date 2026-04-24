@@ -52,6 +52,56 @@ single-bitrate HLS output at the original source quality.
 
 **Resource requirements:** 0.5 vCPU / 1 GiB
 
+## Output Modes (Phase 2: HTTP Ingest)
+
+The transcoder supports two output modes that determine where HLS segments are written:
+
+### File Mode (default)
+
+Writes HLS segments and playlists to the local filesystem (Azure Files SMB mount):
+
+```bash
+./hls-transcoder \
+  -listen-addr :8090 \
+  -hls-dir /hls-output \
+  -rtmp-host rtmp-server \
+  -mode abr \
+  -output-mode file
+```
+
+**Characteristics:**
+- Segments written to `/hls-output/{stream_key}/`
+- Optional SegmentNotifier polls directory for new files and sends webhook events to blob-sidecar
+- Suitable for deployments where Azure Files SMB mounts are directly accessible
+- Master playlist (`master.m3u8`) is pre-written to ensure consistency on SMB mounts
+
+### HTTP Mode (Phase 2)
+
+Streams HLS segments and playlists directly to blob-sidecar's HTTP ingest endpoint via PUT requests:
+
+```bash
+./hls-transcoder \
+  -listen-addr :8090 \
+  -rtmp-host rtmp-server \
+  -mode abr \
+  -output-mode http \
+  -ingest-url http://blob-sidecar:8081/ingest/ \
+  -ingest-token "bearer-token-xyz"  # optional, for secure deployments
+```
+
+**Characteristics:**
+- FFmpeg uses `-method PUT` to upload segments directly
+- No local filesystem I/O; entirely HTTP-based
+- SegmentNotifier is bypassed (HTTP mode doesn't poll local files)
+- Master playlist is generated server-side via `-master_pl_name`
+- URL structure: `http://blob-sidecar:8081/ingest/hls/{eventId}/stream_%v/index.m3u8`
+- Optional bearer token passed via `X-Token` header on each PUT request
+- Suitable for cloud-native deployments where blob-sidecar is a dedicated ingest gateway
+
+**URL construction:**
+- ABR mode: `http://blob-sidecar:8081/ingest/hls/mystream/stream_%v/index.m3u8` (FFmpeg replaces %v with variant 0, 1, 2)
+- Copy mode: `http://blob-sidecar:8081/ingest/hls/mystream/index.m3u8` (no variants)
+
 ## Source Encoder Recommendations
 
 The transcoder works best with a clean source stream. Avoid B-frames and ensure fixed keyframe intervals:
@@ -71,11 +121,15 @@ See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md) for detaile
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-listen-addr` | `:8090` | HTTP listen address for webhook events |
-| `-hls-dir` | `/hls-output` | Root directory for HLS output files |
+| `-hls-dir` | `/hls-output` | Root directory for HLS output files (file mode only) |
 | `-rtmp-host` | `localhost` | RTMP server hostname (internal FQDN in Azure) |
 | `-rtmp-port` | `1935` | RTMP server port |
 | `-rtmp-token` | _(empty)_ | Auth token for RTMP subscribe (from secret) |
 | `-mode` | `abr` | Transcoding mode: `abr` (multi-bitrate) or `copy` (remux) |
+| `-output-mode` | `file` | Output mode: `file` (local filesystem) or `http` (blob-sidecar HTTP ingest) |
+| `-ingest-url` | _(empty)_ | HTTP ingest base URL for blob-sidecar (required if `-output-mode http`) |
+| `-ingest-token` | _(empty)_ | Bearer token for HTTP ingest endpoint authentication (optional, for secure deployments) |
+| `-blob-webhook-url` | _(empty)_ | Webhook URL for blob-sidecar segment upload (file mode only; empty = no blob upload) |
 | `-log-level` | `info` | Log level: debug, info, warn, error |
 
 ## Endpoints
@@ -97,20 +151,59 @@ docker build -t hls-transcoder:latest .
 
 ## Usage
 
+### Local Development (File Mode)
+
 ```bash
-# Local development
 ./hls-transcoder \
   -listen-addr :8090 \
   -hls-dir ./hls-output \
   -rtmp-host localhost \
   -rtmp-port 1935 \
   -mode abr \
+  -output-mode file \
   -log-level debug
+```
 
-# Trigger via webhook (simulating rtmp-server hook)
+### Production with blob-sidecar (HTTP Mode)
+
+```bash
+./hls-transcoder \
+  -listen-addr :8090 \
+  -rtmp-host rtmp-server \
+  -rtmp-port 1935 \
+  -mode abr \
+  -output-mode http \
+  -ingest-url http://blob-sidecar:8081/ingest/ \
+  -ingest-token "secret-bearer-token" \
+  -log-level info
+```
+
+### Production with Azure Files and blob-sidecar (File Mode with Webhook)
+
+```bash
+./hls-transcoder \
+  -listen-addr :8090 \
+  -hls-dir /mnt/azure-files/hls \
+  -rtmp-host rtmp-server \
+  -rtmp-port 1935 \
+  -mode copy \
+  -output-mode file \
+  -blob-webhook-url http://blob-sidecar:8090/webhook \
+  -log-level info
+```
+
+### Trigger via Webhook
+
+```bash
+# Simulate rtmp-server webhook for publish_start event
 curl -X POST http://localhost:8090/events \
   -H 'Content-Type: application/json' \
   -d '{"type":"publish_start","stream_key":"live/test","data":{}}'
+
+# Simulate publish_stop event
+curl -X POST http://localhost:8090/events \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"publish_stop","stream_key":"live/test","data":{}}'
 ```
 
 ## HLS Output Structure
