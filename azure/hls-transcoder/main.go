@@ -38,6 +38,15 @@ func main() {
 	blobWebhookURL := flag.String("blob-webhook-url", "", "Webhook URL for blob-sidecar segment upload (empty = no blob upload)")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
 
+	// HTTP output mode flags (Phase 2)
+	// -output-mode: "file" (default, writes to local directory) or "http" (streams to blob-sidecar HTTP endpoint)
+	outputMode := flag.String("output-mode", "file", "Output mode: file (local filesystem) or http (blob-sidecar HTTP ingest)")
+	// -ingest-url: Base URL for blob-sidecar HTTP ingest endpoint (required when output-mode=http)
+	// Example: http://blob-sidecar:8081/ingest/
+	ingestURL := flag.String("ingest-url", "", "HTTP ingest base URL for blob-sidecar (required if output-mode=http)")
+	// -ingest-token: Bearer token for authentication to blob-sidecar HTTP ingest (optional, for secure deployments)
+	ingestToken := flag.String("ingest-token", "", "Bearer token for HTTP ingest endpoint authentication (optional)")
+
 	flag.Parse()
 
 	// Logger setup — JSON output for structured log aggregation in Azure
@@ -62,6 +71,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate output mode
+	if *outputMode != "file" && *outputMode != "http" {
+		logger.Error("invalid output-mode", "output_mode", *outputMode)
+		fmt.Fprintf(os.Stderr, "Usage: -output-mode must be 'file' or 'http'\n")
+		os.Exit(1)
+	}
+
+	// Validate HTTP ingest requirements
+	if *outputMode == "http" && *ingestURL == "" {
+		logger.Error("http output mode requires -ingest-url", "output_mode", *outputMode)
+		fmt.Fprintf(os.Stderr, "Usage: -output-mode http requires -ingest-url\n")
+		os.Exit(1)
+	}
+
 	// Build transcoder configuration
 	cfg := TranscoderConfig{
 		HLSDir:         *hlsDir,
@@ -70,6 +93,10 @@ func main() {
 		RTMPToken:      *rtmpToken,
 		Mode:           *mode,
 		BlobWebhookURL: *blobWebhookURL,
+		// HTTP output mode (Phase 2)
+		OutputMode: *outputMode,
+		IngestURL:  *ingestURL,
+		IngestToken: *ingestToken,
 	}
 
 	transcoder := NewTranscoder(cfg, logger)
@@ -97,6 +124,8 @@ func main() {
 		"rtmp_host", *rtmpHost,
 		"rtmp_port", *rtmpPort,
 		"blob_upload", *blobWebhookURL != "",
+		"output_mode", *outputMode,
+		"ingest_url", *ingestURL != "",
 	)
 
 	if err := listener.Run(ctx); err != nil && err != context.Canceled {
