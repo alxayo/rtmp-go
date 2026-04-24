@@ -8,9 +8,15 @@
 //   - Storage Account + blob container for recordings
 //   - User Managed Identity (AcrPull + Storage Blob Data Contributor)
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
-//   - Container App 2: blob-sidecar (internal HTTP ingress, receives webhook events from rtmp-server)
-//   - Container App 3: hls-transcoder (internal HTTP ingress, converts RTMP to multi-bitrate HLS via FFmpeg)
+//   - Container App 2: blob-sidecar (internal HTTP ingress on 8080 for webhooks, 8081 for HTTP ingest)
+//   - Container App 3: hls-transcoder (internal HTTP ingress on 8090, outputs to blob-sidecar via HTTP ingest on 8081)
 //   - Container App 4: hls-blob-sidecar (internal HTTP ingress, uploads HLS segments to Blob Storage)
+//
+// Phase 3 (HTTP Ingest):
+//   - blob-sidecar exposes new /upload HTTP PUT endpoint on port 8081
+//   - hls-transcoder configured for OUTPUT_MODE=http, sends segments to blob-sidecar:8081 via HTTP
+//   - Internal DNS allows hls-transcoder to reach blob-sidecar by name (e.g., rec-blob-sidecar-{token}.internal.{domain}:8081)
+//   - No shared Azure Files mount needed for Phase 3 deployments (kept for rollback safety)
 //
 // Usage:
 //   az deployment group create -g <rg> -f main.bicep -p main.parameters.json
@@ -41,6 +47,13 @@ param blobSidecarImage string = ''
 
 @description('Container image for hls-transcoder (set after ACR build)')
 param hlsTranscoderImage string = ''
+
+@description('Bearer token for HTTP ingest authentication (enables PUT /upload/{path} endpoint on blob-sidecar:8081)')
+@secure()
+param ingestToken string = 'dev-ingest-token-change-in-production'
+
+@description('Maximum upload size for HTTP ingest in bytes (default 50MB for Phase 3)')
+param ingestMaxBodyBytes int = 52428800
 
 // ---------- Variables ----------
 
@@ -230,6 +243,9 @@ resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-0
 }
 
 // Azure Files share for HLS output (shared between hls-transcoder and future HLS server)
+// PHASE 3 NOTE: This mount is kept for rollback safety and compatibility with older deployments.
+// New Phase 3 deployments using OUTPUT_MODE=http don't require this mount.
+// hls-transcoder can switch back to file mode by setting OUTPUT_MODE=file (requires Azure Files).
 resource hlsFileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
   name: 'hls-output'
   parent: fileService
@@ -406,11 +422,19 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'http'
         allowInsecure: true // Required: rtmp-server sends webhooks over plain HTTP
       }
+      // Phase 3: Expose port 8081 for HTTP ingest endpoint on blob-sidecar
+      // This enables FFmpeg and other clients to upload segments directly via HTTP PUT
+      // Port 8080: Webhooks from RTMP server (publish_start, publish_stop events)
+      // Port 8081: HTTP PUT /upload/{path} for direct segment uploads (Phase 3 HTTP ingest)
       secrets: [
         {
           name: 'tenants-json'
           #disable-next-line use-secure-value-for-secure-inputs
           value: tenantsJsonValue
+        }
+        {
+          name: 'ingest-token'
+          value: ingestToken
         }
       ]
     }
@@ -443,6 +467,27 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_CLIENT_ID'
               value: identity.properties.clientId
             }
+            // Phase 3 HTTP Ingest: Environment variables for direct segment uploads
+            // INGEST_ADDR: Listen address for HTTP ingest endpoint (port 8081)
+            // INGEST_STORAGE: Backend storage mode - "blob" for Azure Blob Storage (production)
+            // INGEST_TOKEN: Bearer token required in Authorization header for PUT requests
+            // INGEST_MAX_BODY: Maximum upload size (50MB default) to prevent resource exhaustion
+            {
+              name: 'INGEST_ADDR'
+              value: ':8081'
+            }
+            {
+              name: 'INGEST_STORAGE'
+              value: 'blob'
+            }
+            {
+              name: 'INGEST_TOKEN'
+              secretRef: 'ingest-token'
+            }
+            {
+              name: 'INGEST_MAX_BODY'
+              value: string(ingestMaxBodyBytes)
+            }
           ]
           volumeMounts: [
             {
@@ -452,6 +497,29 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               volumeName: 'sidecar-config'
               mountPath: '/config'
+            }
+          ]
+          // Phase 3: Health probe for HTTP ingest endpoint
+          // Checks that blob-sidecar is responding on port 8081 /health
+          // Required for Azure Container Apps to track readiness and restart unhealthy instances
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
             }
           ]
         }
@@ -520,6 +588,10 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'rtmp-auth-token'
           value: rtmpAuthToken
         }
+        {
+          name: 'ingest-token'
+          value: ingestToken
+        }
       ]
     }
     template: {
@@ -551,6 +623,25 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             '-log-level'
             'info'
           ] : []
+          // Phase 3: HTTP Output Mode
+          // OUTPUT_MODE: Switch transcoder to HTTP output mode (upload segments to blob-sidecar:8081)
+          // INGEST_URL: Internal K8s DNS address for blob-sidecar HTTP ingest endpoint
+          // INGEST_TOKEN: Bearer token for authentication with blob-sidecar HTTP ingest API
+          // This eliminates need for shared Azure Files mount between transcoder and sidecar
+          env: [
+            {
+              name: 'OUTPUT_MODE'
+              value: 'http'
+            }
+            {
+              name: 'INGEST_URL'
+              value: 'http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}:8081'
+            }
+            {
+              name: 'INGEST_TOKEN'
+              secretRef: 'ingest-token'
+            }
+          ]
           volumeMounts: [
             {
               volumeName: 'hls-output'
