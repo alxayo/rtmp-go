@@ -459,6 +459,15 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
             '4'
             '-cleanup'
             'true'
+            // Phase 3 HTTP Ingest: CLI flags for direct segment uploads
+            '-ingest-addr'
+            ':8081'
+            '-ingest-storage'
+            'blob'
+            '-ingest-token'
+            ingestToken
+            '-ingest-max-body'
+            string(ingestMaxBodyBytes)
             '-log-level'
             'info'
           ] : []
@@ -466,27 +475,6 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_CLIENT_ID'
               value: identity.properties.clientId
-            }
-            // Phase 3 HTTP Ingest: Environment variables for direct segment uploads
-            // INGEST_ADDR: Listen address for HTTP ingest endpoint (port 8081)
-            // INGEST_STORAGE: Backend storage mode - "blob" for Azure Blob Storage (production)
-            // INGEST_TOKEN: Bearer token required in Authorization header for PUT requests
-            // INGEST_MAX_BODY: Maximum upload size (50MB default) to prevent resource exhaustion
-            {
-              name: 'INGEST_ADDR'
-              value: ':8081'
-            }
-            {
-              name: 'INGEST_STORAGE'
-              value: 'blob'
-            }
-            {
-              name: 'INGEST_TOKEN'
-              secretRef: 'ingest-token'
-            }
-            {
-              name: 'INGEST_MAX_BODY'
-              value: string(ingestMaxBodyBytes)
             }
           ]
           volumeMounts: [
@@ -550,7 +538,9 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
 // ---------- Container App: hls-transcoder ----------
 // Converts live RTMP streams to multi-bitrate adaptive HLS via FFmpeg.
 // Receives publish_start/publish_stop webhooks from rtmp-server and manages
-// FFmpeg process lifecycles. Writes HLS segments to the hls-output Azure Files share.
+// FFmpeg process lifecycles.
+// Phase 3: HTTP output mode — FFmpeg PUTs segments directly to hls-blob-sidecar:8081,
+// bypassing the Azure Files SMB mount. The hls-output volume is kept for rollback safety.
 // In ABR mode: 4 vCPU / 8 GiB for 1080p copy + 2-rendition transcoding (720p/480p).
 // In copy mode: 0.5 vCPU / 1 GiB for remux-only passthrough.
 
@@ -618,30 +608,20 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             last(split(rtmpAuthToken, '='))
             '-mode'
             'abr'
+            // Phase 3: HTTP output mode — segments sent via HTTP PUT to hls-blob-sidecar:8081
+            // Eliminates Azure Files SMB mount dependency between transcoder and sidecar
+            '-output-mode'
+            'http'
+            '-ingest-url'
+            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}:8081/ingest/'
+            '-ingest-token'
+            ingestToken
+            // Blob webhook URL kept for file-mode rollback (unused when output-mode=http)
             '-blob-webhook-url'
             'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
           ] : []
-          // Phase 3: HTTP Output Mode
-          // OUTPUT_MODE: Switch transcoder to HTTP output mode (upload segments to blob-sidecar:8081)
-          // INGEST_URL: Internal K8s DNS address for blob-sidecar HTTP ingest endpoint
-          // INGEST_TOKEN: Bearer token for authentication with blob-sidecar HTTP ingest API
-          // This eliminates need for shared Azure Files mount between transcoder and sidecar
-          env: [
-            {
-              name: 'OUTPUT_MODE'
-              value: 'http'
-            }
-            {
-              name: 'INGEST_URL'
-              value: 'http://${sidecarAppName}.internal.${containerEnv.properties.defaultDomain}:8081'
-            }
-            {
-              name: 'INGEST_TOKEN'
-              secretRef: 'ingest-token'
-            }
-          ]
           volumeMounts: [
             {
               volumeName: 'hls-output'
@@ -673,7 +653,8 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
 // to Azure Blob Storage. Reuses the same blob-sidecar image but with:
 //   - cleanup disabled (FFmpeg manages segment rotation on the Files share)
 //   - HLS-specific tenant config routing to the hls-content blob container
-//   - hls-output volume mounted for reading HLS files
+//   - HTTP ingest on port 8081 for direct segment uploads from hls-transcoder (Phase 3)
+//   - hls-output volume mounted for reading HLS files (file-mode rollback)
 
 resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: hlsSidecarAppName
@@ -710,6 +691,10 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           #disable-next-line use-secure-value-for-secure-inputs
           value: hlsTenantsJsonValue
         }
+        {
+          name: 'ingest-token'
+          value: ingestToken
+        }
       ]
     }
     template: {
@@ -733,6 +718,15 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
             '4'
             '-cleanup'
             'false'
+            // Phase 3 HTTP Ingest: CLI flags for direct segment uploads from hls-transcoder
+            '-ingest-addr'
+            ':8081'
+            '-ingest-storage'
+            'blob'
+            '-ingest-token'
+            ingestToken
+            '-ingest-max-body'
+            string(ingestMaxBodyBytes)
             '-log-level'
             'info'
           ] : []
@@ -750,6 +744,27 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               volumeName: 'sidecar-config'
               mountPath: '/config'
+            }
+          ]
+          // Phase 3: Health probes for HTTP ingest endpoint on port 8081
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
             }
           ]
         }
