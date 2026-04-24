@@ -154,14 +154,22 @@ func (l *LocalBackend) Store(ctx context.Context, blobPath string, reader io.Rea
 	}
 	defer f.Close()
 
-	// Copy data
-	written, err := io.CopyN(f, reader, size)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("local backend: failed to write to file %s: %w", fullPath, err)
-	}
-
-	if written != size {
-		return fmt.Errorf("local backend: wrote %d bytes but expected %d for %s", written, size, fullPath)
+	// Copy data — use CopyN when size is known, Copy for chunked transfers
+	var written int64
+	if size > 0 {
+		written, err = io.CopyN(f, reader, size)
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("local backend: failed to write to file %s: %w", fullPath, err)
+		}
+		if written != size {
+			return fmt.Errorf("local backend: wrote %d bytes but expected %d for %s", written, size, fullPath)
+		}
+	} else {
+		// Chunked transfer: Content-Length unknown (-1)
+		written, err = io.Copy(f, reader)
+		if err != nil {
+			return fmt.Errorf("local backend: failed to write to file %s: %w", fullPath, err)
+		}
 	}
 
 	// Explicit sync to disk

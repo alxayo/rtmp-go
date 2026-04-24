@@ -90,15 +90,16 @@ func (h *IngestHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check Content-Length header (must be present and positive)
-	if r.ContentLength <= 0 {
-		http.Error(w, "Bad request: Content-Length required", http.StatusBadRequest)
-		h.logger.Warn("missing or invalid content-length", "remote_addr", r.RemoteAddr, "path", blobPath, "content_length", r.ContentLength)
+	// Check Content-Length header: allow known sizes (>0) and chunked transfer (-1)
+	// FFmpeg's HLS HTTP muxer uses chunked transfer encoding (no Content-Length)
+	if r.ContentLength == 0 {
+		http.Error(w, "Bad request: empty body", http.StatusBadRequest)
+		h.logger.Warn("empty content-length", "remote_addr", r.RemoteAddr, "path", blobPath, "content_length", r.ContentLength)
 		return
 	}
 
-	// Enforce max body size
-	if r.ContentLength > h.maxBody {
+	// Enforce max body size when Content-Length is known
+	if r.ContentLength > 0 && r.ContentLength > h.maxBody {
 		http.Error(w, fmt.Sprintf("Payload too large: %d > %d", r.ContentLength, h.maxBody), http.StatusRequestEntityTooLarge)
 		h.logger.Warn("oversized upload attempt",
 			"remote_addr", r.RemoteAddr,
@@ -109,6 +110,7 @@ func (h *IngestHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wrap body reader with size limiter for defense-in-depth
+	// This caps both known-size and chunked transfers
 	limitedReader := io.LimitReader(r.Body, h.maxBody+1)
 
 	// Call storage backend (synchronous upload)
