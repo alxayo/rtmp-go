@@ -174,6 +174,153 @@ azure/
 
 ---
 
+## Phase 3: HTTP Ingest Mode (Direct Segment Uploads)
+
+### Overview
+
+Phase 3 introduces **HTTP ingest mode**, enabling direct segment uploads from hls-transcoder to blob-sidecar without requiring a shared Azure Files mount. This improves scalability, reduces I/O overhead, and simplifies service communication.
+
+**Key changes:**
+- `blob-sidecar` exposes new HTTP PUT endpoint on port 8081 (`/upload/{path}`)
+- `hls-transcoder` configured for `OUTPUT_MODE=http` (sends segments via HTTP instead of file I/O)
+- Internal DNS allows service-to-service communication at `blob-sidecar.internal.{domain}:8081`
+- Azure Files mount is preserved for rollback safety but not required for Phase 3
+
+### Deployment Topology
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Azure Container Apps Environment (VNet: 10.0.0.0/16)            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌──────────────────┐        ┌──────────────────────────────┐    │
+│  │  hls-transcoder  │        │    blob-sidecar              │    │
+│  ├──────────────────┤        ├──────────────────────────────┤    │
+│  │ Port 8090        │ HTTP   │ Port 8080: Webhooks          │    │
+│  │ (webhook ingress)├───────→│ Port 8081: Ingest (Phase 3)  │    │
+│  │                  │        │                              │    │
+│  │ OUTPUT_MODE=http │        │ INGEST_ADDR=:8081            │    │
+│  │ INGEST_URL=      │        │ INGEST_STORAGE=blob          │    │
+│  │ blob-sidecar:    │        │ INGEST_TOKEN=<secret>        │    │
+│  │ 8081             │        │                              │    │
+│  └──────────────────┘        └──────────┬───────────────────┘    │
+│                                         │                        │
+│                              ┌──────────▼──────────┐             │
+│                              │  Azure Blob Storage │             │
+│                              │  (hls-content)      │             │
+│                              └─────────────────────┘             │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Environment Variables
+
+**blob-sidecar** (new Phase 3 variables):
+- `INGEST_ADDR` = `:8081` — HTTP ingest listen address
+- `INGEST_STORAGE` = `blob` — Use Azure Blob Storage backend
+- `INGEST_TOKEN` = `<bearer-token>` — Authorization header token for PUT requests
+- `INGEST_MAX_BODY` = `52428800` — Maximum upload size (50MB)
+
+**hls-transcoder** (new Phase 3 variables):
+- `OUTPUT_MODE` = `http` — Send segments via HTTP PUT instead of file I/O
+- `INGEST_URL` = `http://blob-sidecar.internal.{domain}:8081` — Internal K8s DNS to blob-sidecar
+- `INGEST_TOKEN` = `<bearer-token>` — Same token as blob-sidecar for authentication
+
+### Deployment Steps
+
+#### 1. Prepare Parameters
+
+Create or update `main.parameters.json` with ingest configuration:
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "rtmpgo-prod"
+    },
+    "rtmpAuthToken": {
+      "value": "live/stream=your-secret-here"
+    },
+    "ingestToken": {
+      "value": "your-bearer-token-for-http-ingest"
+    },
+    "ingestMaxBodyBytes": {
+      "value": 52428800
+    }
+  }
+}
+```
+
+**Note**: `ingestToken` should be a strong, random value (e.g., 32+ character base62). Generate with:
+```bash
+openssl rand -base64 32
+```
+
+#### 2. Deploy Infrastructure
+
+```bash
+INGEST_TOKEN="$(openssl rand -base64 32)" \
+RTMP_AUTH_TOKEN="live/stream=mysecret123" \
+./azure/deploy.sh
+```
+
+#### 3. Verify Deployment
+
+Run the verification script to confirm HTTP ingest is operational:
+
+```bash
+./azure/verify-deployment.sh
+```
+
+Expected output:
+```
+✓ blob-sidecar listening on :8081
+✓ blob-sidecar /health endpoint returns 200
+✓ hls-transcoder can reach blob-sidecar:8081 (DNS resolution OK)
+✓ Environment variables correctly set (OUTPUT_MODE=http, INGEST_URL set)
+✓ Azure Files mount still healthy (fallback ready)
+```
+
+### Troubleshooting
+
+**hls-transcoder can't reach blob-sidecar:8081**
+- Check internal DNS resolution: `nslookup rec-blob-sidecar-{token}.internal.{domain}`
+- Verify both containers are in the same Container Apps Environment
+- Check Network Security Groups for any egress restrictions
+
+**Authorization errors (401) on ingest uploads**
+- Verify `INGEST_TOKEN` is the same in both services
+- Check Authorization header format: `Authorization: Bearer <token>`
+- Confirm token is being passed from hls-transcoder to blob-sidecar
+
+**Segments not reaching Blob Storage**
+- Check blob-sidecar logs: `az containerapp logs show -g <rg> -n rec-blob-sidecar-{token}`
+- Verify managed identity has `Storage Blob Data Contributor` role
+- Check Blob Storage container `hls-content` exists and is accessible
+
+### Rollback to Phase 2 (File Mode)
+
+If you need to revert to the previous Azure Files-based deployment:
+
+1. **Update hls-transcoder environment variable:**
+   ```bash
+   az containerapp update \
+     -g rg-rtmpgo \
+     -n hls-transcoder-{token} \
+     --set-env-vars OUTPUT_MODE=file
+   ```
+
+2. **Verify fallback**:
+   ```bash
+   ./azure/verify-deployment.sh
+   ```
+
+The Azure Files mount is preserved and ready for fallback — no data loss.
+
+---
+
 ## Architecture Research
 
 The documents below contain research and planning for advanced deployment patterns (scheduled streaming, cost optimization). They are **not required** to deploy — the scripts above handle everything.
