@@ -181,8 +181,9 @@ azure/
 Phase 3 introduces **HTTP ingest mode**, enabling direct segment uploads from hls-transcoder to blob-sidecar without requiring a shared Azure Files mount. This improves scalability, reduces I/O overhead, and simplifies service communication.
 
 **Key changes:**
-- `blob-sidecar` exposes new HTTP PUT endpoint on port 8081 (`/upload/{path}`)
-- `hls-transcoder` configured for `OUTPUT_MODE=http` (sends segments via HTTP instead of file I/O)
+- `blob-sidecar` exposes HTTP PUT endpoint on port 8081 (`/ingest/{path}`), accepts chunked transfer encoding
+- `hls-transcoder` configured with `-output-mode http` CLI flag (sends segments via HTTP instead of file I/O)
+- FFmpeg uses `-method PUT -headers "Authorization: Bearer {token}\r\n"` for authenticated uploads
 - Internal DNS allows service-to-service communication at `blob-sidecar.internal.{domain}:8081`
 - Azure Files mount is preserved for rollback safety but not required for Phase 3
 
@@ -199,10 +200,11 @@ Phase 3 introduces **HTTP ingest mode**, enabling direct segment uploads from hl
 │  │ Port 8090        │ HTTP   │ Port 8080: Webhooks          │    │
 │  │ (webhook ingress)├───────→│ Port 8081: Ingest (Phase 3)  │    │
 │  │                  │        │                              │    │
-│  │ OUTPUT_MODE=http │        │ INGEST_ADDR=:8081            │    │
-│  │ INGEST_URL=      │        │ INGEST_STORAGE=blob          │    │
-│  │ blob-sidecar:    │        │ INGEST_TOKEN=<secret>        │    │
-│  │ 8081             │        │                              │    │
+│  │ -output-mode     │        │ -ingest-addr :8081           │    │
+│  │  http            │        │ -ingest-storage blob         │    │
+│  │ -ingest-url      │        │ -ingest-token <secret>       │    │
+│  │  blob-sidecar:   │        │                              │    │
+│  │  8081            │        │                              │    │
 │  └──────────────────┘        └──────────┬───────────────────┘    │
 │                                         │                        │
 │                              ┌──────────▼──────────┐             │
@@ -213,18 +215,22 @@ Phase 3 introduces **HTTP ingest mode**, enabling direct segment uploads from hl
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Environment Variables
+### CLI Flags
 
-**blob-sidecar** (new Phase 3 variables):
-- `INGEST_ADDR` = `:8081` — HTTP ingest listen address
-- `INGEST_STORAGE` = `blob` — Use Azure Blob Storage backend
-- `INGEST_TOKEN` = `<bearer-token>` — Authorization header token for PUT requests
-- `INGEST_MAX_BODY` = `52428800` — Maximum upload size (50MB)
+All Phase 3 configuration is passed as **CLI flags** (not environment variables), because both services use Go's `flag` package which only reads CLI args.
 
-**hls-transcoder** (new Phase 3 variables):
-- `OUTPUT_MODE` = `http` — Send segments via HTTP PUT instead of file I/O
-- `INGEST_URL` = `http://blob-sidecar.internal.{domain}:8081` — Internal K8s DNS to blob-sidecar
-- `INGEST_TOKEN` = `<bearer-token>` — Same token as blob-sidecar for authentication
+**blob-sidecar** (Phase 3 ingest flags):
+- `-ingest-addr :8081` — HTTP ingest listen address
+- `-ingest-storage blob` — Use Azure Blob Storage backend
+- `-ingest-token <bearer-token>` — Authorization header token for PUT requests
+- `-ingest-max-body 52428800` — Maximum upload size (50MB)
+
+**hls-transcoder** (Phase 3 output flags):
+- `-output-mode http` — Send segments via HTTP PUT instead of file I/O
+- `-ingest-url http://hls-blob-sidecar.internal.{domain}:8081/ingest/` — Internal DNS to hls-blob-sidecar
+- `-ingest-token <bearer-token>` — Same token as blob-sidecar for authentication
+
+> **Note:** The transcoder's `-ingest-url` must point to `hls-blob-sidecar` (HLS content), not `rec-blob-sidecar` (recordings).
 
 ### Deployment Steps
 
@@ -279,7 +285,7 @@ Expected output:
 ✓ blob-sidecar listening on :8081
 ✓ blob-sidecar /health endpoint returns 200
 ✓ hls-transcoder can reach blob-sidecar:8081 (DNS resolution OK)
-✓ Environment variables correctly set (OUTPUT_MODE=http, INGEST_URL set)
+✓ CLI flags correctly set (-output-mode http, -ingest-url set)
 ✓ Azure Files mount still healthy (fallback ready)
 ```
 
@@ -291,9 +297,9 @@ Expected output:
 - Check Network Security Groups for any egress restrictions
 
 **Authorization errors (401) on ingest uploads**
-- Verify `INGEST_TOKEN` is the same in both services
-- Check Authorization header format: `Authorization: Bearer <token>`
-- Confirm token is being passed from hls-transcoder to blob-sidecar
+- Verify `-ingest-token` is the same in both services
+- Check Authorization header format: `Authorization: Bearer <token>\r\n` (FFmpeg requires CRLF termination)
+- Confirm FFmpeg uses `-headers` (not `-custom_http_headers` which was removed in FFmpeg 8.0)
 
 **Segments not reaching Blob Storage**
 - Check blob-sidecar logs: `az containerapp logs show -g <rg> -n rec-blob-sidecar-{token}`
@@ -304,12 +310,11 @@ Expected output:
 
 If you need to revert to the previous Azure Files-based deployment:
 
-1. **Update hls-transcoder environment variable:**
+1. **Redeploy hls-transcoder with file mode:**
+   Update the Bicep template to change `-output-mode http` to `-output-mode file` in the
+   hls-transcoder command array, then redeploy:
    ```bash
-   az containerapp update \
-     -g rg-rtmpgo \
-     -n hls-transcoder-{token} \
-     --set-env-vars OUTPUT_MODE=file
+   ./azure/deploy.sh
    ```
 
 2. **Verify fallback**:

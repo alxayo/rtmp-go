@@ -9,7 +9,7 @@ multi-bitrate adaptive HLS output.
 
 ```
 rtmp-server ──webhook──► hls-transcoder ──FFmpeg──► HLS segments
-  (TCP 1935)              (HTTP 8090)               (Azure Files)
+  (TCP 1935)              (HTTP 8090)               (Azure Files / HTTP ingest)
 ```
 
 The transcoder subscribes to rtmp-server as an RTMP client (via FFmpeg) and
@@ -95,7 +95,9 @@ Streams HLS segments and playlists directly to blob-sidecar's HTTP ingest endpoi
 - SegmentNotifier is bypassed (HTTP mode doesn't poll local files)
 - Master playlist is generated server-side via `-master_pl_name`
 - URL structure: `http://blob-sidecar:8081/ingest/hls/{eventId}/stream_%v/index.m3u8`
-- Optional bearer token passed via `X-Token` header on each PUT request
+- Optional bearer token passed via `Authorization` header on each PUT request (using FFmpeg `-headers` option)
+- Requires FFmpeg 8.0+ (uses `-headers` instead of removed `-custom_http_headers`)
+- FFmpeg's HLS HTTP muxer uses chunked transfer encoding (no Content-Length)
 - Suitable for cloud-native deployments where blob-sidecar is a dedicated ingest gateway
 
 **URL construction:**

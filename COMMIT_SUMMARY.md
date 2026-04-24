@@ -2,7 +2,7 @@
 
 **Project:** HTTP Ingest Mode for Blob-Sidecar and HLS-Transcoder  
 **Status:** All changes committed with atomic, descriptive commits  
-**Total Commits:** 11 commits across 3 phases  
+**Total Commits:** 14 commits across 4 phases  
 **Date:** April 24, 2026
 
 ---
@@ -117,7 +117,7 @@
 - **Purpose:** Pre-configure Bicep templates for HTTP ingest
 - **Details:**
   - Blob-sidecar HTTP ingest configuration (port 8081)
-  - Environment variables setup
+  - CLI flags in command arrays (Go `flag` package doesn't read env vars)
   - Health probes configuration
   - HLS-Transcoder HTTP output setup
   - Internal DNS networking
@@ -156,13 +156,15 @@
 Phase 1 Blob-Sidecar:          5 commits, ~820 lines
 Phase 2 HLS Transcoder:         3 commits, ~703 lines
 Phase 3 Deployment/Docs:        3 commits, ~542 lines
+Phase 4 Integration Fixes:      3 commits, ~107 lines
 ─────────────────────────────────────────────────
-TOTAL:                         11 commits, ~2065 lines
+TOTAL:                         14 commits, ~2172 lines
 ```
 
 ### By Type
 
 - **Features:** 6 commits (storage backend, uploader stream, ingest handler, HTTP output)
+- **Bug Fixes:** 3 commits (Bicep CLI flags, FFmpeg 8.0 headers, chunked transfer encoding)
 - **Documentation:** 5 commits (README updates, architecture overview, verify script)
 - **Infrastructure:** 1 commit (Bicep deployment configuration)
 
@@ -270,6 +272,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 Types used:
 - `feat:` — New feature implementation
+- `fix:` — Bug fixes discovered during integration testing
 - `docs:` — Documentation updates
 - `infra:` — Infrastructure/deployment configuration
 
@@ -278,6 +281,9 @@ Types used:
 ## Git Log Example
 
 ```
+d6d9a06 fix(blob-sidecar): accept chunked transfer encoding in HTTP ingest
+68ec0b8 fix(hls-transcoder): use -headers instead of -custom_http_headers for FFmpeg 8.0
+e63556b fix(bicep): use CLI flags instead of env vars for Go flag-based services
 df8c6e7 docs: Add deployment verification script for HTTP ingest
 0b88ee5 docs: Add HTTP ingest architecture overview to azure README
 3e1da27 infra: Configure Container Apps deployment for HTTP ingest mode

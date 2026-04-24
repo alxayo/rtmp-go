@@ -137,7 +137,8 @@ curl -X PUT \
 
 - **Path validation** — rejects path traversal (`..`, absolute paths, null bytes)
 - **Size limits** — enforces max body size (default 50MB, configurable)
-- **Content-Length validation** — requires explicit size, rejects chunked encoding
+- **Content-Length handling** — accepts both explicit Content-Length and chunked transfer encoding (FFmpeg uses chunked)
+- **Size limits** — enforces max body size via `io.LimitReader` for both known-size and chunked transfers
 - **Bearer token auth** — optional per-request authentication
 - **Segment validation** — rejects `.ts` files smaller than 1KB (incomplete segments)
 
