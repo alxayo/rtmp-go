@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,6 +37,13 @@ func main() {
 	cleanup := flag.Bool("cleanup", false, "Delete local files after successful upload")
 	stabilizeDur := flag.Duration("stabilize-duration", 2*time.Second, "Wait time after last write before uploading (watch mode only)")
 	logLevel := flag.String("log-level", "info", "Log level: debug, info, warn, error")
+
+	// Ingest HTTP server flags
+	ingestAddr := flag.String("ingest-addr", ":8081", "HTTP listen address for ingest endpoint")
+	ingestStorage := flag.String("ingest-storage", "blob", "Storage backend for ingest: blob or local")
+	ingestLocalDir := flag.String("ingest-local-dir", "", "Root directory for local storage backend (required if -ingest-storage=local)")
+	ingestToken := flag.String("ingest-token", "", "Optional bearer token for ingest authentication (empty = auth disabled)")
+	ingestMaxBody := flag.Int64("ingest-max-body", 50*1024*1024, "Maximum request body size in bytes")
 
 	flag.Parse()
 
@@ -74,6 +82,38 @@ func main() {
 
 	// Build uploader
 	uploader := NewUploader(*workers, *cleanup, logger)
+
+	// Initialize ingest HTTP server and storage backend
+	ingestBackend, err := NewStorageBackend(*ingestStorage, uploader, router, *ingestLocalDir, logger)
+	if err != nil {
+		logger.Error("failed to initialize ingest storage backend", "backend", *ingestStorage, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("ingest storage backend initialized", "backend", *ingestStorage)
+
+	ingestHandler := NewIngestHandler(ingestBackend, *ingestMaxBody, *ingestToken, logger)
+	ingestMux := http.NewServeMux()
+	ingestMux.Handle("/ingest/", ingestHandler)
+	ingestMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "OK")
+	})
+
+	ingestServer := &http.Server{
+		Addr:         *ingestAddr,
+		Handler:      ingestMux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Start ingest HTTP server in goroutine
+	go func() {
+		logger.Info("starting ingest HTTP server", "addr", *ingestAddr)
+		if err := ingestServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("ingest server error", "error", err)
+		}
+	}()
 
 	// Signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,6 +224,11 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Shutdown ingest server
+	if err := ingestServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("ingest server shutdown error", "error", err)
+	}
 
 	uploader.Shutdown(shutdownCtx)
 	logger.Info("shutdown complete")
