@@ -385,7 +385,8 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 // FFmpeg uses this URL with -method PUT to upload .m3u8 and .ts files directly.
 //
 // For an event ID "mystream", the resulting URL is:
-//   http://blob-sidecar:8081/ingest/hls/mystream/stream_%v/index.m3u8
+//
+//	http://blob-sidecar:8081/ingest/hls/mystream/stream_%v/index.m3u8
 //
 // The %v is replaced by FFmpeg with the variant number (0, 1, 2 for ABR; omitted for copy).
 // If IngestToken is set, it's passed via X-Token header during PUT operations.
@@ -416,8 +417,8 @@ func (t *Transcoder) buildABRArgsHTTP(rtmpURL, eventID string) []string {
 	httpPath := t.buildHTTPOutputPath(eventID)
 	httpHeaders := ""
 	if t.config.IngestToken != "" {
-		// If bearer token is configured, FFmpeg will send X-Token header with each PUT
-		httpHeaders = "X-Token: Bearer " + t.config.IngestToken
+		// FFmpeg -headers requires \r\n termination for each header line
+		httpHeaders = "Authorization: Bearer " + t.config.IngestToken + "\r\n"
 	}
 
 	args := []string{
@@ -481,13 +482,13 @@ func (t *Transcoder) buildABRArgsHTTP(rtmpURL, eventID string) []string {
 
 		// HTTP output configuration
 		// - method PUT: Upload segments via HTTP PUT instead of writing to disk
-		// - custom_http_headers: Send auth token if configured (if httpHeaders is set, add these args)
+		// - headers: Send auth token if configured (requires \r\n termination)
 		"-method", "PUT",
 	}
 
 	// Add auth header if token is configured
 	if httpHeaders != "" {
-		args = append(args, "-custom_http_headers", httpHeaders)
+		args = append(args, "-headers", httpHeaders)
 	}
 
 	// HTTP output path — FFmpeg will upload segments to this URL
@@ -508,7 +509,8 @@ func (t *Transcoder) buildCopyArgsHTTP(rtmpURL, eventID string) []string {
 	httpPath := t.buildHTTPOutputPath(eventID)
 	httpHeaders := ""
 	if t.config.IngestToken != "" {
-		httpHeaders = "X-Token: Bearer " + t.config.IngestToken
+		// FFmpeg -headers requires \r\n termination for each header line
+		httpHeaders = "Authorization: Bearer " + t.config.IngestToken + "\r\n"
 	}
 
 	args := []string{
@@ -538,7 +540,7 @@ func (t *Transcoder) buildCopyArgsHTTP(rtmpURL, eventID string) []string {
 
 	// Add auth header if token is configured
 	if httpHeaders != "" {
-		args = append(args, "-custom_http_headers", httpHeaders)
+		args = append(args, "-headers", httpHeaders)
 	}
 
 	// HTTP output path — single playlist at root (no stream_%v subdirectories in copy mode)
@@ -546,7 +548,6 @@ func (t *Transcoder) buildCopyArgsHTTP(rtmpURL, eventID string) []string {
 
 	return args
 }
-
 
 // buildCopyArgs constructs FFmpeg arguments for remux-only HLS output.
 // No transcoding — copies video and audio codecs directly (-c copy).

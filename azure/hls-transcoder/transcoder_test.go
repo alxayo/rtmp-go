@@ -388,10 +388,10 @@ func TestTranscoder_BuildABRArgsHTTPWithToken(t *testing.T) {
 	argStr := strings.Join(args, " ")
 
 	// Verify custom headers flag and token are present
-	if !strings.Contains(argStr, "-custom_http_headers") {
-		t.Errorf("ABR HTTP args with token missing -custom_http_headers\nGot: %s", argStr)
+	if !strings.Contains(argStr, "-headers") {
+		t.Errorf("ABR HTTP args with token missing -headers\nGot: %s", argStr)
 	}
-	if !strings.Contains(argStr, "Bearer secret-token-xyz") {
+	if !strings.Contains(argStr, "Authorization: Bearer secret-token-xyz") {
 		t.Errorf("ABR HTTP args missing bearer token\nGot: %s", argStr)
 	}
 }
@@ -447,10 +447,10 @@ func TestTranscoder_BuildCopyArgsHTTPWithToken(t *testing.T) {
 	args := tr.BuildCopyArgsHTTP("rtmp://rtmp-server:1935/live/test", "live/test")
 	argStr := strings.Join(args, " ")
 
-	if !strings.Contains(argStr, "-custom_http_headers") {
-		t.Errorf("Copy HTTP args with token missing -custom_http_headers\nGot: %s", argStr)
+	if !strings.Contains(argStr, "-headers") {
+		t.Errorf("Copy HTTP args with token missing -headers\nGot: %s", argStr)
 	}
-	if !strings.Contains(argStr, "Bearer auth-token-123") {
+	if !strings.Contains(argStr, "Authorization: Bearer auth-token-123") {
 		t.Errorf("Copy HTTP args missing bearer token\nGot: %s", argStr)
 	}
 }
@@ -458,10 +458,10 @@ func TestTranscoder_BuildCopyArgsHTTPWithToken(t *testing.T) {
 func TestTranscoder_StartHTTPMode(t *testing.T) {
 	// Test that HTTP mode correctly validates configuration
 	tr := NewTranscoder(TranscoderConfig{
-		HLSDir:      t.TempDir(),
-		RTMPHost:    "localhost",
-		RTMPPort:    1935,
-		Mode:        "abr",
+		HLSDir:     t.TempDir(),
+		RTMPHost:   "localhost",
+		RTMPPort:   1935,
+		Mode:       "abr",
 		OutputMode: "http",
 		IngestURL:  "http://blob-sidecar:8081/ingest/",
 	}, noopLogger())
@@ -479,12 +479,12 @@ func TestTranscoder_StartHTTPMode(t *testing.T) {
 func TestTranscoder_StartHTTPModeMissingIngestURL(t *testing.T) {
 	// Test that HTTP mode without IngestURL fails gracefully
 	tr := NewTranscoder(TranscoderConfig{
-		HLSDir:       t.TempDir(),
-		RTMPHost:     "localhost",
-		RTMPPort:     1935,
-		Mode:         "abr",
-		OutputMode:  "http",
-		IngestURL:   "", // Missing required URL
+		HLSDir:     t.TempDir(),
+		RTMPHost:   "localhost",
+		RTMPPort:   1935,
+		Mode:       "abr",
+		OutputMode: "http",
+		IngestURL:  "", // Missing required URL
 	}, noopLogger())
 
 	// Start should fail due to validation error
@@ -503,7 +503,7 @@ func TestTranscoder_NoSegmentNotifierInHTTPMode(t *testing.T) {
 		RTMPHost:       "localhost",
 		RTMPPort:       1935,
 		Mode:           "abr",
-		OutputMode:    "http",
+		OutputMode:     "http",
 		IngestURL:      "http://blob-sidecar:8081/ingest/",
 		BlobWebhookURL: "http://blob-sidecar:8090/webhook", // Notifier enabled but should not be used in HTTP mode
 	}, noopLogger())
