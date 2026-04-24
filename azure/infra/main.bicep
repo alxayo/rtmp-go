@@ -483,7 +483,7 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
 // Converts live RTMP streams to multi-bitrate adaptive HLS via FFmpeg.
 // Receives publish_start/publish_stop webhooks from rtmp-server and manages
 // FFmpeg process lifecycles. Writes HLS segments to the hls-output Azure Files share.
-// In ABR mode: 4 vCPU / 8 GiB for 3-rendition transcoding (1080p/720p/480p).
+// In ABR mode: 4 vCPU / 8 GiB for 1080p copy + 2-rendition transcoding (720p/480p).
 // In copy mode: 0.5 vCPU / 1 GiB for remux-only passthrough.
 
 resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -528,9 +528,9 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'hls-transcoder'
           image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
-            // ABR transcoding (Consumption tier max: 2 vCPU / 4Gi)
-            cpu: json('2')
-            memory: '4Gi'
+            // ABR transcoding: 1080p copy + 2 ultrafast encodes (720p/480p)
+            cpu: json('4')
+            memory: '8Gi'
           }
           command: !empty(hlsTranscoderImage) ? [
             '/hls-transcoder'

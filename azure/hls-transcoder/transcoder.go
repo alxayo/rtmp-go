@@ -269,22 +269,26 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		"-map", "0:v", "-map", "0:a",
 		"-map", "0:v", "-map", "0:a",
 
-		// Rendition 0: 1080p
-		"-c:v:0", "libx264", "-s:v:0", "1920x1080",
-		"-b:v:0", "5000k", "-maxrate:v:0", "5500k", "-bufsize:v:0", "10000k",
+		// Rendition 0: 1080p — passthrough (copy) to save CPU.
+		// The heaviest encode is eliminated; relies on the ingest encoder
+		// for bitrate/resolution. Audio is also copied.
+		"-c:v:0", "copy",
+		"-c:a:0", "copy",
 
-		// Rendition 1: 720p
+		// Rendition 1: 720p — transcode
 		"-c:v:1", "libx264", "-s:v:1", "1280x720",
 		"-b:v:1", "2500k", "-maxrate:v:1", "2750k", "-bufsize:v:1", "5000k",
+		"-preset:v:1", "ultrafast",
 
-		// Rendition 2: 480p
+		// Rendition 2: 480p — transcode
 		"-c:v:2", "libx264", "-s:v:2", "854x480",
 		"-b:v:2", "1000k", "-maxrate:v:2", "1100k", "-bufsize:v:2", "2000k",
+		"-preset:v:2", "ultrafast",
 
-		// Shared video settings — aligned keyframes across all renditions
-		"-preset", "veryfast",
-		"-r", "30",
-		"-force_key_frames", "expr:gte(t,n_forced*2)",
+		// Shared video settings for encoded renditions (not applied to copy)
+		"-r:v:1", "30", "-r:v:2", "30",
+		"-force_key_frames:v:1", "expr:gte(t,n_forced*2)",
+		"-force_key_frames:v:2", "expr:gte(t,n_forced*2)",
 		"-sc_threshold", "0",
 
 		// Timestamp correction — fixes non-monotonic DTS from source encoders
@@ -292,10 +296,9 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 		// FFmpeg outputs "Non-monotonic DTS" warnings and produces segments
 		// with micro-gaps that cause choppy playback.
 		"-async", "1",
-		"-vsync", "cfr",
+		"-fps_mode:v:1", "cfr", "-fps_mode:v:2", "cfr",
 
-		// Audio encoding per rendition
-		"-c:a:0", "aac", "-b:a:0", "192k", "-ar:a:0", "48000",
+		// Audio encoding for transcoded renditions (rendition 0 audio is copied above)
 		"-c:a:1", "aac", "-b:a:1", "128k", "-ar:a:1", "48000",
 		"-c:a:2", "aac", "-b:a:2", "96k", "-ar:a:2", "48000",
 
