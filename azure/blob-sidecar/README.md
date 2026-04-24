@@ -13,6 +13,7 @@ A standalone service that uploads rtmp-go recording segments to Azure Blob Stora
 ## Features
 
 - **Triple mode** — filesystem watching, stdin events, or HTTP webhook receiver
+- **HTTP ingest mode** — direct FFmpeg uploads of segments via PUT /ingest/{path}
 - **Multi-tenant** — route streams to different Azure storage accounts
 - **Dual resolution** — JSON config file + HTTP API fallback
 - **Hot-reload** — send SIGHUP to reload tenant config without restart
@@ -85,6 +86,69 @@ The sidecar exposes two endpoints:
 - `POST /events` — receives hook events (JSON body matching `hooks.Event` schema)
 - `GET /health` — liveness/readiness probe (returns `200 OK`)
 
+### HTTP Ingest Mode (for direct FFmpeg uploads)
+
+HTTP ingest mode allows FFmpeg or other tools to directly upload segments and playlists to blob storage via HTTP PUT requests. This eliminates the need for SMB mounts and provides significantly lower latency.
+
+#### Start Ingest Server
+
+```bash
+# Ingest server on separate port (with optional bearer token auth)
+blob-sidecar \
+  -ingest-addr :8081 \
+  -ingest-storage blob \
+  -ingest-token "my-secret-token" \
+  -ingest-max-body 100000000 \
+  -config tenants.json
+
+# Or use local filesystem backend for testing/development
+blob-sidecar \
+  -ingest-addr :8081 \
+  -ingest-storage local \
+  -ingest-local-dir /tmp/ingest-files \
+  -config tenants.json
+```
+
+#### Upload Segments
+
+```bash
+# Upload a segment with bearer token auth
+curl -X PUT \
+  -H "Authorization: Bearer my-secret-token" \
+  -H "Content-Length: 47185920" \
+  --data-binary @segment_001.ts \
+  http://localhost:8081/ingest/hls/live_test/seg_00001.ts
+
+# Upload playlist (no auth)
+curl -X PUT \
+  -H "Content-Length: 156" \
+  --data-binary @index.m3u8 \
+  http://localhost:8081/ingest/hls/live_test/index.m3u8
+```
+
+#### Endpoints
+
+| Path | Method | Purpose | Auth |
+|------|--------|---------|------|
+| `/ingest/{blobPath}` | `PUT` | Upload segment/playlist | Optional bearer token |
+| `/health` | `GET` | Liveness/readiness probe | None |
+
+#### Security
+
+- **Path validation** — rejects path traversal (`..`, absolute paths, null bytes)
+- **Size limits** — enforces max body size (default 50MB, configurable)
+- **Content-Length validation** — requires explicit size, rejects chunked encoding
+- **Bearer token auth** — optional per-request authentication
+- **Segment validation** — rejects `.ts` files smaller than 1KB (incomplete segments)
+
+#### Advantages
+
+- **Zero latency** — synchronous uploads complete before FFmpeg continues
+- **No filesystem watches** — direct HTTP uploads, no filesystem polling overhead
+- **Scalable** — HTTP request-based, works with load balancers and auto-scaling
+- **Stateless** — multiple instances can handle uploads without coordination
+- **Optional auth** — bearer token authentication can be enabled via `-ingest-token`
+
 ## Configuration
 
 ### Tenant Config File (`tenants.json`)
@@ -152,6 +216,11 @@ The sidecar extracts the stream key from segment file paths:
 | `-cleanup` | `false` | Delete local files after successful upload |
 | `-stabilize-duration` | `2s` | Wait time after last write before uploading (watch mode only) |
 | `-log-level` | `info` | Log level: debug, info, warn, error |
+| `-ingest-addr` | `:8081` | HTTP listen address for ingest endpoint |
+| `-ingest-storage` | `blob` | Storage backend for ingest: `blob` or `local` |
+| `-ingest-local-dir` | `` | Root directory for local storage backend (required if `-ingest-storage=local`) |
+| `-ingest-token` | `` | Optional bearer token for ingest authentication (empty = auth disabled) |
+| `-ingest-max-body` | `50MB` | Maximum request body size in bytes |
 
 ## Signals
 
