@@ -41,6 +41,7 @@ rtmp-server
 rtmp-client
 /cmd/rtmp-server/rtmp-server
 /cmd/rtmp-client/rtmp-client
+/azure/blob-sidecar/blob-sidecar
 /azure/hls-transcoder/hls-transcoder
 
 # Scripts artifacts (generated, not committed)
