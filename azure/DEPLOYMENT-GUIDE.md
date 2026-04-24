@@ -26,7 +26,8 @@
 15. [Troubleshooting Guide](#15-troubleshooting-guide)
 16. [Teardown Procedures](#16-teardown-procedures)
 17. [Cost Analysis](#17-cost-analysis)
-18. [Quick Reference Card](#18-quick-reference-card)
+18. [Performance Verification](#18-performance-verification)
+19. [Quick Reference Card](#19-quick-reference-card)
 
 ---
 
@@ -1571,7 +1572,195 @@ See `azure/005-COST-ANALYSIS.md` for detailed analysis of scheduled operation (~
 
 ---
 
-## 18. Quick Reference Card
+## 18. Performance Verification
+
+After deployment or resource changes, run these commands to validate the system is healthy and properly sized.
+
+### 18.1 Prerequisites
+
+All commands require the Azure CLI and the Log Analytics workspace GUID:
+
+```bash
+# Get the Log Analytics workspace GUID (not the resource ID)
+LAW_GUID=$(az monitor log-analytics workspace show \
+  --resource-group rg-rtmpgo \
+  --workspace-name "$(az monitor log-analytics workspace list --resource-group rg-rtmpgo --query '[0].name' -o tsv)" \
+  --query customerId -o tsv)
+echo "Workspace GUID: $LAW_GUID"
+```
+
+### 18.2 Send a Test Stream
+
+Send a 60-second test stream with transcode-friendly settings (baseline profile, no B-frames, 1-second keyframes):
+
+```bash
+ffmpeg -re \
+  -i "test-video.mp4" \
+  -t 60 \
+  -map 0:v:0 -map 0:a:0 \
+  -c:v libx264 -profile:v baseline -bf 0 \
+  -g 60 -keyint_min 60 \
+  -b:v 4500k -maxrate 5000k -bufsize 9000k \
+  -preset veryfast \
+  -c:a aac -b:a 128k -ar 48000 \
+  -f flv "rtmp://stream.port-80.com/live/<EVENT_UUID>?token=<RTMP_AUTH_TOKEN>"
+```
+
+> **Note:** The `-re` flag sends at real-time speed. At ~0.6x encoding speed, a 60-second stream takes ~97 seconds wall time. "Resumed reading" lag messages in the ffmpeg output are from the local `-re` rate limiter, not server-side issues.
+
+### 18.3 Check for Slow Subscriber Drops
+
+Query the RTMP server logs for "slow subscriber" messages. These indicate the transcoder couldn't read RTMP data fast enough, causing the RTMP server's outbound buffer to overflow.
+
+```bash
+# Count drops in a time window (adjust timestamps to your test window)
+az monitor log-analytics query -w "$LAW_GUID" \
+  --analytics-query "
+    ContainerAppConsoleLogs_CL
+    | where ContainerAppName_s == 'rtmp-server-du7fhxanu5cak'
+    | where Log_s has 'slow subscriber'
+    | where TimeGenerated > datetime(2026-04-24T09:29:00Z)
+    | summarize count()
+  " -o table
+```
+
+**Expected result:** `Count_` should be **0**. Any non-zero value means the transcoder is falling behind.
+
+To see the timestamps of individual drops:
+
+```bash
+az monitor log-analytics query -w "$LAW_GUID" \
+  --analytics-query "
+    ContainerAppConsoleLogs_CL
+    | where ContainerAppName_s == 'rtmp-server-du7fhxanu5cak'
+    | where Log_s has 'slow subscriber'
+    | where TimeGenerated > datetime(2026-04-24T09:29:00Z)
+    | order by TimeGenerated desc
+    | take 10
+    | project TimeGenerated, Log_s
+  " -o table
+```
+
+### 18.4 Measure CPU and Memory Utilization
+
+Query Azure Monitor metrics for the transcoder container during the test window:
+
+```bash
+SUB_ID=$(az account show --query id -o tsv)
+
+az monitor metrics list \
+  --resource "/subscriptions/${SUB_ID}/resourceGroups/rg-rtmpgo/providers/Microsoft.App/containerApps/hls-transcoder-du7fhxanu5cak" \
+  --metric "UsageNanoCores" "WorkingSetBytes" \
+  --start-time "2026-04-24T09:29:00Z" \
+  --end-time "2026-04-24T09:35:00Z" \
+  --interval PT1M \
+  --aggregation Average Maximum \
+  -o table
+```
+
+**Interpreting results:**
+
+| Metric | Unit | Conversion | Healthy Range |
+|--------|------|------------|---------------|
+| `UsageNanoCores` | Nanocores | Divide by 1,000,000,000 to get vCPU | < 80% of allocated vCPU |
+| `WorkingSetBytes` | Bytes | Divide by 1,048,576 to get MiB | < 50% of allocated memory |
+
+**Reference values (2 vCPU / 4 GiB, 1080p copy + 720p/480p ultrafast):**
+
+| Metric | Average | Peak | % of Allocation |
+|--------|---------|------|-----------------|
+| CPU | 0.96 vCPU | 0.97 vCPU | 48% |
+| Memory | 195 MiB | 201 MiB | 5% |
+
+### 18.5 Check Transcoder Logs for Errors
+
+```bash
+az monitor log-analytics query -w "$LAW_GUID" \
+  --analytics-query "
+    ContainerAppConsoleLogs_CL
+    | where ContainerAppName_s == 'hls-transcoder-du7fhxanu5cak'
+    | where TimeGenerated > datetime(2026-04-24T09:29:00Z)
+    | where Log_s has 'error' or Log_s has 'stop' or Log_s has 'exit'
+    | order by TimeGenerated desc
+    | take 10
+    | project TimeGenerated, Log_s
+  " -o table
+```
+
+**Expected messages (not errors):**
+
+| Message | Meaning |
+|---------|---------|
+| `publish_stop event received` | Normal — RTMP stream ended, transcoder notified |
+| `FFmpeg process exited with error ... exit status 255` | Normal — FFmpeg received SIGTERM from publish_stop handler |
+| `Non-monotonic DTS` (in FFmpeg stderr) | Normal — expected with B-frame content, FFmpeg handles it |
+
+**Actual errors to investigate:**
+
+| Message | Likely Cause |
+|---------|-------------|
+| `slow subscriber` in RTMP server logs | Transcoder CPU insufficient; increase vCPU or reduce renditions |
+| `FFmpeg process exited with error ... exit status 1` | FFmpeg encoding failure; check FFmpeg stderr in logs |
+| `connection refused` / `dial tcp` errors | RTMP server not running or network issue |
+
+### 18.6 Verify Container Resource Allocation
+
+Confirm the running container has the expected CPU and memory:
+
+```bash
+az containerapp show \
+  --name hls-transcoder-du7fhxanu5cak \
+  --resource-group rg-rtmpgo \
+  --query "properties.template.containers[0].resources" -o table
+```
+
+**Expected output:**
+
+```
+Cpu    Gpu    Memory
+-----  -----  --------
+2      0      4Gi
+```
+
+### 18.7 Runtime Resource Scaling (Without Redeployment)
+
+To test different resource allocations without rebuilding images:
+
+```bash
+# Scale up (e.g., for higher bitrate streams)
+az containerapp update \
+  --name hls-transcoder-du7fhxanu5cak \
+  --resource-group rg-rtmpgo \
+  --cpu 4 --memory 8Gi
+
+# Scale back to recommended
+az containerapp update \
+  --name hls-transcoder-du7fhxanu5cak \
+  --resource-group rg-rtmpgo \
+  --cpu 2 --memory 4Gi
+
+# Verify new allocation
+az containerapp show \
+  --name hls-transcoder-du7fhxanu5cak \
+  --resource-group rg-rtmpgo \
+  --query "properties.template.containers[0].resources" -o table
+```
+
+> **Important:** After finding the right size via `az containerapp update`, update `azure/infra/main.bicep` to match so the next `deploy.sh` run preserves the change.
+
+### 18.8 Sizing Guidelines
+
+| Workload | Recommended | Notes |
+|----------|-------------|-------|
+| 1080p copy + 720p/480p ultrafast | 2 vCPU / 4 GiB | Peak ~0.97 vCPU (48%), 201 MiB (5%) |
+| 3× H.264 encode (no copy) | 4 vCPU / 8 GiB | Will cause drops at 2 vCPU |
+| Copy-only (single rendition) | 0.5 vCPU / 1 GiB | Minimal CPU needed |
+
+**Root cause of slow subscriber drops:** When FFmpeg can't encode fast enough, it stops reading from the RTMP socket. TCP backpressure builds up, and the RTMP server's bounded outbound buffer (100 messages) overflows, dropping media messages. The fix is either: (1) reduce encoding work (copy passthrough + ultrafast preset), or (2) increase vCPU allocation.
+
+---
+
+## 19. Quick Reference Card
 
 ### Deploy Everything from Scratch
 
