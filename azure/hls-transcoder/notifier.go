@@ -97,7 +97,12 @@ func (n *SegmentNotifier) ensureMasterPlaylist(outputDir string) {
 }
 
 // scanDir walks the output directory tree and fires events for new files.
+// Segments are notified before playlists to ensure blob storage has the
+// segment data before the playlist references it.
 func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen map[string]int64, playlistMods map[string]time.Time) {
+	var pendingSegments []string
+	var pendingPlaylists []string
+
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip inaccessible paths
@@ -135,13 +140,13 @@ func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen
 			}
 			// Size stable across two polls — segment is fully written.
 			seen[path] = -1
-			n.notify(ctx, safeKey, dir, path)
+			pendingSegments = append(pendingSegments, path)
 		case ".m3u8":
 			// Playlists are rewritten as new segments arrive — re-upload on change
 			lastMod, ok := playlistMods[path]
 			if !ok || info.ModTime().After(lastMod) {
 				playlistMods[path] = info.ModTime()
-				n.notify(ctx, safeKey, dir, path)
+				pendingPlaylists = append(pendingPlaylists, path)
 			}
 		}
 
@@ -149,6 +154,15 @@ func (n *SegmentNotifier) scanDir(ctx context.Context, safeKey, dir string, seen
 	})
 	if err != nil {
 		n.logger.Warn("scan error", "dir", dir, "error", err)
+	}
+
+	// Notify segments first, then playlists. This ensures blob storage
+	// receives the segment data before the playlist that references it.
+	for _, path := range pendingSegments {
+		n.notify(ctx, safeKey, dir, path)
+	}
+	for _, path := range pendingPlaylists {
+		n.notify(ctx, safeKey, dir, path)
 	}
 }
 
