@@ -529,8 +529,8 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
             // ABR transcoding: 1080p copy + 2 ultrafast encodes (720p/480p)
-            cpu: json('4')
-            memory: '8Gi'
+            cpu: json('2')
+            memory: '4Gi'
           }
           command: !empty(hlsTranscoderImage) ? [
             '/hls-transcoder'
