@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -109,15 +110,27 @@ func (h *IngestHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wrap body reader with size limiter for defense-in-depth
-	// This caps both known-size and chunked transfers
+	// Read entire body into memory so the Azure SDK gets a seekable reader
+	// and we know the actual size (FFmpeg uses chunked transfer with no Content-Length).
 	limitedReader := io.LimitReader(r.Body, h.maxBody+1)
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		h.logger.Error("body read failed", "remote_addr", r.RemoteAddr, "path", blobPath, "error", err)
+		return
+	}
+	if int64(len(body)) > h.maxBody {
+		http.Error(w, fmt.Sprintf("Payload too large: %d > %d", len(body), h.maxBody), http.StatusRequestEntityTooLarge)
+		h.logger.Warn("oversized upload", "remote_addr", r.RemoteAddr, "path", blobPath, "size", len(body))
+		return
+	}
+	actualSize := int64(len(body))
 
-	// Call storage backend (synchronous upload)
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// Upload with independent context (not tied to the HTTP request lifetime)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	err := h.backend.Store(ctx, blobPath, limitedReader, r.ContentLength)
+	err = h.backend.Store(ctx, blobPath, bytes.NewReader(body), actualSize)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal server error"), http.StatusInternalServerError)
 		h.logger.Error("upload failed",

@@ -102,9 +102,9 @@ func main() {
 	ingestServer := &http.Server{
 		Addr:         *ingestAddr,
 		Handler:      ingestMux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Start ingest HTTP server in goroutine

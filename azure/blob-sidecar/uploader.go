@@ -74,7 +74,8 @@ func (u *Uploader) UploadStream(ctx context.Context, tenant *StorageTarget, stre
 	start := time.Now()
 
 	// Validate .ts size (defense-in-depth against incomplete segments)
-	if strings.HasSuffix(strings.ToLower(blobName), ".ts") && size < 1024 {
+	// Skip check when size is unknown (-1 = chunked transfer encoding from FFmpeg)
+	if strings.HasSuffix(strings.ToLower(blobName), ".ts") && size >= 0 && size < 1024 {
 		u.logger.Warn("rejecting undersized segment",
 			"blob_name", blobName, "size_bytes", size, "stream_key", streamKey)
 		return fmt.Errorf("segment too small: %d bytes (minimum 1KB for .ts)", size)
