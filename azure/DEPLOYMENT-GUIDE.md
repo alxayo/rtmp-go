@@ -1480,6 +1480,181 @@ az network dns record-set cname show --query 'cnameRecord.cname' ...
 
 **Solution**: No SSL binding is needed or possible for `stream.port-80.com`. The CNAME record alone routes RTMP traffic. Clients connect via `rtmp://stream.port-80.com:1935/...` (unencrypted RTMP protocol).
 
+### 15.17 HLS HTTP Ingest Pipeline — Step-by-Step Troubleshooting
+
+The HLS HTTP ingest pipeline has 6 stages. When video isn't playing, systematically verify each stage in order. The first failure point is the root cause.
+
+**Pipeline stages:**
+```
+1. RTMP Publish → 2. publish_start Webhook → 3. FFmpeg Start →
+4. HTTP PUT to Sidecar → 5. Sidecar → Azure Blob → 6. HLS Player Fetch
+```
+
+#### Stage 1: Verify RTMP Stream is Publishing
+
+**What to check**: Is the RTMP server receiving the stream?
+
+```bash
+# Real-time logs
+az containerapp logs show --name <rtmp-server-app> -g rg-rtmpgo --tail 20
+
+# Log Analytics (KQL) — check for publisher connection
+az monitor log-analytics query -w "<workspace-id>" --analytics-query "
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s startswith 'rtmp-server'
+| where TimeGenerated > ago(5m)
+| where Log_s contains 'publisher registered' or Log_s contains 'auth'
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 5
+" -o table
+```
+
+**Expected**: `publisher registered` log with the stream key.
+**If missing**: Check RTMP auth token, ffmpeg connection URL, firewall rules.
+
+#### Stage 2: Verify publish_start Webhook Delivery
+
+**What to check**: Did the RTMP server deliver the webhook to the transcoder?
+
+```bash
+az monitor log-analytics query -w "<workspace-id>" --analytics-query "
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s startswith 'hls-transcoder'
+| where TimeGenerated > ago(5m)
+| where Log_s contains 'publish_start'
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 5
+" -o table
+```
+
+**Expected**: `publish_start event received` with the stream key.
+**If missing**:
+- Check transcoder ingress is `allowInsecure: true` (rtmp-server sends plain HTTP webhooks)
+- Check RTMP server webhook config points to the correct transcoder FQDN
+- Check transcoder revision is running: `az containerapp revision list -n <transcoder> -g rg-rtmpgo -o table`
+
+#### Stage 3: Verify FFmpeg Started
+
+**What to check**: Did the transcoder launch FFmpeg with the correct arguments?
+
+```bash
+az monitor log-analytics query -w "<workspace-id>" --analytics-query "
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s startswith 'hls-transcoder'
+| where TimeGenerated > ago(5m)
+| where Log_s contains 'FFmpeg' or Log_s contains 'starting'
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 10
+" -o table
+```
+
+**Expected**: `FFmpeg transcoder started` with `output_mode:http` and a `pid`.
+**If `output_mode:file`**: The transcoder is using the old file-based mode. Redeploy with `-output-mode http`.
+**If FFmpeg exits immediately**: Check RTMP subscribe token matches, check RTMP server FQDN is reachable.
+
+#### Stage 4: Verify FFmpeg HTTP PUT to Sidecar (MOST COMMON FAILURE POINT)
+
+**What to check**: Is FFmpeg successfully uploading segments via HTTP PUT?
+
+```bash
+# Check for TCP/connection errors from FFmpeg
+az monitor log-analytics query -w "<workspace-id>" --analytics-query "
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s startswith 'hls-transcoder'
+| where TimeGenerated > ago(5m)
+| where Log_s contains 'error' or Log_s contains 'tcp' or Log_s contains 'Failed' or Log_s contains 'timed'
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 10
+" -o table
+```
+
+**Common failures and fixes:**
+
+| Error | Root Cause | Fix |
+|-------|-----------|-----|
+| `Connection to tcp://...sidecar...:8081 failed: Operation timed out` | Ingest URL includes `:8081` — Container Apps ingress only exposes port 80/443 | Remove `:8081` from `-ingest-url`. Ingress routes port 80 → targetPort 8081. |
+| `Failed to open master play list file 'http://...'` | Same as above, or `allowInsecure: false` on sidecar | Fix URL and/or enable `allowInsecure` |
+| FFmpeg runs but sidecar logs show zero requests | `allowInsecure: false` on sidecar ingress — HTTP PUT requests are silently rejected/redirected to HTTPS | `az containerapp ingress update -n <sidecar> -g rg-rtmpgo --allow-insecure` |
+| `FFmpeg process exited with error, exit status 255` | FFmpeg couldn't reach the ingest endpoint after retries | Check all of the above |
+
+**Quick diagnostic commands:**
+
+```bash
+# Check sidecar ingress config
+az containerapp show -n <hls-sidecar> -g rg-rtmpgo \
+  --query "properties.configuration.ingress.{targetPort:targetPort, allowInsecure:allowInsecure}" -o json
+
+# Check transcoder ingest URL (look for :8081 — should NOT be present)
+az containerapp show -n <hls-transcoder> -g rg-rtmpgo \
+  --query "properties.template.containers[0].command" -o json | grep -A1 ingest-url
+```
+
+**Correct configuration:**
+- Sidecar ingress: `targetPort: 8081`, `allowInsecure: true`
+- Transcoder ingest URL: `http://<sidecar-name>.internal.<domain>/ingest/` (no `:8081`)
+
+#### Stage 5: Verify Sidecar Receives and Uploads Segments
+
+**What to check**: Is the sidecar processing PUT requests and uploading to Azure Blob?
+
+```bash
+# Real-time sidecar logs
+az containerapp logs show --name <hls-sidecar> -g rg-rtmpgo --tail 30
+
+# Log Analytics
+az monitor log-analytics query -w "<workspace-id>" --analytics-query "
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s startswith 'hls-blob-sidecar'
+| where TimeGenerated > ago(5m)
+| where Log_s contains 'uploaded' or Log_s contains 'error' or Log_s contains 'ingest'
+| project TimeGenerated, Log_s
+| order by TimeGenerated desc
+| take 20
+" -o table
+```
+
+**Expected**: `stream uploaded` logs with blob paths and sizes.
+
+**Common failures:**
+
+| Error | Root Cause | Fix |
+|-------|-----------|-----|
+| `segment too small: -1 bytes` | Size validation rejects chunked transfers (FFmpeg sends `Content-Length: -1`) | Update sidecar code: skip size check when `size < 0` (chunked) |
+| `blob upload: unexpected EOF` | Request body piped directly to Azure SDK without buffering | Buffer body into memory first, then upload with `bytes.NewReader` |
+| `blob upload: context canceled` | Upload context tied to HTTP request lifetime — client disconnects before upload completes | Use `context.Background()` for blob upload, not `r.Context()` |
+| `unauthorized upload attempt` | Ingest token mismatch between transcoder and sidecar | Verify both use the same `ingestToken` value |
+
+#### Stage 6: Verify Blobs in Storage
+
+**What to check**: Are HLS segments actually in Azure Blob Storage?
+
+```bash
+# List blobs for the event
+az storage blob list \
+  --account-name <storage-account> \
+  --container-name hls-content \
+  --prefix "hls/<event-id>/" \
+  --query '[].{name:name, size:properties.contentLength, modified:properties.lastModified}' \
+  -o table --auth-mode login | head -20
+```
+
+**Expected**: `.ts` segment files and `.m3u8` playlist files.
+**If empty**: Go back to Stage 5 and check sidecar upload logs.
+
+#### Summary: The Three Most Common HTTP Ingest Failures
+
+These three issues account for the vast majority of HTTP ingest pipeline failures:
+
+1. **`:8081` in the ingest URL** — Container Apps only exposes port 80/443 via FQDN. The ingress `targetPort` routes internally. Remove `:8081` from the URL.
+
+2. **`allowInsecure: false` on sidecar** — FFmpeg sends `http://` PUT requests. Without `allowInsecure: true`, they're silently rejected. This produces the confusing symptom of "FFmpeg is running with no errors, but sidecar receives zero requests."
+
+3. **Chunked transfer encoding** — FFmpeg's HLS muxer uses chunked encoding (no `Content-Length`). The sidecar must buffer the full body before uploading to Azure Blob Storage, and size validation must handle `Content-Length: -1`.
+
 ---
 
 ## 16. Teardown Procedures

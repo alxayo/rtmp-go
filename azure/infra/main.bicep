@@ -8,14 +8,16 @@
 //   - Storage Account + blob container for recordings
 //   - User Managed Identity (AcrPull + Storage Blob Data Contributor)
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
-//   - Container App 2: blob-sidecar (internal HTTP ingress on 8080 for webhooks, 8081 for HTTP ingest)
-//   - Container App 3: hls-transcoder (internal HTTP ingress on 8090, outputs to blob-sidecar via HTTP ingest on 8081)
-//   - Container App 4: hls-blob-sidecar (internal HTTP ingress, uploads HLS segments to Blob Storage)
+//   - Container App 2: blob-sidecar (internal HTTP ingress on 8080 for webhooks)
+//   - Container App 3: hls-transcoder (internal HTTP ingress on 8090, outputs to hls-blob-sidecar via HTTP PUT)
+//   - Container App 4: hls-blob-sidecar (internal HTTP ingress targetPort=8081, buffers + uploads HLS segments to Blob Storage)
 //
 // Phase 3 (HTTP Ingest):
-//   - blob-sidecar exposes new /upload HTTP PUT endpoint on port 8081
-//   - hls-transcoder configured for OUTPUT_MODE=http, sends segments to blob-sidecar:8081 via HTTP
-//   - Internal DNS allows hls-transcoder to reach blob-sidecar by name (e.g., rec-blob-sidecar-{token}.internal.{domain}:8081)
+//   - hls-blob-sidecar exposes /ingest/ HTTP PUT endpoint on port 8081
+//   - hls-transcoder configured for output-mode=http, sends segments to hls-blob-sidecar via HTTP PUT
+//   - Container Apps ingress routes port 80 → targetPort 8081 on the sidecar
+//   - CRITICAL: Ingest URL must NOT include :8081 — use port 80 via internal FQDN
+//   - CRITICAL: allowInsecure must be true on sidecar ingress (FFmpeg uses http://, not https://)
 //   - No shared Azure Files mount needed for Phase 3 deployments (kept for rollback safety)
 //
 // Usage:
@@ -610,17 +612,16 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             last(split(rtmpAuthToken, '='))
             '-mode'
             'abr'
-            // Phase 3: HTTP output mode — segments sent via HTTP PUT to hls-blob-sidecar:8081
-            // Eliminates Azure Files SMB mount dependency between transcoder and sidecar
+            // Phase 3: HTTP output mode — segments sent via HTTP PUT to hls-blob-sidecar
+            // Eliminates Azure Files SMB mount dependency between transcoder and sidecar.
+            // CRITICAL: Do NOT include :8081 in the URL. Container Apps ingress only exposes
+            // port 80/443 via FQDN — the ingress routes port 80 → targetPort 8081.
             '-output-mode'
             'http'
             '-ingest-url'
-            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}:8081/ingest/'
+            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}/ingest/'
             '-ingest-token'
             ingestToken
-            // Blob webhook URL kept for file-mode rollback (unused when output-mode=http)
-            '-blob-webhook-url'
-            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
           ] : []
@@ -634,9 +635,12 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
       volumes: [
         {
+          // EmptyDir volume — HTTP mode doesn't write segments to disk, but the
+          // -hls-dir flag still needs a valid path for FFmpeg's internal state.
+          // Use EmptyDir to avoid Azure Files SMB performance issues.
+          // To rollback to file mode: change storageType to 'AzureFile' + storageName.
           name: 'hls-output'
-          storageName: hlsStorage.name
-          storageType: 'AzureFile'
+          storageType: 'EmptyDir'
         }
       ]
       scale: {
@@ -680,12 +684,16 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: identity.id
         }
       ]
-      // Internal-only HTTP ingress for receiving webhook events from hls-transcoder
+      // Internal-only HTTP ingress routed to the ingest port (8081)
+      // CRITICAL: targetPort must be 8081 (not 8080) so the FQDN routes to the ingest server.
+      // The webhook listener on :8080 is only used in file-mode rollback.
+      // CRITICAL: allowInsecure must be true — FFmpeg sends HTTP PUT (not HTTPS).
+      // Without this, all segment uploads are silently rejected/redirected.
       ingress: {
         external: false
-        targetPort: 8080
+        targetPort: 8081
         transport: 'http'
-        allowInsecure: true
+        allowInsecure: true // REQUIRED: FFmpeg uses http:// for PUT uploads
       }
       secrets: [
         {
@@ -705,8 +713,11 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'hls-blob-sidecar'
           image: !empty(blobSidecarImage) ? blobSidecarImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            // 1 vCPU / 2 GiB — buffers entire segment bodies in memory before uploading to Azure Blob.
+            // FFmpeg uses chunked transfer encoding (no Content-Length), so each segment
+            // is fully read into RAM, then uploaded with a seekable reader for retry support.
+            cpu: json('1')
+            memory: '2Gi'
           }
           command: !empty(blobSidecarImage) ? [
             '/blob-sidecar'

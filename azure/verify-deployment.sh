@@ -207,14 +207,97 @@ check_network_connectivity() {
     else
         success "Container Apps Environment domain: $DEFAULT_DOMAIN"
         
-        # Show the expected internal DNS address for blob-sidecar:8081
-        BLOB_INTERNAL_DNS="$BLOB_SIDECAR_APP.internal.$DEFAULT_DOMAIN:8081"
-        success "Expected blob-sidecar ingest endpoint: http://$BLOB_INTERNAL_DNS"
+        # Show the expected internal DNS address (no :8081 — ingress routes port 80 → targetPort)
+        BLOB_INTERNAL_DNS="$BLOB_SIDECAR_APP.internal.$DEFAULT_DOMAIN"
+        success "Expected blob-sidecar ingest endpoint: http://$BLOB_INTERNAL_DNS/ingest/"
     fi
 }
 
 # ============================================================================
-# Check 8: Azure Files volume (Phase 3 rollback safety)
+# Check 8: HLS blob-sidecar ingress configuration (CRITICAL)
+# ============================================================================
+check_hls_sidecar_ingress() {
+    info "Checking hls-blob-sidecar ingress configuration"
+    
+    HLS_SIDECAR_APPS=$(az containerapp list -g "$RESOURCE_GROUP" --query "[?tags.role=='hls-blob-sidecar'] | [0].name" -o tsv 2>/dev/null || true)
+    
+    if [ -z "$HLS_SIDECAR_APPS" ]; then
+        warning "hls-blob-sidecar container app not found (skipping)"
+        return 0
+    fi
+    
+    HLS_SIDECAR_APP="$HLS_SIDECAR_APPS"
+    
+    # Check targetPort — MUST be 8081 for the ingest server
+    TARGET_PORT=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_SIDECAR_APP" \
+        --query 'properties.configuration.ingress.targetPort' -o tsv 2>/dev/null || true)
+    if [ "$TARGET_PORT" = "8081" ]; then
+        success "hls-blob-sidecar targetPort=8081 (ingest server)"
+    else
+        error "hls-blob-sidecar targetPort=$TARGET_PORT (MUST be 8081 for ingest server)"
+        error "  Fix: az containerapp ingress update -n $HLS_SIDECAR_APP -g $RESOURCE_GROUP --target-port 8081"
+    fi
+    
+    # Check allowInsecure — MUST be true (FFmpeg uses http://, not https://)
+    ALLOW_INSECURE=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_SIDECAR_APP" \
+        --query 'properties.configuration.ingress.allowInsecure' -o tsv 2>/dev/null || true)
+    if [ "$ALLOW_INSECURE" = "true" ]; then
+        success "hls-blob-sidecar allowInsecure=true (HTTP enabled)"
+    else
+        error "hls-blob-sidecar allowInsecure=$ALLOW_INSECURE (MUST be true — FFmpeg uses http://, not https://)"
+        error "  Fix: az containerapp ingress update -n $HLS_SIDECAR_APP -g $RESOURCE_GROUP --allow-insecure"
+    fi
+}
+
+# ============================================================================
+# Check 9: hls-transcoder ingest URL validation (CRITICAL)
+# ============================================================================
+check_transcoder_ingest_url() {
+    info "Checking hls-transcoder ingest URL"
+    
+    HLS_APPS=$(az containerapp list -g "$RESOURCE_GROUP" --query "[?tags.role=='hls-transcoder'] | [0].name" -o tsv 2>/dev/null || true)
+    
+    if [ -z "$HLS_APPS" ]; then
+        warning "hls-transcoder not found (skipping)"
+        return 0
+    fi
+    
+    # Get the command array and find the ingest URL
+    INGEST_URL=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
+        --query "properties.template.containers[0].command" -o json 2>/dev/null \
+        | jq -r 'to_entries[] | select(.value == "-ingest-url") | .key' \
+        | while read idx; do
+            NEXT_IDX=$((idx + 1))
+            az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
+                --query "properties.template.containers[0].command[$NEXT_IDX]" -o tsv 2>/dev/null
+        done)
+    
+    if [ -z "$INGEST_URL" ]; then
+        # Fallback: grep from the full command
+        INGEST_URL=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
+            --query "properties.template.containers[0].command" -o json 2>/dev/null \
+            | grep -o 'http://[^"]*ingest[^"]*' || true)
+    fi
+    
+    if [ -z "$INGEST_URL" ]; then
+        warning "Could not extract ingest URL from transcoder command"
+        return 0
+    fi
+    
+    # Check for :8081 in URL (MUST NOT be present)
+    if echo "$INGEST_URL" | grep -q ':8081'; then
+        error "Ingest URL contains :8081 — this will NOT work!"
+        error "  Current: $INGEST_URL"
+        error "  Container Apps ingress only exposes port 80/443 via FQDN."
+        error "  Fix: Remove :8081 from the URL. Ingress routes port 80 → targetPort 8081."
+    else
+        success "Ingest URL does not contain :8081 (correct)"
+        info "  URL: $INGEST_URL"
+    fi
+}
+
+# ============================================================================
+# Check 10: Azure Files volume (Phase 3 rollback safety)
 # ============================================================================
 check_azure_files_mount() {
     info "Checking Azure Files mount (Phase 3 rollback safety)"
@@ -231,7 +314,7 @@ check_azure_files_mount() {
 }
 
 # ============================================================================
-# Check 9: Health probe configuration
+# Check 11: Health probe configuration
 # ============================================================================
 check_health_probe() {
     info "Checking health probe configuration"
@@ -274,6 +357,8 @@ main() {
     check_hls_transcoder_exists && check_hls_transcoder_env || error "Failed to get hls-transcoder environment variables"
     check_container_status
     check_network_connectivity
+    check_hls_sidecar_ingress
+    check_transcoder_ingest_url
     check_azure_files_mount
     check_health_probe
     
