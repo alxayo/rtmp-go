@@ -591,8 +591,10 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
             // ABR transcoding: 1080p copy + 2 ultrafast encodes (720p/480p)
-            cpu: json('2')
-            memory: '4Gi'
+            // 4 vCPU / 8 GiB per spec — ultrafast 720p+480p need ~1.5 vCPU combined,
+            // plus overhead for demux/mux, HTTP PUT I/O, and FFmpeg process management.
+            cpu: json('4')
+            memory: '8Gi'
           }
           command: !empty(hlsTranscoderImage) ? [
             '/hls-transcoder'
