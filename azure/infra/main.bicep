@@ -9,16 +9,15 @@
 //   - User Managed Identity (AcrPull + Storage Blob Data Contributor)
 //   - Container App 1: rtmp-server (TCP ingress on 1935)
 //   - Container App 2: blob-sidecar (internal HTTP ingress on 8080 for webhooks)
-//   - Container App 3: hls-transcoder (internal HTTP ingress on 8090, outputs to hls-blob-sidecar via HTTP PUT)
-//   - Container App 4: hls-blob-sidecar (internal HTTP ingress targetPort=8081, buffers + uploads HLS segments to Blob Storage)
+//   - Container App 3: hls-transcoder (multi-container: FFmpeg transcoder + blob-sidecar co-located)
+//   - Container App 4: hls-blob-sidecar (SCALED TO ZERO — kept for rollback, replaced by co-located sidecar)
 //
-// Phase 3 (HTTP Ingest):
-//   - hls-blob-sidecar exposes /ingest/ HTTP PUT endpoint on port 8081
-//   - hls-transcoder configured for output-mode=http, sends segments to hls-blob-sidecar via HTTP PUT
-//   - Container Apps ingress routes port 80 → targetPort 8081 on the sidecar
-//   - CRITICAL: Ingest URL must NOT include :8081 — use port 80 via internal FQDN
-//   - CRITICAL: allowInsecure must be true on sidecar ingress (FFmpeg uses http://, not https://)
-//   - No shared Azure Files mount needed for Phase 3 deployments (kept for rollback safety)
+// Phase 4 (Co-located Sidecar — current):
+//   - blob-sidecar runs as a second container inside hls-transcoder Container App
+//   - FFmpeg uploads segments to localhost:8081 (zero Envoy proxy involvement)
+//   - Eliminates Azure Container Apps HTTP/2 CONNECT tunnel bug (envoyproxy/envoy#28329)
+//     that caused ~23% segment drop rate when using cross-app HTTP PUT
+//   - The standalone hls-blob-sidecar app is scaled to 0 (kept for rollback)
 //
 // Usage:
 //   az deployment group create -g <rg> -f main.bicep -p main.parameters.json
@@ -536,13 +535,15 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // ---------- Container App: hls-transcoder ----------
-// Converts live RTMP streams to multi-bitrate adaptive HLS via FFmpeg.
-// Receives publish_start/publish_stop webhooks from rtmp-server and manages
-// FFmpeg process lifecycles.
-// Phase 3: HTTP output mode — FFmpeg PUTs segments directly to hls-blob-sidecar:8081,
-// bypassing the Azure Files SMB mount. The hls-output volume is kept for rollback safety.
-// In ABR mode: 4 vCPU / 8 GiB for 1080p copy + 2-rendition transcoding (720p/480p).
-// In copy mode: 0.5 vCPU / 1 GiB for remux-only passthrough.
+// Multi-container app: FFmpeg transcoder + blob-sidecar co-located.
+// Phase 4: blob-sidecar runs as a second container inside this app, reachable
+// at localhost:8081. FFmpeg PUTs segments directly to localhost — zero Envoy
+// proxy involvement. This eliminates the HTTP/2 CONNECT tunnel RST_STREAM bug
+// (envoyproxy/envoy#28329) that caused ~23% segment drops in Phase 3.
+//
+// Container 1: hls-transcoder (3.5 vCPU / 7 GiB) — FFmpeg ABR transcoding
+// Container 2: blob-sidecar (0.5 vCPU / 1 GiB) — buffers + uploads to Blob Storage
+// Total: 4 vCPU / 8 GiB (Container Apps Consumption plan maximum per app)
 
 resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: hlsAppName
@@ -582,19 +583,24 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'ingest-token'
           value: ingestToken
         }
+        {
+          name: 'hls-tenants-json'
+          #disable-next-line use-secure-value-for-secure-inputs
+          value: hlsTenantsJsonValue
+        }
       ]
     }
     template: {
       containers: [
+        // Container 1: HLS Transcoder (FFmpeg)
         {
           name: 'hls-transcoder'
           image: !empty(hlsTranscoderImage) ? hlsTranscoderImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
             // ABR transcoding: 1080p copy + 2 ultrafast encodes (720p/480p)
-            // 4 vCPU / 8 GiB per spec — ultrafast 720p+480p need ~1.5 vCPU combined,
-            // plus overhead for demux/mux, HTTP PUT I/O, and FFmpeg process management.
-            cpu: json('4')
-            memory: '8Gi'
+            // 3.5 vCPU / 7 GiB — leaves 0.5 vCPU / 1 GiB for the co-located blob-sidecar
+            cpu: json('3.5')
+            memory: '7Gi'
           }
           command: !empty(hlsTranscoderImage) ? [
             '/hls-transcoder'
@@ -610,14 +616,12 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             last(split(rtmpAuthToken, '='))
             '-mode'
             'abr'
-            // Phase 3: HTTP output mode — segments sent via HTTP PUT to hls-blob-sidecar
-            // Eliminates Azure Files SMB mount dependency between transcoder and sidecar.
-            // CRITICAL: Do NOT include :8081 in the URL. Container Apps ingress only exposes
-            // port 80/443 via FQDN — the ingress routes port 80 → targetPort 8081.
+            // Phase 4: HTTP output to co-located blob-sidecar via localhost
+            // No Envoy proxy, no HTTP/2 CONNECT tunnel — direct localhost TCP
             '-output-mode'
             'http'
             '-ingest-url'
-            'http://${hlsSidecarAppName}.internal.${containerEnv.properties.defaultDomain}/ingest/'
+            'http://localhost:8081/ingest/'
             '-ingest-token'
             ingestToken
             '-log-level'
@@ -630,15 +634,81 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             }
           ]
         }
+        // Container 2: Blob Sidecar (co-located, reachable via localhost:8081)
+        {
+          name: 'blob-sidecar'
+          image: !empty(blobSidecarImage) ? blobSidecarImage : 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          command: !empty(blobSidecarImage) ? [
+            '/blob-sidecar'
+            '-mode'
+            'webhook'
+            '-listen-addr'
+            ':8080'
+            '-config'
+            '/config/hls-tenants-json'
+            '-workers'
+            '4'
+            '-cleanup'
+            'false'
+            '-ingest-addr'
+            ':8081'
+            '-ingest-storage'
+            'blob'
+            '-ingest-token'
+            ingestToken
+            '-ingest-max-body'
+            string(ingestMaxBodyBytes)
+            '-log-level'
+            'info'
+          ] : []
+          env: [
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: identity.properties.clientId
+            }
+          ]
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8081
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+            }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'sidecar-config'
+              mountPath: '/config'
+            }
+          ]
+        }
       ]
       volumes: [
         {
           // EmptyDir volume — HTTP mode doesn't write segments to disk, but the
           // -hls-dir flag still needs a valid path for FFmpeg's internal state.
-          // Use EmptyDir to avoid Azure Files SMB performance issues.
-          // To rollback to file mode: change storageType to 'AzureFile' + storageName.
           name: 'hls-output'
           storageType: 'EmptyDir'
+        }
+        {
+          name: 'sidecar-config'
+          storageType: 'Secret'
         }
       ]
       scale: {
@@ -649,16 +719,18 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   dependsOn: [
     acrPullRole
+    storageBlobRole
   ]
 }
 
 // ---------- Container App: hls-blob-sidecar ----------
-// Dedicated blob-sidecar instance for uploading HLS segments and playlists
-// to Azure Blob Storage. Reuses the same blob-sidecar image but with:
-//   - cleanup disabled (FFmpeg manages segment rotation on the Files share)
-//   - HLS-specific tenant config routing to the hls-content blob container
-//   - HTTP ingest on port 8081 for direct segment uploads from hls-transcoder (Phase 3)
-//   - hls-output volume mounted for reading HLS files (file-mode rollback)
+// DEPRECATED (Phase 4): This standalone sidecar is scaled to 0.
+// The blob-sidecar now runs co-located inside the hls-transcoder Container App
+// (localhost:8081) to avoid the Envoy HTTP/2 CONNECT tunnel RST_STREAM bug
+// (envoyproxy/envoy#28329). This resource is kept for rollback to Phase 3.
+//
+// To rollback: set minReplicas=1 here and change hls-transcoder's -ingest-url
+// back to 'http://${hlsSidecarAppName}.internal.${domain}/ingest/'
 
 resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: hlsSidecarAppName
@@ -792,7 +864,7 @@ resource hlsSidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
+        minReplicas: 0 // Phase 4: scaled to zero — blob-sidecar co-located in hls-transcoder
         maxReplicas: 1
       }
     }

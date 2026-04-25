@@ -138,8 +138,8 @@ HLS_SIDECAR_STATUS=$(az containerapp show --name "$HLS_SIDECAR_APP_NAME" --resou
 
 echo "    rtmp-server:       $RTMP_STATUS"
 echo "    blob-sidecar:      $SIDECAR_STATUS"
-echo "    hls-transcoder:    $HLS_STATUS"
-echo "    hls-blob-sidecar:  $HLS_SIDECAR_STATUS"
+echo "    hls-transcoder:    $HLS_STATUS  (multi-container: transcoder + blob-sidecar)"
+echo "    hls-blob-sidecar:  $HLS_SIDECAR_STATUS  (scaled to 0 — co-located in transcoder)"
 
 SUBSCRIPTION=$(az account show --query 'id' --output tsv)
 

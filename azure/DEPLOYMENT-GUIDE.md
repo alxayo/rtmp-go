@@ -81,7 +81,7 @@ export ADMIN_PASSWORD_HASH='$2b$12$...'   # ← paste the full hash here
 
 ### 0.3 Step 1 — Deploy rtmp-go Infrastructure (~10-15 min)
 
-This creates the Azure resource group, VNet, Container Apps Environment, ACR, Storage Account, Managed Identity, and all four rtmp-go container apps (rtmp-server, blob-sidecar, hls-transcoder, hls-blob-sidecar).
+This creates the Azure resource group, VNet, Container Apps Environment, ACR, Storage Account, Managed Identity, and all rtmp-go container apps (rtmp-server, blob-sidecar, hls-transcoder with co-located blob-sidecar).
 
 ```bash
 cd rtmp-go/azure
@@ -286,18 +286,19 @@ The system consists of **two deployments** sharing a single Azure resource group
 │  │  └────────┬─────────┘             └────────┬──────────┘             │    │
 │  │           │ webhooks                       │ uploads                 │    │
 │  │           ▼                                ▼                        │    │
-│  │  ┌─────────────────┐   webhooks   ┌──────────────────┐             │    │
-│  │  │  hls-transcoder  │────────────→│  hls-blob-sidecar │             │    │
-│  │  │  (HTTP 8090 int) │             │  (HTTP 8080 int)  │             │    │
-│  │  │  2 vCPU / 4Gi    │             │  0.25 vCPU /0.5Gi │             │    │
-│  │  └────────┬─────────┘             └────────┬──────────┘             │    │
-│  │           │ writes HLS                     │ uploads                 │    │
-│  │           ▼                                ▼                        │    │
 │  │  ┌─────────────────────────────────────────────────┐               │    │
-│  │  │              Azure Files                         │               │    │
-│  │  │  recordings (10 GiB)  │  hls-output (50 GiB)   │               │    │
-│  │  └─────────────────────────────────────────────────┘               │    │
-│  │                                                                     │    │
+│  │  │  hls-transcoder (multi-container app)            │               │    │
+│  │  │  (HTTP 8090 int) — 4 vCPU / 8 GiB total        │               │    │
+│  │  │                                                  │               │    │
+│  │  │  ┌─────────────────┐  localhost  ┌────────────┐ │               │    │
+│  │  │  │  hls-transcoder  │───:8081───→│ blob-sidecar│ │               │    │
+│  │  │  │  (FFmpeg ABR)    │  HTTP PUT  │ (ingest +   │ │               │    │
+│  │  │  │  3.5 vCPU / 7Gi │            │  blob upload)│ │               │    │
+│  │  │  └─────────────────┘            │ 0.5 vCPU/1Gi│ │               │    │
+│  │  │                                  └──────┬─────┘ │               │    │
+│  │  └─────────────────────────────────────────┼───────┘               │    │
+│  │                                            │ uploads                │    │
+│  │                                            ▼                        │    │
 │  │  ┌─────────────────┐             ┌──────────────────┐             │    │
 │  │  │  sg-platform     │  JWT auth   │  sg-hls          │             │    │
 │  │  │  (HTTP 3000 ext) │←──────────→│  (HTTP 4000 ext) │             │    │
@@ -305,9 +306,8 @@ The system consists of **two deployments** sharing a single Azure resource group
 │  │  └────────┬─────────┘   polling   └────────┬─────────┘             │    │
 │  │           │                                │ reads                  │    │
 │  │           ▼                                ▼                        │    │
-│  │  Azure Files: streamgate-data    Azure Files: hls-output           │    │
-│  │  (1 GiB, SQLite DB)             + segment-cache (10 GiB)          │    │
-│  │                                  + Blob Storage (upstream proxy)    │    │
+│  │  Azure Files: streamgate-data    Azure Blob Storage: hls-content   │    │
+│  │  (1 GiB, SQLite DB)             (upstream proxy via SAS token)     │    │
 │  └─────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
 │  ┌─────────────────┐  ┌─────────────┐  ┌───────────────────────────────┐   │
@@ -327,15 +327,20 @@ The system consists of **two deployments** sharing a single Azure resource group
 └───────────────────────────────────────────┘
 ```
 
+> **Note:** The standalone `hls-blob-sidecar` Container App still exists (scaled to 0)
+> for rollback to Phase 3 if needed. In Phase 4, the blob-sidecar runs co-located
+> inside the `hls-transcoder` Container App, communicating via `localhost:8081`
+> to bypass the Envoy HTTP/2 CONNECT tunnel bug (envoyproxy/envoy#28329).
+
 ### Data Flow
 
 1. **Ingest**: Broadcaster publishes RTMP to `rtmp-server` (TCP 1935)
 2. **Recording**: `rtmp-server` writes FLV segments to Azure Files `recordings/` share and fires webhooks
 3. **Blob Upload (recordings)**: `blob-sidecar` receives webhook, uploads FLV to Blob Storage, optionally deletes local file
-4. **HLS Transcoding**: `hls-transcoder` subscribes to the live RTMP stream, runs FFmpeg ABR transcoding, writes `.m3u8`/`.ts` to Azure Files `hls-output/` share
-5. **Blob Upload (HLS)**: `hls-blob-sidecar` receives webhook from transcoder, uploads HLS segments to Blob Storage (no local cleanup — segments must remain for live playback)
+4. **HLS Transcoding**: `hls-transcoder` receives `publish_start` webhook, spawns FFmpeg to subscribe to RTMP stream, transcodes to 3 ABR renditions (1080p/720p/480p)
+5. **Blob Upload (HLS)**: FFmpeg PUTs segments via HTTP to the co-located blob-sidecar at `localhost:8081`, which buffers and uploads to Azure Blob Storage (`hls-content` container)
 6. **Viewer Access**: Viewer enters ticket on `sg-platform`, receives JWT, player requests HLS from `sg-hls` with JWT auth
-7. **HLS Delivery**: `sg-hls` validates JWT, serves from Azure Files (local mount) with Blob Storage fallback (upstream proxy with SAS token)
+7. **HLS Delivery**: `sg-hls` validates JWT, proxies from Azure Blob Storage (upstream proxy with SAS token)
 
 ---
 
@@ -352,8 +357,8 @@ The system consists of **two deployments** sharing a single Azure resource group
 | **User-Assigned Managed Identity** | ACR pull + Blob RBAC | — | rtmp-go main.bicep |
 | **Container App: rtmp-server** | RTMP ingest | 0.5 vCPU / 1Gi | rtmp-go main.bicep |
 | **Container App: blob-sidecar** | Recording upload to Blob | 0.25 vCPU / 0.5Gi | rtmp-go main.bicep |
-| **Container App: hls-transcoder** | FFmpeg ABR transcoding | 2 vCPU / 4Gi | rtmp-go main.bicep |
-| **Container App: hls-blob-sidecar** | HLS segment upload to Blob | 0.25 vCPU / 0.5Gi | rtmp-go main.bicep |
+| **Container App: hls-transcoder** | FFmpeg ABR transcoding + co-located blob-sidecar (multi-container) | 4 vCPU / 8Gi total | rtmp-go main.bicep |
+| **Container App: hls-blob-sidecar** | _(scaled to 0 — co-located in transcoder since Phase 4)_ | 0.25 vCPU / 0.5Gi | rtmp-go main.bicep |
 | **Container App: sg-platform** | Next.js viewer/admin portal | 0.5 vCPU / 1Gi | streamgate main.bicep |
 | **Container App: sg-hls** | Express.js HLS media server | 0.5 vCPU / 1Gi | streamgate main.bicep |
 | **Resource Group** (`rg-dns`) | DNS zone (survives teardowns) | — | rtmp-go dns-deploy.sh |
@@ -731,8 +736,8 @@ File: `azure/infra/main.bicep`
 | Storage Mounts | 220–260 | `recordings` (ReadWrite) + `hls-output` (ReadWrite) on ACA Env |
 | rtmp-server app | 260–370 | External TCP 1935, webhooks to sidecar + transcoder |
 | blob-sidecar app | 370–440 | Internal HTTP 8080, webhook mode, cleanup=true |
-| hls-transcoder app | 440–530 | Internal HTTP 8090, ABR mode, sends webhooks to hls-blob-sidecar |
-| hls-blob-sidecar app | 530–610 | Internal HTTP 8080, webhook mode, cleanup=false |
+| hls-transcoder app | 440–530 | Internal HTTP 8090, multi-container: transcoder (3.5 CPU/7Gi) + blob-sidecar (0.5 CPU/1Gi), ingest via localhost:8081 |
+| hls-blob-sidecar app | 530–610 | Scaled to 0 (co-located in transcoder since Phase 4) |
 | Outputs | 610–659 | Names, FQDNs, identity info |
 
 #### Tenant Configuration (JSON Secrets)
@@ -751,7 +756,7 @@ The blob sidecars receive tenant routing config as a JSON secret. Each sidecar g
 }
 ```
 
-**hls-blob-sidecar** (HLS content):
+**co-located blob-sidecar** (HLS content — runs inside hls-transcoder app):
 ```json
 {
   "tenants": {},
@@ -835,7 +840,9 @@ The rtmp-server container uses **CLI arguments** in its command array:
 | `-rtmp-port` | `1935` | RTMP server port |
 | `-rtmp-token` | `<RTMP_AUTH_TOKEN>` | Auth token for RTMP subscribe |
 | `-mode` | `abr` | Multi-bitrate adaptive streaming |
-| `-blob-webhook-url` | `http://<hls-blob-sidecar-fqdn>/hooks` | Webhook for blob upload |
+| `-output-mode` | `http` | HTTP ingest to co-located blob-sidecar |
+| `-ingest-url` | `http://localhost:8081/ingest/` | Co-located blob-sidecar (same Container App) |
+| `-ingest-token` | `<INGEST_AUTH_TOKEN>` | Bearer token for HTTP ingest auth |
 | `-log-level` | `info` | Log verbosity |
 
 ### 9.4 sg-platform Container (StreamGate Platform)
@@ -893,8 +900,7 @@ The rtmp-server container uses **CLI arguments** in its command array:
 |-----|-----------|------|-----------|---------------|-------------|
 | rtmp-server | TCP | 1935 | Yes (external) | `stream.port-80.com` (CNAME only, no SSL) | Public RTMP ingest endpoint |
 | blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from rtmp-server |
-| hls-transcoder | HTTP | 8090 | No (internal) | — | Only receives webhooks from rtmp-server |
-| hls-blob-sidecar | HTTP | 8081 | No (internal) | — | Receives HTTP PUT segment uploads from FFmpeg (via transcoder). **Must have `allowInsecure: true`** — FFmpeg sends plain HTTP. |
+| hls-transcoder | HTTP | 8090 | No (internal) | — | Only receives webhooks from rtmp-server. Multi-container: co-located blob-sidecar on localhost:8081 |
 | sg-platform | HTTP | 3000 | Yes (external) | `watch.port-80.com` (managed SSL) | Public viewer portal + admin |
 | sg-hls | HTTP | 4000 | Yes (external) | `hls.port-80.com` (managed SSL) | Public HLS media delivery |
 
@@ -904,8 +910,8 @@ The rtmp-server container uses **CLI arguments** in its command array:
 |-----|------|--------|-----|
 | rtmp-server | 0.5 | 1Gi | Handles RTMP connections, FLV writing |
 | blob-sidecar | 0.25 | 0.5Gi | Light I/O: read file → upload blob |
-| hls-transcoder | 2.0 | 4Gi | FFmpeg ABR encoding (CPU-intensive) |
-| hls-blob-sidecar | 0.25 | 0.5Gi | Light I/O: read file → upload blob |
+| hls-transcoder (transcoder container) | 3.5 | 7Gi | FFmpeg ABR encoding (CPU-intensive) |
+| hls-transcoder (blob-sidecar container) | 0.5 | 1Gi | HTTP ingest + blob upload (co-located) |
 | sg-platform | 0.5 | 1Gi | Next.js SSR + SQLite |
 | sg-hls | 0.5 | 1Gi | File serving + JWT validation |
 
@@ -923,8 +929,6 @@ All container apps are configured with `minReplicas: 1, maxReplicas: 1` (single-
 |-----|--------|------------|-------|--------|
 | rtmp-server | recordings | `/recordings` | recordings (10 GiB) | ReadWrite |
 | blob-sidecar | recordings | `/recordings` | recordings (10 GiB) | ReadWrite |
-| hls-transcoder | hls-output | `/hls-output` | hls-output (50 GiB) | ReadWrite |
-| hls-blob-sidecar | hls-output | `/hls-output` | hls-output (50 GiB) | ReadWrite |
 | sg-platform | streamgate-data | `/data` | streamgate-data (1 GiB) | ReadWrite |
 | sg-hls | hls-output | `/hls-output` | hls-output (50 GiB) | ReadWrite |
 | sg-hls | segment-cache | `/segment-cache` | segment-cache (10 GiB) | ReadWrite |
@@ -938,24 +942,22 @@ All container apps are configured with `minReplicas: 1, maxReplicas: 1` (single-
 | Share Name | Size | Mounted By | Purpose |
 |------------|------|------------|---------|
 | `recordings` | 10 GiB | rtmp-server, blob-sidecar | FLV recording segments |
-| `hls-output` | 50 GiB | hls-transcoder, hls-blob-sidecar, sg-hls | HLS `.m3u8` + `.ts` files |
 | `streamgate-data` | 1 GiB | sg-platform | SQLite database (synced to local disk) |
-| `segment-cache` | 10 GiB | sg-hls | Cached proxy segments from Blob Storage |
 
 ### 11.2 Blob Storage Containers
 
 | Container | Access Level | Used By | Purpose |
 |-----------|-------------|---------|---------|
 | `recordings` | Private | blob-sidecar (upload) | Long-term FLV recording archive |
-| `hls-content` | Private | hls-blob-sidecar (upload), sg-hls (read via SAS) | HLS segment archive + upstream proxy source |
+| `hls-content` | Private | co-located blob-sidecar (upload), sg-hls (read via SAS) | HLS segment archive + upstream proxy source |
 
 ### 11.3 Data Lifecycle
 
 1. **Live stream arrives** → rtmp-server writes FLV segments to `recordings/` file share
 2. **blob-sidecar** uploads segments to `recordings` blob container, **deletes local** (cleanup=true)
-3. **hls-transcoder** writes HLS files to `hls-output/` file share
-4. **hls-blob-sidecar** uploads HLS files to `hls-content` blob container, **keeps local** (cleanup=false) for live playback
-5. **sg-hls** serves from `hls-output/` file share (fast) with `hls-content` blob fallback (for older/archived segments)
+3. **hls-transcoder** receives publish webhook, spawns FFmpeg to transcode RTMP → HLS
+4. **FFmpeg** PUTs HLS segments to co-located blob-sidecar at `localhost:8081`, which uploads to `hls-content` blob container
+5. **sg-hls** proxies from `hls-content` blob storage (upstream proxy with SAS token)
 6. Blob storage persists indefinitely; file shares cleaned up as needed
 
 ---

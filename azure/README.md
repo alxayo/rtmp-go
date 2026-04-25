@@ -225,12 +225,14 @@ All Phase 3 configuration is passed as **CLI flags** (not environment variables)
 - `-ingest-token <bearer-token>` — Authorization header token for PUT requests
 - `-ingest-max-body 52428800` — Maximum upload size (50MB)
 
-**hls-transcoder** (Phase 3 output flags):
+**hls-transcoder** (Phase 4 — co-located blob-sidecar):
 - `-output-mode http` — Send segments via HTTP PUT instead of file I/O
-- `-ingest-url http://hls-blob-sidecar.internal.{domain}:8081/ingest/` — Internal DNS to hls-blob-sidecar
+- `-ingest-url http://localhost:8081/ingest/` — Co-located blob-sidecar in same Container App
 - `-ingest-token <bearer-token>` — Same token as blob-sidecar for authentication
 
-> **Note:** The transcoder's `-ingest-url` must point to `hls-blob-sidecar` (HLS content), not `rec-blob-sidecar` (recordings).
+> **Note:** In Phase 4, the blob-sidecar runs co-located inside the hls-transcoder
+> Container App. Traffic goes via `localhost:8081`, bypassing the Envoy service mesh
+> and avoiding the HTTP/2 CONNECT tunnel bug (envoyproxy/envoy#28329).
 
 ### Deployment Steps
 

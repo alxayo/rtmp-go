@@ -1,0 +1,109 @@
+properties:
+  configuration:
+    activeRevisionsMode: Single
+    secrets:
+    - name: rtmp-auth-token
+      value: Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
+    - name: hls-tenants-json
+      value: '{"tenants":{"hls":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"}},"default":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"},"api_fallback":{"enabled":false}}'
+    ingress:
+      allowInsecure: true
+      external: false
+      targetPort: 8090
+      transport: Http
+      traffic:
+      - latestRevision: true
+        weight: 100
+    registries:
+    - identity: /subscriptions/4e0d0fc6-fdf1-4821-94cc-6efbf6ba0667/resourceGroups/rg-rtmpgo/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aziddu7fhxanu5cak
+      server: azacrdu7fhxanu5cak.azurecr.io
+  template:
+    revisionSuffix: colocated
+    containers:
+    # Container 1: HLS Transcoder (FFmpeg)
+    - name: hls-transcoder
+      image: azacrdu7fhxanu5cak.azurecr.io/hls-transcoder:master-fix
+      resources:
+        cpu: 3.5
+        memory: 7Gi
+        ephemeralStorage: 8Gi
+      command:
+      - /hls-transcoder
+      - -listen-addr
+      - ":8090"
+      - -hls-dir
+      - /hls-output
+      - -rtmp-host
+      - rtmp-server-du7fhxanu5cak.delightfulglacier-111baa9d.eastus2.azurecontainerapps.io
+      - -rtmp-port
+      - "1935"
+      - -rtmp-token
+      - Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
+      - -mode
+      - abr
+      - -output-mode
+      - http
+      - -ingest-url
+      - http://localhost:8081/ingest/
+      - -ingest-token
+      - JB2nN0cGzzylm3lAMQ747wMuo3aCgyM9
+      - -log-level
+      - info
+      volumeMounts:
+      - mountPath: /hls-output
+        volumeName: hls-output
+    # Container 2: Blob Sidecar (co-located, reachable via localhost:8081)
+    - name: blob-sidecar
+      image: azacrdu7fhxanu5cak.azurecr.io/blob-sidecar:tcp-fix
+      resources:
+        cpu: 0.5
+        memory: 1Gi
+      command:
+      - /blob-sidecar
+      - -mode
+      - webhook
+      - -listen-addr
+      - ":8080"
+      - -config
+      - /config/hls-tenants-json
+      - -workers
+      - "4"
+      - -cleanup
+      - "false"
+      - -ingest-addr
+      - ":8081"
+      - -ingest-storage
+      - blob
+      - -ingest-token
+      - JB2nN0cGzzylm3lAMQ747wMuo3aCgyM9
+      - -ingest-max-body
+      - "52428800"
+      - -log-level
+      - info
+      env:
+      - name: AZURE_CLIENT_ID
+        value: 45f8ab4d-5d51-4a5c-bad1-589db6cf738b
+      probes:
+      - type: Liveness
+        httpGet:
+          path: /health
+          port: 8081
+        initialDelaySeconds: 10
+        periodSeconds: 30
+      - type: Startup
+        httpGet:
+          path: /health
+          port: 8081
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      volumeMounts:
+      - mountPath: /config
+        volumeName: sidecar-config
+    volumes:
+    - name: hls-output
+      storageType: EmptyDir
+    - name: sidecar-config
+      storageType: Secret
+    scale:
+      minReplicas: 1
+      maxReplicas: 1

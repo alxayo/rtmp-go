@@ -14,32 +14,40 @@ Publisher (OBS/FFmpeg)
     │
     │  RTMP (TCP 1935, external)
     ▼
-┌───────────────────────────────────────────────────────────┐
-│ Container Apps Environment (VNet 10.0.0.0/16)             │
-│                                                           │
-│  ┌─────────────┐    webhook     ┌──────────────────┐     │
-│  │ rtmp-server  │──publish_start─▶ hls-transcoder   │     │
-│  │ (TCP 1935)   │──publish_stop──▶ (HTTP 8090)      │     │
-│  │              │                │                    │     │
-│  │              │  segment_      │  FFmpeg subscribes │     │
-│  │              │  complete      │  via RTMP (VNet)   │     │
-│  │              │    │           │                    │     │
-│  │              │    ▼           │  Writes:           │     │
-│  │              │  ┌──────────┐ │  /hls-output/{key} │     │
-│  │              │  │ blob-    │ │  ├── master.m3u8   │     │
-│  │              │  │ sidecar  │ │  ├── stream_0/     │     │
-│  │              │  │ (8080)   │ │  ├── stream_1/     │     │
-│  │              │  └──────────┘ │  └── stream_2/     │     │
-│  └─────────────┘                └──────────────────┘     │
-│         │                              │                  │
-│         ▼                              ▼                  │
-│  Azure Files: recordings        Azure Files: hls-output   │
-│         │                              │                  │
-│         ▼                              ▼                  │
-│  Azure Blob Storage            [Future] HLS Server        │
-│  (segment archive)             mounts same share          │
-└───────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│ Container Apps Environment (VNet 10.0.0.0/16)                 │
+│                                                               │
+│  ┌─────────────┐    webhook     ┌───────────────────────────┐│
+│  │ rtmp-server  │──publish_start─▶ hls-transcoder            ││
+│  │ (TCP 1935)   │──publish_stop──▶ (multi-container app)     ││
+│  │              │                │                             ││
+│  │              │  segment_      │  ┌───────────┐ localhost  ││
+│  │              │  complete      │  │ transcoder│───:8081──┐ ││
+│  │              │    │           │  │ (FFmpeg)  │          │ ││
+│  │              │    ▼           │  │ 3.5 vCPU  │          ▼ ││
+│  │              │  ┌──────────┐ │  └───────────┘  ┌───────┐ ││
+│  │              │  │ blob-    │ │                  │ blob- │ ││
+│  │              │  │ sidecar  │ │                  │sidecar│ ││
+│  │              │  │ (8080)   │ │                  │(8081) │ ││
+│  │              │  └──────────┘ │                  │0.5 CPU│ ││
+│  └─────────────┘                │                  └───┬───┘ ││
+│         │                       └──────────────────────┼────┘│
+│         ▼                                              │      │
+│  Azure Files: recordings                               ▼      │
+│         │                              Azure Blob Storage     │
+│         ▼                              (hls-content container)│
+│  Azure Blob Storage                           │               │
+│  (recordings container)                       ▼               │
+│                                        sg-hls (HLS server)    │
+│                                        → proxies to viewer    │
+└───────────────────────────────────────────────────────────────┘
 ```
+
+> **Phase 4 — Co-located Sidecar:** The blob-sidecar for HLS runs as a second
+> container in the same Container App as hls-transcoder. FFmpeg uploads segments
+> via `localhost:8081`, bypassing the Envoy service mesh entirely. This eliminates
+> the ~23% segment drop rate caused by the Envoy HTTP/2 CONNECT tunnel bug
+> (envoyproxy/envoy#28329).
 
 ## Data Flow
 
@@ -112,34 +120,41 @@ for scheduled broadcasts with 10-minute pre-spin buffers (see
 
 ## Storage
 
-### Azure Files (Phase 1 — file mode)
+### Azure Files (Phase 1 — file mode, deprecated)
 
-The `hls-output` Azure Files share (50 GiB) is mounted at `/hls-output` in
-the hls-transcoder container. A future HLS server Container App can mount the
-same share for direct serving.
+The original design mounted an `hls-output` Azure Files share. This was
+replaced by HTTP ingest to Blob Storage in Phase 2.
 
-**Capacity:** At 3 renditions × 2s segments × ~8 Mbps combined, keeping 10
-segments per rendition ≈ 60 MB per active stream. The 50 GiB share supports
-~800 concurrent streams.
-
-### Azure Blob Storage via HTTP Ingest (Phase 2 — current)
+### Azure Blob Storage via HTTP Ingest (Phase 2–3)
 
 In HTTP output mode (`-output-mode http`), FFmpeg uploads segments and variant
-playlists directly to the hls-blob-sidecar via HTTP PUT. The sidecar buffers
-each segment and uploads it to Azure Blob Storage. No Azure Files mount needed.
+playlists directly to a blob-sidecar via HTTP PUT. The sidecar buffers each
+segment and uploads it to Azure Blob Storage. No Azure Files mount needed.
 
 **Key details:**
 - FFmpeg's `-master_pl_name` only writes to the local filesystem even in HTTP
   mode. The transcoder's `uploadMasterPlaylist()` function generates and uploads
   `master.m3u8` via HTTP PUT after a 2-second delay.
 - Blob paths: `{eventId}/stream_N/index.m3u8`, `{eventId}/stream_N/seg_XXXXX.ts`
-- Sidecar ingress must have `allowInsecure: true` (FFmpeg sends plain HTTP PUT).
-  **Warning**: `az containerapp ingress update --transport http` resets
-  `allowInsecure` to `false` — always re-apply `--allow-insecure` after changes.
-- Transport must be `http`, never `tcp` — TCP transport breaks Container Apps
-  internal HTTP routing.
 
-### Azure Blob Storage + CDN (Phase 3 — future)
+### Co-located Sidecar via localhost (Phase 4 — current)
+
+Phase 3 used a separate `hls-blob-sidecar` Container App, but Azure Container
+Apps routes inter-app traffic through an Envoy HTTP/2 CONNECT tunnel. A known
+bug (envoyproxy/envoy#28329) causes RST_STREAM before DATA frames are flushed
+with chunked transfer encoding, resulting in ~23% segment drops.
+
+**Phase 4 solution:** The blob-sidecar runs as a second container in the same
+Container App as hls-transcoder. FFmpeg sends HTTP PUT to `localhost:8081`,
+bypassing Envoy entirely. Result: 0% segment drops.
+
+**Key details:**
+- Multi-container app: hls-transcoder (3.5 vCPU/7GiB) + blob-sidecar (0.5 vCPU/1GiB)
+- Ingest URL: `http://localhost:8081/ingest/`
+- The standalone `hls-blob-sidecar` Container App remains scaled to 0 for rollback
+- No ingress configuration needed for the co-located sidecar (localhost only)
+
+### Azure Blob Storage + CDN (future)
 
 For multi-region distribution or CDN integration, Azure CDN can serve
 directly from the Blob Storage origin.
@@ -153,10 +168,12 @@ directly from the Blob Storage origin.
   rtmp-server internal FQDN
 - Verify auth token matches between rtmp-server and hls-transcoder
 
-### HLS segments not appearing
+### HLS segments not appearing in Blob Storage
 
-- Check the `hls-output` Azure Files share is mounted correctly
 - Verify FFmpeg is running: logs should show "FFmpeg transcoder started"
+- Check co-located blob-sidecar container logs: `az containerapp logs show --name <hlsAppName> -g rg-rtmpgo --container blob-sidecar`
+- Verify both containers are running: `az containerapp show --name <hlsAppName> -g rg-rtmpgo --query 'properties.template.containers[].name'`
+- Check FFmpeg stderr output for HTTP PUT errors (connection refused = sidecar not ready)
 - Check FFmpeg stderr output for codec/format errors
 
 ### High CPU usage

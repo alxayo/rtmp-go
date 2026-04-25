@@ -1,9 +1,10 @@
 #!/bin/bash
 # ============================================================================
-# verify-deployment.sh — Verify Phase 3 HTTP Ingest Deployment
+# verify-deployment.sh — Verify Phase 4 Co-located Sidecar Deployment
 # ============================================================================
-# Validates that blob-sidecar and hls-transcoder are correctly configured
-# for HTTP ingest communication within Azure Container Apps.
+# Validates that hls-transcoder runs as a multi-container app with the
+# blob-sidecar co-located (localhost:8081), bypassing the Envoy HTTP/2
+# CONNECT tunnel that caused segment drops in Phase 3.
 #
 # Usage:
 #   ./azure/verify-deployment.sh
@@ -134,7 +135,31 @@ check_blob_sidecar_env() {
 }
 
 # ============================================================================
-# Check 5: hls-transcoder environment variables
+# Check 5: hls-transcoder multi-container (Phase 4 — CRITICAL)
+# ============================================================================
+check_hls_transcoder_multicontainer() {
+    info "Checking hls-transcoder is multi-container (Phase 4)"
+    
+    CONTAINER_COUNT=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_TRANSCODER_APP" \
+        --query 'properties.template.containers | length(@)' -o tsv 2>/dev/null || echo "0")
+    
+    if [ "$CONTAINER_COUNT" = "2" ]; then
+        success "hls-transcoder has 2 containers (Phase 4 co-located sidecar)"
+        
+        # Verify container names
+        CONTAINER_NAMES=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_TRANSCODER_APP" \
+            --query 'properties.template.containers[].name' -o tsv 2>/dev/null || true)
+        info "  Containers: $(echo $CONTAINER_NAMES | tr '\n' ', ')"
+    elif [ "$CONTAINER_COUNT" = "1" ]; then
+        error "hls-transcoder has only 1 container (Phase 3 — missing co-located blob-sidecar)"
+        error "  Fix: Redeploy with updated Bicep template (Phase 4)"
+    else
+        error "hls-transcoder has $CONTAINER_COUNT containers (expected 2)"
+    fi
+}
+
+# ============================================================================
+# Check 6: hls-transcoder environment variables
 # ============================================================================
 check_hls_transcoder_env() {
     info "Checking hls-transcoder environment variables"
@@ -214,38 +239,28 @@ check_network_connectivity() {
 }
 
 # ============================================================================
-# Check 8: HLS blob-sidecar ingress configuration (CRITICAL)
+# Check 8: hls-blob-sidecar scaled to zero (Phase 4)
 # ============================================================================
 check_hls_sidecar_ingress() {
-    info "Checking hls-blob-sidecar ingress configuration"
+    info "Checking hls-blob-sidecar is scaled to zero (Phase 4)"
     
     HLS_SIDECAR_APPS=$(az containerapp list -g "$RESOURCE_GROUP" --query "[?tags.role=='hls-blob-sidecar'] | [0].name" -o tsv 2>/dev/null || true)
     
     if [ -z "$HLS_SIDECAR_APPS" ]; then
-        warning "hls-blob-sidecar container app not found (skipping)"
+        success "hls-blob-sidecar not found (expected in Phase 4 — co-located in transcoder)"
         return 0
     fi
     
     HLS_SIDECAR_APP="$HLS_SIDECAR_APPS"
     
-    # Check targetPort — MUST be 8081 for the ingest server
-    TARGET_PORT=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_SIDECAR_APP" \
-        --query 'properties.configuration.ingress.targetPort' -o tsv 2>/dev/null || true)
-    if [ "$TARGET_PORT" = "8081" ]; then
-        success "hls-blob-sidecar targetPort=8081 (ingest server)"
+    # Check minReplicas — should be 0 in Phase 4
+    MIN_REPLICAS=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_SIDECAR_APP" \
+        --query 'properties.template.scale.minReplicas' -o tsv 2>/dev/null || true)
+    if [ "$MIN_REPLICAS" = "0" ]; then
+        success "hls-blob-sidecar minReplicas=0 (Phase 4: scaled to zero, co-located in transcoder)"
     else
-        error "hls-blob-sidecar targetPort=$TARGET_PORT (MUST be 8081 for ingest server)"
-        error "  Fix: az containerapp ingress update -n $HLS_SIDECAR_APP -g $RESOURCE_GROUP --target-port 8081"
-    fi
-    
-    # Check allowInsecure — MUST be true (FFmpeg uses http://, not https://)
-    ALLOW_INSECURE=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_SIDECAR_APP" \
-        --query 'properties.configuration.ingress.allowInsecure' -o tsv 2>/dev/null || true)
-    if [ "$ALLOW_INSECURE" = "true" ]; then
-        success "hls-blob-sidecar allowInsecure=true (HTTP enabled)"
-    else
-        error "hls-blob-sidecar allowInsecure=$ALLOW_INSECURE (MUST be true — FFmpeg uses http://, not https://)"
-        error "  Fix: az containerapp ingress update -n $HLS_SIDECAR_APP -g $RESOURCE_GROUP --allow-insecure"
+        warning "hls-blob-sidecar minReplicas=$MIN_REPLICAS (expected 0 in Phase 4)"
+        warning "  The standalone sidecar is no longer used — blob-sidecar is co-located in hls-transcoder"
     fi
 }
 
@@ -253,7 +268,7 @@ check_hls_sidecar_ingress() {
 # Check 9: hls-transcoder ingest URL validation (CRITICAL)
 # ============================================================================
 check_transcoder_ingest_url() {
-    info "Checking hls-transcoder ingest URL"
+    info "Checking hls-transcoder ingest URL (Phase 4: localhost)"
     
     HLS_APPS=$(az containerapp list -g "$RESOURCE_GROUP" --query "[?tags.role=='hls-transcoder'] | [0].name" -o tsv 2>/dev/null || true)
     
@@ -265,34 +280,24 @@ check_transcoder_ingest_url() {
     # Get the command array and find the ingest URL
     INGEST_URL=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
         --query "properties.template.containers[0].command" -o json 2>/dev/null \
-        | jq -r 'to_entries[] | select(.value == "-ingest-url") | .key' \
-        | while read idx; do
-            NEXT_IDX=$((idx + 1))
-            az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
-                --query "properties.template.containers[0].command[$NEXT_IDX]" -o tsv 2>/dev/null
-        done)
-    
-    if [ -z "$INGEST_URL" ]; then
-        # Fallback: grep from the full command
-        INGEST_URL=$(az containerapp show -g "$RESOURCE_GROUP" -n "$HLS_APPS" \
-            --query "properties.template.containers[0].command" -o json 2>/dev/null \
-            | grep -o 'http://[^"]*ingest[^"]*' || true)
-    fi
+        | grep -o 'http://[^"]*ingest[^"]*' || true)
     
     if [ -z "$INGEST_URL" ]; then
         warning "Could not extract ingest URL from transcoder command"
         return 0
     fi
     
-    # Check for :8081 in URL (MUST NOT be present)
-    if echo "$INGEST_URL" | grep -q ':8081'; then
-        error "Ingest URL contains :8081 — this will NOT work!"
-        error "  Current: $INGEST_URL"
-        error "  Container Apps ingress only exposes port 80/443 via FQDN."
-        error "  Fix: Remove :8081 from the URL. Ingress routes port 80 → targetPort 8081."
-    else
-        success "Ingest URL does not contain :8081 (correct)"
+    # Phase 4: URL MUST be http://localhost:8081/ingest/ (co-located sidecar)
+    if echo "$INGEST_URL" | grep -q 'localhost:8081'; then
+        success "Ingest URL uses localhost:8081 (Phase 4 co-located sidecar)"
         info "  URL: $INGEST_URL"
+    elif echo "$INGEST_URL" | grep -q 'internal\.'; then
+        error "Ingest URL points to cross-app FQDN (Phase 3 — vulnerable to Envoy RST_STREAM bug)"
+        error "  Current: $INGEST_URL"
+        error "  Expected: http://localhost:8081/ingest/"
+        error "  Fix: Redeploy with updated Bicep template (Phase 4 co-located sidecar)"
+    else
+        warning "Unexpected ingest URL: $INGEST_URL"
     fi
 }
 
@@ -335,7 +340,7 @@ check_health_probe() {
 main() {
     echo ""
     echo "╭────────────────────────────────────────────────────────╮"
-    echo "│  Phase 3 HTTP Ingest Deployment Verification          │"
+    echo "│  Phase 4 Co-located Sidecar Deployment Verification   │"
     echo "╰────────────────────────────────────────────────────────╯"
     echo ""
     
@@ -354,7 +359,7 @@ main() {
     # Run checks
     check_resource_group
     check_blob_sidecar_exists && check_blob_sidecar_env || error "Failed to get blob-sidecar environment variables"
-    check_hls_transcoder_exists && check_hls_transcoder_env || error "Failed to get hls-transcoder environment variables"
+    check_hls_transcoder_exists && check_hls_transcoder_multicontainer && check_hls_transcoder_env || error "Failed to verify hls-transcoder"
     check_container_status
     check_network_connectivity
     check_hls_sidecar_ingress

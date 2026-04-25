@@ -100,12 +100,18 @@ func main() {
 	})
 
 	ingestServer := &http.Server{
-		Addr:         *ingestAddr,
-		Handler:      ingestMux,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              *ingestAddr,
+		Handler:           ingestMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		// No ReadTimeout: FFmpeg uses chunked transfer encoding with unknown body size.
+		// ReadTimeout covers the entire request including body, which would kill large
+		// segment uploads. ReadHeaderTimeout protects against slowloris attacks instead.
 	}
+	// Disable keep-alives to force one connection per PUT request.
+	// Prevents stale connection issues with Envoy proxy and FFmpeg's HTTP client.
+	ingestServer.SetKeepAlivesEnabled(false)
 
 	// Start ingest HTTP server in goroutine
 	go func() {
