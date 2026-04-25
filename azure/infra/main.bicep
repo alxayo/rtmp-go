@@ -417,17 +417,15 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: identity.id
         }
       ]
-      // Internal-only HTTP ingress for receiving webhook events from rtmp-server
+      // Internal-only HTTP ingress for HLS segment ingest (port 8081)
+      // FFmpeg sends HLS segments via HTTP PUT to the sidecar's ingest endpoint
+      // IMPORTANT: transport MUST be 'http' — 'tcp' breaks Container Apps internal routing
       ingress: {
         external: false
-        targetPort: 8080
+        targetPort: 8081
         transport: 'http'
-        allowInsecure: true // Required: rtmp-server sends webhooks over plain HTTP
+        allowInsecure: true // Required: internal services communicate over plain HTTP
       }
-      // Phase 3: Expose port 8081 for HTTP ingest endpoint on blob-sidecar
-      // This enables FFmpeg and other clients to upload segments directly via HTTP PUT
-      // Port 8080: Webhooks from RTMP server (publish_start, publish_stop events)
-      // Port 8081: HTTP PUT /upload/{path} for direct segment uploads (Phase 3 HTTP ingest)
       secrets: [
         {
           name: 'tenants-json'
