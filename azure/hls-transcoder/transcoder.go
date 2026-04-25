@@ -15,15 +15,18 @@ package main
 // and waits for it to exit cleanly.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // TranscoderConfig holds the configuration for FFmpeg process construction.
@@ -192,6 +195,18 @@ func (t *Transcoder) Start(streamKey string) {
 		notifyCtx, cancel := context.WithCancel(context.Background())
 		cancelNotify = cancel
 		go t.notifier.WatchStream(notifyCtx, streamKey, outputDir)
+	}
+
+	// In HTTP+ABR mode, upload master.m3u8 explicitly.
+	// FFmpeg's -master_pl_name only writes to local filesystem, not HTTP output.
+	if t.config.OutputMode == "http" && t.config.Mode != "copy" {
+		go func() {
+			// Small delay to let FFmpeg initialize and sidecar be ready
+			time.Sleep(2 * time.Second)
+			if err := t.uploadMasterPlaylist(streamKey); err != nil {
+				t.logger.Error("failed to upload master.m3u8", "stream_key", streamKey, "error", err)
+			}
+		}()
 	}
 
 	sp := &streamProcess{
@@ -601,8 +616,8 @@ func sanitizeURL(url string) string {
 //
 // The content matches what FFmpeg would generate with the ABR settings in
 // buildABRArgs: 1080p (stream_0), 720p (stream_1), 480p (stream_2).
-func writeMasterPlaylist(outputDir string) error {
-	const masterContent = `#EXTM3U
+// masterPlaylistContent is the static ABR master playlist shared between file and HTTP modes.
+const masterPlaylistContent = `#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-STREAM-INF:BANDWIDTH=5192000,RESOLUTION=1920x1080
 stream_0/index.m3u8
@@ -611,6 +626,48 @@ stream_1/index.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480
 stream_2/index.m3u8
 `
+
+// uploadMasterPlaylist uploads master.m3u8 to the blob-sidecar via HTTP PUT.
+// FFmpeg's -master_pl_name only writes to local filesystem, not HTTP output,
+// so the transcoder must upload it explicitly in HTTP mode.
+func (t *Transcoder) uploadMasterPlaylist(streamKey string) error {
+	// Extract event ID from stream key (e.g. "live/f80c14ea-..." → "f80c14ea-...")
+	parts := strings.Split(streamKey, "/")
+	eventID := parts[len(parts)-1]
+
+	url := strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + eventID + "/master.m3u8"
+
+	body := bytes.NewReader([]byte(masterPlaylistContent))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/vnd.apple.mpegurl")
+	if t.config.IngestToken != "" {
+		req.Header.Set("Authorization", "Bearer "+t.config.IngestToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("PUT master.m3u8: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("PUT master.m3u8: status %d", resp.StatusCode)
+	}
+
+	t.logger.Info("master.m3u8 uploaded via HTTP",
+		"stream_key", streamKey,
+		"url", url,
+		"size", len(masterPlaylistContent))
+	return nil
+}
+
+func writeMasterPlaylist(outputDir string) error {
 	masterPath := filepath.Join(outputDir, "master.m3u8")
 
 	// Use explicit Open → Write → Sync → Close to force SMB FLUSH.
@@ -618,7 +675,7 @@ stream_2/index.m3u8
 	if err != nil {
 		return fmt.Errorf("open master.m3u8: %w", err)
 	}
-	if _, err := f.WriteString(masterContent); err != nil {
+	if _, err := f.WriteString(masterPlaylistContent); err != nil {
 		f.Close()
 		return fmt.Errorf("write master.m3u8: %w", err)
 	}
