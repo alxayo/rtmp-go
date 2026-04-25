@@ -86,11 +86,14 @@ Produces single-bitrate output at source quality.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-listen-addr` | `:8090` | HTTP listen address |
-| `-hls-dir` | `/hls-output` | HLS output root directory |
+| `-hls-dir` | `/hls-output` | HLS output root directory (file mode only) |
 | `-rtmp-host` | `localhost` | RTMP server hostname |
 | `-rtmp-port` | `1935` | RTMP server port |
 | `-rtmp-token` | _(empty)_ | Auth token for RTMP subscribe |
 | `-mode` | `abr` | `abr` or `copy` |
+| `-output-mode` | `file` | `file` (local filesystem) or `http` (HTTP ingest to blob-sidecar) |
+| `-ingest-url` | _(empty)_ | HTTP ingest base URL (required for `-output-mode http`) |
+| `-ingest-token` | _(empty)_ | Bearer token for HTTP ingest authentication |
 | `-log-level` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Cost Analysis
@@ -109,7 +112,7 @@ for scheduled broadcasts with 10-minute pre-spin buffers (see
 
 ## Storage
 
-### Azure Files (Phase 1 — current)
+### Azure Files (Phase 1 — file mode)
 
 The `hls-output` Azure Files share (50 GiB) is mounted at `/hls-output` in
 the hls-transcoder container. A future HLS server Container App can mount the
@@ -119,12 +122,27 @@ same share for direct serving.
 segments per rendition ≈ 60 MB per active stream. The 50 GiB share supports
 ~800 concurrent streams.
 
-### Azure Blob Storage + CDN (Phase 2 — future)
+### Azure Blob Storage via HTTP Ingest (Phase 2 — current)
 
-For multi-region distribution or CDN integration, a sync sidecar can copy
-`.m3u8`/`.ts` files from Azure Files to Blob Storage. Azure CDN then serves
-from the Blob origin. This follows the same pattern as the existing
-blob-sidecar for recording segments.
+In HTTP output mode (`-output-mode http`), FFmpeg uploads segments and variant
+playlists directly to the hls-blob-sidecar via HTTP PUT. The sidecar buffers
+each segment and uploads it to Azure Blob Storage. No Azure Files mount needed.
+
+**Key details:**
+- FFmpeg's `-master_pl_name` only writes to the local filesystem even in HTTP
+  mode. The transcoder's `uploadMasterPlaylist()` function generates and uploads
+  `master.m3u8` via HTTP PUT after a 2-second delay.
+- Blob paths: `{eventId}/stream_N/index.m3u8`, `{eventId}/stream_N/seg_XXXXX.ts`
+- Sidecar ingress must have `allowInsecure: true` (FFmpeg sends plain HTTP PUT).
+  **Warning**: `az containerapp ingress update --transport http` resets
+  `allowInsecure` to `false` — always re-apply `--allow-insecure` after changes.
+- Transport must be `http`, never `tcp` — TCP transport breaks Container Apps
+  internal HTTP routing.
+
+### Azure Blob Storage + CDN (Phase 3 — future)
+
+For multi-region distribution or CDN integration, Azure CDN can serve
+directly from the Blob Storage origin.
 
 ## Troubleshooting
 

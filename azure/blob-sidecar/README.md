@@ -150,6 +150,15 @@ curl -X PUT \
 - **Stateless** — multiple instances can handle uploads without coordination
 - **Optional auth** — bearer token authentication can be enabled via `-ingest-token`
 
+#### Azure Container Apps Deployment Notes
+
+When deploying the ingest server as a Container App:
+- **Ingress targetPort must be 8081** — the default ingest listen port. Container Apps routes port 80/443 → targetPort 8081.
+- **Transport must be `http`** — never `tcp`. TCP transport breaks Container Apps' Envoy proxy routing for HTTP services.
+- **`allowInsecure` must be `true`** — FFmpeg sends plain `http://` PUT requests. Without this, Container Apps silently redirects HTTP→HTTPS, converting PUT into GET (→ 405 Method Not Allowed).
+- **Warning**: `az containerapp ingress update --transport http` resets `allowInsecure` to `false`. Always re-apply `--allow-insecure` after any transport change.
+- **Ingest URL must omit the port** — use `http://<sidecar-name>.internal.<domain>/ingest/` (NOT `:8081`).
+
 ## Configuration
 
 ### Tenant Config File (`tenants.json`)

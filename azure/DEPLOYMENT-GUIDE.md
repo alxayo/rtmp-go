@@ -864,9 +864,9 @@ The rtmp-server container uses **CLI arguments** in its command array:
 | `PLAYBACK_SIGNING_SECRET` | Secret ref | Must match platform's secret |
 | `INTERNAL_API_KEY` | Secret ref | For polling `/api/revocations` |
 | `STREAM_ROOT` | `/hls-output` | Azure Files mount for local HLS files |
-| `UPSTREAM_ORIGIN` | `https://<storage>.blob.core.windows.net/hls-content/hls` | Blob Storage URL for upstream proxy |
+| `UPSTREAM_ORIGIN` | `https://<storage>.blob.core.windows.net/hls-content` | Blob Storage URL for upstream proxy (no `/hls` suffix — blobs stored at `{eventId}/...`) |
 | `UPSTREAM_SAS_TOKEN` | Secret ref | SAS token for blob access |
-| `STREAM_KEY_PREFIX` | `live_` | Prefix to strip from stream keys |
+| `STREAM_KEY_PREFIX` | _(empty)_ | Prefix prepended to event ID when building upstream URLs. **Must be empty** for HTTP ingest pipeline (blobs stored at `{eventId}/`, not `live_{eventId}/`). Only set to `live_` if using file-based Azure Files SMB mode. |
 | `SEGMENT_CACHE_ROOT` | `/segment-cache` | Azure Files mount for cached proxy segments |
 | `SEGMENT_CACHE_MAX_SIZE_GB` | `8` | LRU eviction threshold |
 | `SEGMENT_CACHE_MAX_AGE_HOURS` | `72` | Age-based cleanup threshold |
@@ -894,7 +894,7 @@ The rtmp-server container uses **CLI arguments** in its command array:
 | rtmp-server | TCP | 1935 | Yes (external) | `stream.port-80.com` (CNAME only, no SSL) | Public RTMP ingest endpoint |
 | blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from rtmp-server |
 | hls-transcoder | HTTP | 8090 | No (internal) | — | Only receives webhooks from rtmp-server |
-| hls-blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from hls-transcoder |
+| hls-blob-sidecar | HTTP | 8081 | No (internal) | — | Receives HTTP PUT segment uploads from FFmpeg (via transcoder). **Must have `allowInsecure: true`** — FFmpeg sends plain HTTP. |
 | sg-platform | HTTP | 3000 | Yes (external) | `watch.port-80.com` (managed SSL) | Public viewer portal + admin |
 | sg-hls | HTTP | 4000 | Yes (external) | `hls.port-80.com` (managed SSL) | Public HLS media delivery |
 
@@ -1275,13 +1275,15 @@ az containerapp revision list --name <app-name> --resource-group rg-rtmpgo \
    - Check `-rtmp-token` matches `RTMP_AUTH_TOKEN`
 4. Check available disk space on hls-output share
 
-### 15.5 Azure Files SMB Flush Issue (KNOWN BUG — FIXED)
+### 15.5 Azure Files SMB Flush Issue (KNOWN BUG — FIXED, FILE MODE ONLY)
 
 **Symptom**: `master.m3u8` is empty or stale on Azure Files.
 
 **Root Cause**: `os.WriteFile()` doesn't trigger an SMB FLUSH — data remains in the client-side cache and isn't visible to other mounts.
 
 **Fix Applied**: The `writeMasterPlaylist()` function now uses `f.Sync()` after writing. The StreamGate HLS server has a dynamic fallback that generates `master.m3u8` from the directory structure if the file is missing or empty.
+
+**Note**: In HTTP ingest mode (`-output-mode http`), this issue doesn't apply. FFmpeg's `-master_pl_name` only writes to the local filesystem even in HTTP output mode, so the transcoder has a dedicated `uploadMasterPlaylist()` function that generates and uploads `master.m3u8` via HTTP PUT to the blob-sidecar after FFmpeg starts (2-second delay for variant playlists to be created).
 
 **If it recurs**: Check that the rtmp-go binary includes commit `eefd0e3` or later.
 
@@ -1531,7 +1533,7 @@ ContainerAppConsoleLogs_CL
 
 **Expected**: `publish_start event received` with the stream key.
 **If missing**:
-- Check transcoder ingress is `allowInsecure: true` (rtmp-server sends plain HTTP webhooks)
+- Check transcoder ingress is `allowInsecure: true` (rtmp-server sends plain HTTP webhooks). **Warning**: `az containerapp ingress update --transport http` resets `allowInsecure` to `false` — always re-apply `--allow-insecure` after any transport change.
 - Check RTMP server webhook config points to the correct transcoder FQDN
 - Check transcoder revision is running: `az containerapp revision list -n <transcoder> -g rg-rtmpgo -o table`
 
@@ -1637,12 +1639,12 @@ ContainerAppConsoleLogs_CL
 az storage blob list \
   --account-name <storage-account> \
   --container-name hls-content \
-  --prefix "hls/<event-id>/" \
+  --prefix "<event-id>/" \
   --query '[].{name:name, size:properties.contentLength, modified:properties.lastModified}' \
   -o table --auth-mode login | head -20
 ```
 
-**Expected**: `.ts` segment files and `.m3u8` playlist files.
+**Expected**: `.ts` segment files and `.m3u8` playlist files under `{eventId}/stream_0/`, `{eventId}/stream_1/`, `{eventId}/stream_2/`, plus `{eventId}/master.m3u8`.
 **If empty**: Go back to Stage 5 and check sidecar upload logs.
 
 #### Summary: The Three Most Common HTTP Ingest Failures
@@ -1651,9 +1653,15 @@ These three issues account for the vast majority of HTTP ingest pipeline failure
 
 1. **`:8081` in the ingest URL** — Container Apps only exposes port 80/443 via FQDN. The ingress `targetPort` routes internally. Remove `:8081` from the URL.
 
-2. **`allowInsecure: false` on sidecar** — FFmpeg sends `http://` PUT requests. Without `allowInsecure: true`, they're silently rejected. This produces the confusing symptom of "FFmpeg is running with no errors, but sidecar receives zero requests."
+2. **`allowInsecure: false` on sidecar** — FFmpeg sends `http://` PUT requests. Without `allowInsecure: true`, they're silently rejected. This produces the confusing symptom of "FFmpeg is running with no errors, but sidecar receives zero requests." **Warning**: `az containerapp ingress update --transport http` resets `allowInsecure` to `false` — always re-apply `--allow-insecure` after changing transport.
 
 3. **Chunked transfer encoding** — FFmpeg's HLS muxer uses chunked encoding (no `Content-Length`). The sidecar must buffer the full body before uploading to Azure Blob Storage, and size validation must handle `Content-Length: -1`.
+
+4. **TCP transport breaks HTTP routing** — Setting `transport: tcp` on any internal HTTP service's ingress causes ALL requests to that service to fail. Container Apps' Envoy proxy only routes HTTP traffic correctly with `transport: http`. **Never use `transport: tcp` for blob-sidecar or any HTTP-based service.**
+
+5. **`master.m3u8` missing from blob** — FFmpeg's `-master_pl_name` only writes to the local filesystem, even in HTTP output mode. The transcoder explicitly uploads `master.m3u8` via HTTP PUT after FFmpeg starts (2-second delay). If it fails (e.g., sidecar unreachable), `master.m3u8` will be absent from blob storage. The HLS server has a dynamic fallback that generates `master.m3u8` by probing variant playlists.
+
+6. **`STREAM_KEY_PREFIX` path mismatch** — The HTTP ingest pipeline stores blobs at `{eventId}/stream_N/...` (no `live_` prefix). If the HLS server has `STREAM_KEY_PREFIX=live_`, it will look for `live_{eventId}/...` and get 404s. Set `STREAM_KEY_PREFIX` to empty for HTTP ingest deployments.
 
 ---
 
