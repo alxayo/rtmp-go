@@ -6,6 +6,8 @@ properties:
       value: Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
     - name: hls-tenants-json
       value: '{"tenants":{"hls":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"}},"default":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"},"api_fallback":{"enabled":false}}'
+    - name: platform-api-key
+      value: Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
     ingress:
       allowInsecure: true
       external: false
@@ -49,6 +51,12 @@ properties:
       - JB2nN0cGzzylm3lAMQ747wMuo3aCgyM9
       - -log-level
       - info
+      - -platform-url
+      - http://streamgate-platform.internal:3000
+      - -platform-api-key
+      - Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
+      - -codec
+      - h264
       volumeMounts:
       - mountPath: /hls-output
         volumeName: hls-output
