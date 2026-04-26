@@ -59,20 +59,25 @@ type streamProcess struct {
 
 // Transcoder manages FFmpeg processes for active streams.
 type Transcoder struct {
-	config   TranscoderConfig
-	logger   *slog.Logger
-	notifier *SegmentNotifier
-	mu       sync.Mutex
-	streams  map[string]*streamProcess // keyed by stream key
+	config        TranscoderConfig
+	codec         string          // This transcoder's codec identity (e.g., "h264")
+	configFetcher *ConfigFetcher  // Fetches per-event config from Platform API
+	logger        *slog.Logger
+	notifier      *SegmentNotifier
+	mu            sync.Mutex
+	streams       map[string]*streamProcess // keyed by stream key
 }
 
 // NewTranscoder creates a transcoder with the given configuration.
-func NewTranscoder(cfg TranscoderConfig, logger *slog.Logger) *Transcoder {
+// The configFetcher is created in main.go and is process-lifetime scoped.
+func NewTranscoder(cfg TranscoderConfig, codec string, configFetcher *ConfigFetcher, logger *slog.Logger) *Transcoder {
 	return &Transcoder{
-		config:   cfg,
-		logger:   logger,
-		notifier: NewSegmentNotifier(cfg.BlobWebhookURL, logger),
-		streams:  make(map[string]*streamProcess),
+		config:        cfg,
+		codec:         codec,
+		configFetcher: configFetcher,
+		logger:        logger,
+		notifier:      NewSegmentNotifier(cfg.BlobWebhookURL, logger),
+		streams:       make(map[string]*streamProcess),
 	}
 }
 

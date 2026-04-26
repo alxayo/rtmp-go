@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -46,6 +47,18 @@ func main() {
 	ingestURL := flag.String("ingest-url", "", "HTTP ingest base URL for blob-sidecar (required if output-mode=http)")
 	// -ingest-token: Bearer token for authentication to blob-sidecar HTTP ingest (optional, for secure deployments)
 	ingestToken := flag.String("ingest-token", "", "Bearer token for HTTP ingest endpoint authentication (optional)")
+
+	// Platform API flags — for fetching per-event stream configuration (Phase 4)
+	// -platform-url: Base URL of the StreamGate Platform API (required)
+	platformURL := flag.String("platform-url", "", "Platform API base URL for stream config fetch (required)")
+	// -platform-api-key: Internal API key for authentication to Platform API (required)
+	platformAPIKey := flag.String("platform-api-key", "", "Internal API key for Platform API authentication (required)")
+	// -codec: This transcoder's codec identity — used for self-filtering (only start if event has this codec enabled)
+	codec := flag.String("codec", "h264", "Codec this transcoder handles (h264, av1, vp9)")
+	// -config-cache-ttl: How long cached configs stay valid before refresh (applies to both event and system caches)
+	configCacheTTL := flag.Duration("config-cache-ttl", 10*time.Minute, "Config cache TTL (e.g., 10m, 5m)")
+	// -config-fetch-timeout: HTTP timeout for each config fetch request
+	configFetchTimeout := flag.Duration("config-fetch-timeout", 2*time.Second, "Config fetch HTTP timeout (e.g., 2s)")
 
 	flag.Parse()
 
@@ -85,6 +98,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate Platform API requirements — transcoder cannot operate without config fetch.
+	// The four-tier fallback chain (§4.1) assumes the fetcher is configured.
+	if *platformURL == "" {
+		logger.Error("missing required flag: -platform-url")
+		fmt.Fprintf(os.Stderr, "Usage: -platform-url is required for config fetch\n")
+		os.Exit(1)
+	}
+	if *platformAPIKey == "" {
+		logger.Error("missing required flag: -platform-api-key")
+		fmt.Fprintf(os.Stderr, "Usage: -platform-api-key is required for config fetch\n")
+		os.Exit(1)
+	}
+
 	// Build transcoder configuration
 	cfg := TranscoderConfig{
 		HLSDir:         *hlsDir,
@@ -99,7 +125,16 @@ func main() {
 		IngestToken: *ingestToken,
 	}
 
-	transcoder := NewTranscoder(cfg, logger)
+	// Create the config fetcher — fetches per-event and system-wide config from Platform API.
+	// Starts a background goroutine to periodically refresh system defaults.
+	configFetcher := NewConfigFetcher(ConfigFetcherConfig{
+		PlatformURL:  *platformURL,
+		APIKey:       *platformAPIKey,
+		CacheTTL:     *configCacheTTL,
+		FetchTimeout: *configFetchTimeout,
+	}, logger)
+
+	transcoder := NewTranscoder(cfg, *codec, configFetcher, logger)
 
 	// Signal handling — SIGTERM/SIGINT trigger graceful shutdown which kills
 	// all running FFmpeg child processes via context cancellation.
@@ -126,15 +161,19 @@ func main() {
 		"blob_upload", *blobWebhookURL != "",
 		"output_mode", *outputMode,
 		"ingest_url", *ingestURL != "",
+		"codec", *codec,
+		"platform_url", *platformURL,
+		"config_cache_ttl", configCacheTTL.String(),
 	)
 
 	if err := listener.Run(ctx); err != nil && err != context.Canceled {
 		logger.Error("webhook listener error", "error", err)
 	}
 
-	// Graceful shutdown — stop all FFmpeg processes
+	// Graceful shutdown — stop all FFmpeg processes and config fetcher
 	logger.Info("shutting down, stopping all active transcoders...")
 	transcoder.StopAll()
+	configFetcher.Stop()
 	logger.Info("shutdown complete")
 	fmt.Fprintln(os.Stderr, "hls-transcoder stopped")
 }

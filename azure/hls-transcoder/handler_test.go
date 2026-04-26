@@ -25,7 +25,7 @@ func newTestHandler() (*Handler, *fakeTranscoder) {
 		RTMPPort: 1935,
 		Mode:     "abr",
 	}
-	t := NewTranscoder(cfg, noopLogger())
+	t := NewTranscoder(cfg, "h264", nil, noopLogger())
 	h := NewHandler(t, noopLogger())
 	// Replace the real transcoder with our tracking wrapper
 	ft.real = t
@@ -43,7 +43,7 @@ func TestHandler_PublishStart(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -81,7 +81,7 @@ func TestHandler_PublishStop(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -115,7 +115,7 @@ func TestHandler_UnknownEventIgnored(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -148,7 +148,7 @@ func TestHandler_BadJSON(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -173,7 +173,7 @@ func TestHandler_WrongMethod(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -198,7 +198,7 @@ func TestHandler_MissingStreamKey(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()
@@ -231,7 +231,7 @@ func TestHandler_HealthEndpoint(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 	handler := NewHandler(transcoder, noopLogger())
 
 	mux := http.NewServeMux()

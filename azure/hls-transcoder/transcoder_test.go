@@ -71,7 +71,7 @@ func TestTranscoder_BuildRTMPURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tr := NewTranscoder(tt.config, noopLogger())
+			tr := NewTranscoder(tt.config, "h264", nil, noopLogger())
 			got := tr.buildRTMPURL(tt.streamKey)
 			if got != tt.want {
 				t.Errorf("buildRTMPURL(%q) = %q, want %q", tt.streamKey, got, tt.want)
@@ -86,7 +86,7 @@ func TestTranscoder_BuildABRArgs(t *testing.T) {
 		RTMPHost: "rtmp-server",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildABRArgs("rtmp://rtmp-server:1935/live/test", "/hls-output/live_test")
 
@@ -139,7 +139,7 @@ func TestTranscoder_BuildCopyArgs(t *testing.T) {
 		RTMPHost: "rtmp-server",
 		RTMPPort: 1935,
 		Mode:     "copy",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildCopyArgs("rtmp://rtmp-server:1935/live/test", "/hls-output/live_test")
 
@@ -182,14 +182,14 @@ func TestTranscoder_StartIdempotent(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "copy",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// First Start — will fail because ffmpeg isn't available, but that's OK.
 	// We're testing that the map logic works.
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	// Whether it succeeded or failed, calling Start again should not panic.
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	// Cleanup
 	tr.StopAll()
@@ -201,10 +201,10 @@ func TestTranscoder_StopNonExistent(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// Stop on a stream that was never started — should be a no-op
-	tr.Stop("live/nonexistent")
+	tr.Stop("live/nonexistent", "test-conn-1")
 }
 
 func TestTranscoder_StopAll(t *testing.T) {
@@ -213,7 +213,7 @@ func TestTranscoder_StopAll(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// StopAll on empty transcoder — should be a no-op
 	tr.StopAll()
@@ -229,7 +229,7 @@ func TestTranscoder_ActiveStreams(t *testing.T) {
 		RTMPHost: "localhost",
 		RTMPPort: 1935,
 		Mode:     "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	if tr.ActiveStreams() != 0 {
 		t.Errorf("ActiveStreams() = %d, want 0", tr.ActiveStreams())
@@ -320,7 +320,7 @@ func TestTranscoder_BuildHTTPOutputPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tr := NewTranscoder(tt.config, noopLogger())
+			tr := NewTranscoder(tt.config, "h264", nil, noopLogger())
 			got := tr.BuildHTTPOutputPath(tt.eventID)
 
 			if !strings.Contains(got, tt.expectedSuffix) {
@@ -343,7 +343,7 @@ func TestTranscoder_BuildABRArgsHTTP(t *testing.T) {
 	tr := NewTranscoder(TranscoderConfig{
 		IngestURL: "http://blob-sidecar:8081/ingest/",
 		Mode:      "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildABRArgsHTTP("rtmp://rtmp-server:1935/live/test", "live/test")
 	argStr := strings.Join(args, " ")
@@ -382,7 +382,7 @@ func TestTranscoder_BuildABRArgsHTTPWithToken(t *testing.T) {
 		IngestURL:   "http://blob-sidecar:8081/ingest/",
 		IngestToken: "secret-token-xyz",
 		Mode:        "abr",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildABRArgsHTTP("rtmp://rtmp-server:1935/live/test", "live/test")
 	argStr := strings.Join(args, " ")
@@ -401,7 +401,7 @@ func TestTranscoder_BuildCopyArgsHTTP(t *testing.T) {
 	tr := NewTranscoder(TranscoderConfig{
 		IngestURL: "http://blob-sidecar:8081/ingest/",
 		Mode:      "copy",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildCopyArgsHTTP("rtmp://rtmp-server:1935/live/test", "live/test")
 	argStr := strings.Join(args, " ")
@@ -442,7 +442,7 @@ func TestTranscoder_BuildCopyArgsHTTPWithToken(t *testing.T) {
 		IngestURL:   "http://blob-sidecar:8081/ingest/",
 		IngestToken: "auth-token-123",
 		Mode:        "copy",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	args := tr.BuildCopyArgsHTTP("rtmp://rtmp-server:1935/live/test", "live/test")
 	argStr := strings.Join(args, " ")
@@ -464,14 +464,14 @@ func TestTranscoder_StartHTTPMode(t *testing.T) {
 		Mode:       "abr",
 		OutputMode: "http",
 		IngestURL:  "http://blob-sidecar:8081/ingest/",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// Start should succeed (FFmpeg won't be found, but configuration validation passes)
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	// Even though FFmpeg won't actually start, the idempotency logic should track the attempt
 	// A second call should be ignored
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	tr.StopAll()
 }
@@ -485,10 +485,10 @@ func TestTranscoder_StartHTTPModeMissingIngestURL(t *testing.T) {
 		Mode:       "abr",
 		OutputMode: "http",
 		IngestURL:  "", // Missing required URL
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// Start should fail due to validation error
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	if tr.ActiveStreams() != 0 {
 		t.Errorf("After failed start, ActiveStreams() = %d, want 0", tr.ActiveStreams())
@@ -506,10 +506,10 @@ func TestTranscoder_NoSegmentNotifierInHTTPMode(t *testing.T) {
 		OutputMode:     "http",
 		IngestURL:      "http://blob-sidecar:8081/ingest/",
 		BlobWebhookURL: "http://blob-sidecar:8090/webhook", // Notifier enabled but should not be used in HTTP mode
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
 	// Start call will fail to launch FFmpeg (not installed), but we're testing the logic path
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	// Verify that even though BlobWebhookURL is set, the segment notifier wasn't started.
 	// (In real deployment, we'd verify no polling goroutine spawned, but that's hard to test
@@ -528,9 +528,9 @@ func TestTranscoder_LocalDirectoryNotCreatedInHTTPMode(t *testing.T) {
 		Mode:       "abr",
 		OutputMode: "http",
 		IngestURL:  "http://blob-sidecar:8081/ingest/",
-	}, noopLogger())
+	}, "h264", nil, noopLogger())
 
-	tr.Start("live/test")
+	tr.Start("live/test", "test-conn-1")
 
 	// In HTTP mode, no local directory should be created
 	// (Check that subdirectory wasn't created - it won't exist because Start fails on FFmpeg)
