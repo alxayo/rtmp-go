@@ -52,6 +52,7 @@ type TranscoderConfig struct {
 type streamProcess struct {
 	cmd          *exec.Cmd
 	streamKey    string
+	connID       string // RTMP connection ID for start/stop correlation
 	outputDir    string
 	cancelNotify context.CancelFunc // cancels the segment notifier goroutine
 }
@@ -97,12 +98,12 @@ func (cfg *TranscoderConfig) ValidateHTTPConfig() error {
 //
 // The FFmpeg process subscribes to the RTMP stream and outputs HLS segments
 // according to the configured mode and transcoding settings.
-func (t *Transcoder) Start(streamKey string) {
+func (t *Transcoder) Start(streamKey, connID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if _, exists := t.streams[streamKey]; exists {
-		t.logger.Info("transcoding already active, ignoring duplicate start", "stream_key", streamKey)
+		t.logger.Info("transcoding already active, ignoring duplicate start", "stream_key", streamKey, "conn_id", connID)
 		return
 	}
 
@@ -212,12 +213,13 @@ func (t *Transcoder) Start(streamKey string) {
 	sp := &streamProcess{
 		cmd:          cmd,
 		streamKey:    streamKey,
+		connID:       connID,
 		outputDir:    outputDir,
 		cancelNotify: cancelNotify,
 	}
 	t.streams[streamKey] = sp
 
-	t.logger.Info("FFmpeg transcoder started", "stream_key", streamKey, "pid", cmd.Process.Pid)
+	t.logger.Info("FFmpeg transcoder started", "stream_key", streamKey, "conn_id", connID, "pid", cmd.Process.Pid)
 
 	// Monitor FFmpeg process in background — log exit status and clean up map entry
 	go t.monitor(sp)
@@ -225,14 +227,28 @@ func (t *Transcoder) Start(streamKey string) {
 
 // Stop terminates the FFmpeg process for the given stream key.
 // Sends SIGTERM for graceful shutdown (FFmpeg finalizes HLS playlists).
-func (t *Transcoder) Stop(streamKey string) {
+func (t *Transcoder) Stop(streamKey, connID string) {
 	t.mu.Lock()
 	sp, exists := t.streams[streamKey]
 	if !exists {
 		t.mu.Unlock()
-		t.logger.Debug("no active transcoder for stream, ignoring stop", "stream_key", streamKey)
+		t.logger.Debug("no active transcoder for stream, ignoring stop", "stream_key", streamKey, "conn_id", connID)
 		return
 	}
+
+	// ConnID guard: if the stop is from a different connection than the one
+	// that started this process, ignore it. This prevents a stale publish_stop
+	// from killing a newly started transcoder for the same stream key.
+	if sp.connID != connID {
+		t.mu.Unlock()
+		t.logger.Warn("ignoring stop from mismatched conn_id",
+			"stream_key", streamKey,
+			"stop_conn_id", connID,
+			"active_conn_id", sp.connID,
+		)
+		return
+	}
+
 	delete(t.streams, streamKey)
 	t.mu.Unlock()
 
@@ -241,7 +257,7 @@ func (t *Transcoder) Stop(streamKey string) {
 		sp.cancelNotify()
 	}
 
-	t.logger.Info("stopping FFmpeg transcoder", "stream_key", streamKey, "pid", sp.cmd.Process.Pid)
+	t.logger.Info("stopping FFmpeg transcoder", "stream_key", streamKey, "conn_id", connID, "pid", sp.cmd.Process.Pid)
 
 	// Send SIGTERM to the process group for clean shutdown
 	if err := syscall.Kill(-sp.cmd.Process.Pid, syscall.SIGTERM); err != nil {
@@ -254,17 +270,21 @@ func (t *Transcoder) Stop(streamKey string) {
 // StopAll terminates all active FFmpeg processes. Called during graceful shutdown.
 func (t *Transcoder) StopAll() {
 	t.mu.Lock()
-	keys := make([]string, 0, len(t.streams))
-	for k := range t.streams {
-		keys = append(keys, k)
+	type streamInfo struct {
+		key    string
+		connID string
+	}
+	streams := make([]streamInfo, 0, len(t.streams))
+	for k, sp := range t.streams {
+		streams = append(streams, streamInfo{key: k, connID: sp.connID})
 	}
 	t.mu.Unlock()
 
-	for _, key := range keys {
-		t.Stop(key)
+	for _, s := range streams {
+		t.Stop(s.key, s.connID)
 	}
 
-	t.logger.Info("all transcoders stopped", "count", len(keys))
+	t.logger.Info("all transcoders stopped", "count", len(streams))
 }
 
 // ActiveStreams returns the number of currently active transcoding sessions.

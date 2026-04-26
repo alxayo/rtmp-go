@@ -59,22 +59,22 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 
 	switch event.Type {
 	case "publish_start":
-		h.logger.Info("publish_start event received", "stream_key", event.StreamKey)
+		h.logger.Info("publish_start event received", "stream_key", event.StreamKey, "conn_id", event.ConnID)
 		if event.StreamKey == "" {
 			h.logger.Warn("publish_start event missing stream_key")
 			http.Error(w, "missing stream_key", http.StatusBadRequest)
 			return
 		}
-		h.transcoder.Start(event.StreamKey)
+		h.transcoder.Start(event.StreamKey, event.ConnID)
 
 	case "publish_stop":
-		h.logger.Info("publish_stop event received", "stream_key", event.StreamKey)
+		h.logger.Info("publish_stop event received", "stream_key", event.StreamKey, "conn_id", event.ConnID)
 		if event.StreamKey == "" {
 			h.logger.Warn("publish_stop event missing stream_key")
 			http.Error(w, "missing stream_key", http.StatusBadRequest)
 			return
 		}
-		h.transcoder.Stop(event.StreamKey)
+		h.transcoder.Stop(event.StreamKey, event.ConnID)
 
 	default:
 		h.logger.Debug("ignoring event", "type", event.Type, "stream_key", event.StreamKey)
