@@ -37,11 +37,17 @@ Generates a `master.m3u8` with `#EXT-X-STREAM-INF` entries for each rendition.
 |------|-------|---------|
 | `-async` | `1` | Resample audio to fix non-monotonic DTS timestamps |
 | `-vsync` | `cfr` | Constant frame rate — prevents frame timing drift |
-| `-hls_time` | `3` | 3-second segments (balanced for Azure upload pipeline) |
-| `-hls_list_size` | `6` | 18-second playlist window (6 × 3s) |
+| `-hls_time` | `2` (configurable) | 2-second segments (optimized for low latency with HTTP ingest) |
+| `-hls_list_size` | `6` (configurable) | 12-second playlist window (6 × 2s) |
 | `-hls_flags` | `independent_segments` | Each segment independently decodable; avoids `delete_segments` which races with blob-sidecar on Azure Files SMB |
-| `-force_key_frames` | `expr:gte(t,n_forced*2)` | Aligned keyframes every 2s across renditions |
+| `-force_key_frames` | `expr:gte(t,n_forced*2)` (configurable) | Aligned keyframes every 2s across renditions |
 | `-sc_threshold` | `0` | Disable scene-change keyframes (keeps GOP alignment) |
+| `-tune` | `zerolatency` (configurable) | Disables B-frames for lower encoding latency (adds ~5% bitrate) |
+| `-preset` | `ultrafast` (configurable) | Fastest encoding speed, lowest CPU usage |
+
+:::note
+When `-platform-url` is configured, all "configurable" flags above are fetched dynamically from the Platform App on each `publish_start`. This allows per-event tuning from the admin UI without redeploying the transcoder.
+:::
 
 **Resource requirements:** 2 vCPU / 4 GiB (Azure deployment)
 
@@ -132,8 +138,41 @@ See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md) for detaile
 | `-output-mode` | `file` | Output mode: `file` (local filesystem) or `http` (blob-sidecar HTTP ingest) |
 | `-ingest-url` | _(empty)_ | HTTP ingest base URL for blob-sidecar (required if `-output-mode http`) |
 | `-ingest-token` | _(empty)_ | Bearer token for HTTP ingest endpoint authentication (optional, for secure deployments) |
+| `-platform-url` | _(empty)_ | Platform App base URL for fetching stream config (e.g., `https://sg-platform.example.com`) |
+| `-platform-api-key` | _(empty)_ | `X-Internal-Api-Key` for authenticating with Platform App internal endpoints |
+| `-codec` | `h264` | Codec this transcoder instance handles (used to filter config from Platform API) |
 | `-blob-webhook-url` | _(empty)_ | Webhook URL for blob-sidecar segment upload (file mode only; empty = no blob upload) |
 | `-log-level` | `info` | Log level: debug, info, warn, error |
+
+## Dynamic Stream Configuration
+
+When `-platform-url` and `-platform-api-key` are set, the transcoder fetches per-event stream configuration from the Platform App instead of using hardcoded FFmpeg arguments.
+
+### Config Fetch Flow
+
+1. **Startup**: Fetches system-wide defaults from `GET /api/internal/stream-config/defaults` and caches them (refreshed every 10 minutes)
+2. **On `publish_start`**: Fetches per-event config from `GET /api/internal/events/:id/stream-config` using the event ID extracted from the stream key
+3. **FFmpeg args**: Built dynamically from the fetched config — rendition profile, segment duration, H.264 tune/preset, keyframe interval, etc.
+
+### Failure Policy
+
+| Fetch Result | Behavior |
+|---|---|
+| `200 OK` with valid config | Use fetched per-event config |
+| Timeout / network error / `5xx` | Fall back to cached system defaults |
+| `404 Not Found` | Do not transcode (event inactive or missing) |
+| `403 Forbidden` | Do not transcode (auth failure) |
+| Malformed config | Log error, fall back to system defaults |
+
+### Config Types (Go)
+
+The Go types in `config_types.go` mirror the TypeScript `TranscoderConfig` / `PlayerConfig` interfaces in `@streaming/shared`. Both must stay in sync.
+
+Key types:
+- `EventTranscoderConfig` — per-event transcoder settings (profile, hlsTime, h264 tune/preset, etc.)
+- `EventPlayerConfig` — per-event player settings (liveSyncDurationCount, lowLatencyMode, etc.)
+- `StreamConfigResponse` — API response wrapper with eventId, configSource, and nested config
+- `RenderProfile` — maps profile names to rendition lists (must match `RENDER_PROFILES` in TypeScript)
 
 ## Endpoints
 

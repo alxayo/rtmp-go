@@ -77,8 +77,10 @@ renditions:
 Key alignment parameters:
 - `-force_key_frames "expr:gte(t,n_forced*2)"` — keyframe every 2 seconds
 - `-sc_threshold 0` — disable scene-change detection for predictable segments
-- `-hls_time 2` — 2-second HLS segments
-- `-hls_list_size 10` — keep last 10 segments in playlist
+- `-hls_time 2` — 2-second HLS segments (configurable via Platform API)
+- `-hls_list_size 6` — keep last 6 segments in playlist (configurable)
+- `-tune zerolatency` — disable B-frames for lower encoding latency (configurable)
+- `-preset ultrafast` — fastest encoding speed (configurable)
 
 **Resource requirements:** 4 vCPU / 8 GiB
 
@@ -102,7 +104,41 @@ Produces single-bitrate output at source quality.
 | `-output-mode` | `file` | `file` (local filesystem) or `http` (HTTP ingest to blob-sidecar) |
 | `-ingest-url` | _(empty)_ | HTTP ingest base URL (required for `-output-mode http`) |
 | `-ingest-token` | _(empty)_ | Bearer token for HTTP ingest authentication |
+| `-platform-url` | _(empty)_ | Platform App URL for dynamic stream config |
+| `-platform-api-key` | _(empty)_ | Internal API key for Platform App authentication |
+| `-codec` | `h264` | Codec this transcoder handles |
 | `-log-level` | `info` | `debug`, `info`, `warn`, `error` |
+
+## Dynamic Stream Configuration
+
+When `-platform-url` is configured, the transcoder fetches per-event stream
+settings from the StreamGate Platform App instead of using hardcoded FFmpeg
+arguments. This enables per-event tuning from the admin UI.
+
+### Config Fetch Flow
+
+1. **Startup**: Fetches system defaults from `GET /api/internal/stream-config/defaults`
+   (cached, refreshed every 10 minutes)
+2. **On `publish_start`**: Fetches per-event config from
+   `GET /api/internal/events/:id/stream-config` (event ID from stream key)
+3. **FFmpeg arg builder**: Constructs command-line args dynamically from config —
+   rendition profile, segment duration, H.264 tune/preset, keyframe interval, etc.
+
+### Failure Policy
+
+| Fetch Result | Behavior |
+|---|---|
+| `200 OK` with valid config | Use per-event config |
+| Timeout / `5xx` | Fall back to cached system defaults |
+| `404 Not Found` | Do not transcode |
+| `403 Forbidden` | Do not transcode |
+
+### Publish Start/Stop Correlation
+
+The transcoder uses connection ID correlation to prevent race conditions when
+a new RTMP stream connects while the old stream's `publish_stop` is in flight.
+Each `streamProcess` stores the `connID` from the webhook event; `Stop()` only
+kills the FFmpeg process if the connID matches.
 
 ## Cost Analysis
 
