@@ -7,7 +7,7 @@ properties:
     - name: hls-tenants-json
       value: '{"tenants":{"hls":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"}},"default":{"storage_account":"https://azstdu7fhxanu5cak.blob.core.windows.net","container":"hls-content","credential":"managed-identity"},"api_fallback":{"enabled":false}}'
     - name: platform-api-key
-      value: Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
+      value: eeb8ed29f5790d256132adc39060e18aa7cafcd9b72d81f6
     ingress:
       allowInsecure: true
       external: false
@@ -52,9 +52,9 @@ properties:
       - -log-level
       - info
       - -platform-url
-      - http://streamgate-platform.internal:3000
+      - https://sg-platform-olog3klyrk7fw.delightfulglacier-111baa9d.eastus2.azurecontainerapps.io
       - -platform-api-key
-      - Yq78g17X4ZGgRdl44xHTDCcQffYalJHp
+      - eeb8ed29f5790d256132adc39060e18aa7cafcd9b72d81f6
       - -codec
       - h264
       volumeMounts:
