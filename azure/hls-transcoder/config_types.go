@@ -64,18 +64,18 @@ type H264Config struct {
 // VideoPlayer component, not by the transcoder. The transcoder receives them
 // in the API response but doesn't use them directly.
 type EventPlayerConfig struct {
-	LiveSyncDurationCount      int  `json:"liveSyncDurationCount"`
+	LiveSyncDurationCount       int  `json:"liveSyncDurationCount"`
 	LiveMaxLatencyDurationCount int  `json:"liveMaxLatencyDurationCount"`
-	BackBufferLength           int  `json:"backBufferLength"`
-	LowLatencyMode             bool `json:"lowLatencyMode"`
+	BackBufferLength            int  `json:"backBufferLength"`
+	LowLatencyMode              bool `json:"lowLatencyMode"`
 }
 
 // StreamConfigResponse is the full response from GET /api/internal/events/:id/stream-config.
 // The transcoder uses this to configure FFmpeg for a specific event.
 type StreamConfigResponse struct {
-	EventID      string               `json:"eventId"`
-	EventActive  bool                 `json:"eventActive"`
-	ConfigSource string               `json:"configSource"` // "event" or "system-default"
+	EventID      string                `json:"eventId"`
+	EventActive  bool                  `json:"eventActive"`
+	ConfigSource string                `json:"configSource"` // "event" or "system-default"
 	Transcoder   EventTranscoderConfig `json:"transcoder"`
 	Player       EventPlayerConfig     `json:"player"`
 }
@@ -135,8 +135,8 @@ var DefaultEventTranscoderConfig = EventTranscoderConfig{
 // DefaultEventPlayerConfig is the hardcoded fallback for player settings.
 // Matches DEFAULT_PLAYER_CONFIG in shared/src/stream-config.ts.
 var DefaultEventPlayerConfig = EventPlayerConfig{
-	LiveSyncDurationCount:      2,
+	LiveSyncDurationCount:       2,
 	LiveMaxLatencyDurationCount: 4,
-	BackBufferLength:           0,
-	LowLatencyMode:             true,
+	BackBufferLength:            0,
+	LowLatencyMode:              true,
 }

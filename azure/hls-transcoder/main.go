@@ -120,8 +120,8 @@ func main() {
 		Mode:           *mode,
 		BlobWebhookURL: *blobWebhookURL,
 		// HTTP output mode (Phase 2)
-		OutputMode: *outputMode,
-		IngestURL:  *ingestURL,
+		OutputMode:  *outputMode,
+		IngestURL:   *ingestURL,
 		IngestToken: *ingestToken,
 	}
 

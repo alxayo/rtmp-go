@@ -59,8 +59,8 @@ type ConfigFetcher struct {
 
 	// System defaults cache — refreshed periodically in background.
 	// Protected by its own mutex so it doesn't block per-event fetches.
-	systemMu       sync.RWMutex
-	systemDefaults *SystemDefaultsResponse
+	systemMu        sync.RWMutex
+	systemDefaults  *SystemDefaultsResponse
 	systemFetchedAt time.Time
 
 	// Per-event config cache — keyed by event ID.
@@ -76,9 +76,9 @@ type ConfigFetcher struct {
 // system defaults refresh loop.
 func NewConfigFetcher(cfg ConfigFetcherConfig, logger *slog.Logger) *ConfigFetcher {
 	cf := &ConfigFetcher{
-		cfg:    cfg,
-		logger: logger,
-		client: &http.Client{Timeout: cfg.FetchTimeout},
+		cfg:        cfg,
+		logger:     logger,
+		client:     &http.Client{Timeout: cfg.FetchTimeout},
 		eventCache: make(map[string]*cachedConfig),
 		stopCh:     make(chan struct{}),
 	}
@@ -242,9 +242,10 @@ func (cf *ConfigFetcher) FetchEventConfig(eventID string) (*StreamConfigResponse
 }
 
 // fallback implements the fallback chain when a per-event fetch fails:
-//   Tier 2: cached per-event config within TTL
-//   Tier 3: cached system defaults
-//   Tier 4: hardcoded Go constants
+//
+//	Tier 2: cached per-event config within TTL
+//	Tier 3: cached system defaults
+//	Tier 4: hardcoded Go constants
 func (cf *ConfigFetcher) fallback(eventID string, fetchErr error) (*StreamConfigResponse, string, error) {
 	// Tier 2: Check per-event cache
 	cf.eventMu.RLock()

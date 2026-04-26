@@ -360,7 +360,7 @@ func TestTranscoder_BuildABRArgsHTTP(t *testing.T) {
 		"-c:v:0 copy",
 		"-c:v:1 libx264",
 		"-c:v:2 libx264",
-		"-hls_time 3",
+		"-hls_time 2",
 		"-hls_list_size 6",
 	}
 
@@ -412,7 +412,7 @@ func TestTranscoder_BuildCopyArgsHTTP(t *testing.T) {
 		"-c copy",
 		"-fflags +genpts+discardcorrupt",
 		"-err_detect ignore_err",
-		"-hls_time 3",
+		"-hls_time 2",
 		"-hls_list_size 6",
 	}
 
