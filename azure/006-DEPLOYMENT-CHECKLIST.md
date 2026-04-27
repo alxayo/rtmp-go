@@ -417,6 +417,31 @@ You'll know this is working when:
 
 ---
 
+## Post-Flight Checklist (after each deploy)
+
+Verify these items after every deployment to confirm the system is healthy:
+
+### Image & Revision Checks
+- [ ] Image tags are timestamp-based (not `:latest`) — check ACR or deploy summary output for tags like `v1719500000`
+- [ ] Deploy health checks passed — look for `✓ <app-name> is running` in deploy output (no `✗ WARNING` lines)
+
+### Secrets & Config
+- [ ] `INTERNAL_API_KEY` is set on both rtmp-server (env var) and hls-transcoder (`-platform-api-key` flag)
+- [ ] Config API connectivity works:
+  ```bash
+  curl -s -H "X-Internal-Api-Key: <key>" \
+    "https://watch.port-80.com/api/internal/config?keys=PLAYBACK_SIGNING_SECRET"
+  # Expected: {"data":{"PLAYBACK_SIGNING_SECRET":"..."}}
+  ```
+- [ ] rtmp-server logs show successful config fetch at startup (grep for "config fetch")
+
+### Service Health
+- [ ] All container apps show `Running` status in `az containerapp list`
+- [ ] HLS server health: `curl -s https://hls.port-80.com/health` returns 200
+- [ ] Platform health: `curl -sI https://watch.port-80.com/` returns 200/302
+
+---
+
 ## Final Notes
 
 - This is **production-ready architecture**

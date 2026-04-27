@@ -94,6 +94,10 @@ This document outlines the deployment of RTMP-go to Azure Container Apps with **
 └─────────────────────────────────────────────────────────┘
 ```
 
+#### Config Fetch at Startup
+
+Services can fetch missing configuration from the StreamGate Platform's `/api/internal/config` endpoint at startup, authenticated via `X-Internal-Api-Key` header. This reduces the number of secrets that must be passed through infrastructure parameters — only `INTERNAL_API_KEY` is needed per service, and the platform becomes the single source of truth for shared secrets like `PLAYBACK_SIGNING_SECRET`.
+
 ---
 
 ## Timeline: Broadcast Day

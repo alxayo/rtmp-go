@@ -513,9 +513,11 @@ All three images are built remotely using ACR Tasks (no local Docker required):
 
 | Image | Dockerfile | Build Context | Base Image |
 |-------|-----------|---------------|------------|
-| `rtmp-server:latest` | `Dockerfile` (repo root) | repo root | `golang:1.25-alpine` → `distroless/static` |
-| `blob-sidecar:latest` | `azure/blob-sidecar/Dockerfile` | `azure/blob-sidecar/` | `golang:1.25-alpine` → `distroless/static` |
-| `hls-transcoder:latest` | `azure/hls-transcoder/Dockerfile` | `azure/hls-transcoder/` | `golang:1.25-alpine` → `alpine:3.20` + FFmpeg |
+| `rtmp-server:<tag>` | `Dockerfile` (repo root) | repo root | `golang:1.25-alpine` → `distroless/static` |
+| `blob-sidecar:<tag>` | `azure/blob-sidecar/Dockerfile` | `azure/blob-sidecar/` | `golang:1.25-alpine` → `distroless/static` |
+| `hls-transcoder:<tag>` | `azure/hls-transcoder/Dockerfile` | `azure/hls-transcoder/` | `golang:1.25-alpine` → `alpine:3.20` + FFmpeg |
+
+> **Image tags**: `deploy.sh` uses timestamp-based tags (`v<epoch>`, e.g. `v1719500000`) instead of `:latest`. This ensures each deployment creates a new revision and avoids stale image caching. The tag is printed in the deployment summary output.
 
 ---
 
@@ -798,7 +800,7 @@ File: `streamgate/azure/infra/main.bicep`
 
 | Variable | Value in Bicep | Description |
 |----------|---------------|-------------|
-| *(CLI args, not env vars)* | | rtmp-server uses CLI flags, not env vars |
+| `INTERNAL_API_KEY` | Secret ref | Key for platform API access (config fetch + RTMP auth callback) |
 
 The rtmp-server container uses **CLI arguments** in its command array:
 
@@ -817,6 +819,8 @@ The rtmp-server container uses **CLI arguments** in its command array:
 -hook-webhook "publish_stop=http://<transcoder-fqdn>/hooks"
 -hook-concurrency 20
 ```
+
+> **Remote config fetch**: At startup, rtmp-server calls `configfetch.FetchRemoteConfig()` to retrieve `PLAYBACK_SIGNING_SECRET` and `RTMP_AUTH_TOKEN` from the platform API if they are not already set in the environment. This requires `INTERNAL_API_KEY` and the platform URL. See [§12.4](#124-remote-config-fetch-rtmp-server) for details.
 
 ### 9.2 blob-sidecar Container
 
@@ -1011,6 +1015,21 @@ sg-hls → GET /api/revocations?since=<timestamp> → sg-platform
            └─ Returns revoked token IDs + deactivated event IDs
 ```
 
+### 12.4 Remote Config Fetch (rtmp-server)
+
+The `configfetch` package (`internal/configfetch/`) allows rtmp-server to fetch missing secrets from the platform at startup, removing the need to pass every secret through Bicep parameters.
+
+```
+rtmp-server (startup) → GET /api/internal/config?keys=PLAYBACK_SIGNING_SECRET,RTMP_AUTH_TOKEN → sg-platform
+                          │
+                          ├─ Header: X-Internal-Api-Key: <INTERNAL_API_KEY>
+                          ├─ Only requests keys not already in environment
+                          ├─ Sets fetched values via os.Setenv()
+                          └─ Non-fatal on failure (logs warning, continues with env vars)
+```
+
+This requires `INTERNAL_API_KEY` to be set on rtmp-server (added to Bicep as `internalApiKey` param → secret). The hls-transcoder also receives the key via the `-platform-api-key` flag for its own platform API calls.
+
 ---
 
 ## 13. Post-Deployment Validation
@@ -1087,7 +1106,36 @@ ACR_NAME="azacrdu7fhxanu5cak"
 az acr repository list --name $ACR_NAME --output table
 
 # Expected: rtmp-server, blob-sidecar, hls-transcoder, streamgate-platform, streamgate-hls
+
+# Verify image tags are timestamp-based (not :latest)
+az acr repository show-tags --name $ACR_NAME --repository rtmp-server --output table
+# Expected: tags like v1719500000 (not "latest")
 ```
+
+### 13.5a Verify Config API Connectivity
+
+Confirm rtmp-server can reach the platform config endpoint (used for remote config fetch at startup):
+
+```bash
+# From your machine (replace <key> with your INTERNAL_API_KEY)
+curl -s -H "X-Internal-Api-Key: <key>" \
+  "https://watch.port-80.com/api/internal/config?keys=PLAYBACK_SIGNING_SECRET"
+# Expected: {"data":{"PLAYBACK_SIGNING_SECRET":"..."}}
+
+# Check rtmp-server logs for successful config fetch
+az containerapp logs show --name <rtmp-app-name> -g rg-rtmpgo --tail 20 \
+  | grep -i "config fetch"
+```
+
+### 13.5b Verify Deploy Health Checks
+
+The deploy script runs `verify_deployment()` for each container app after deployment. Look for `✓` markers in the deploy output:
+
+```
+✓ <app-name> is running
+```
+
+If any app shows `✗ WARNING`, check the Azure Portal for revision provisioning errors.
 
 ### 13.6 Verify DNS (if configured)
 

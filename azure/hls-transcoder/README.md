@@ -144,6 +144,25 @@ See [docs/obs-streaming-guide.md](../../docs/obs-streaming-guide.md) for detaile
 | `-blob-webhook-url` | _(empty)_ | Webhook URL for blob-sidecar segment upload (file mode only; empty = no blob upload) |
 | `-log-level` | `info` | Log level: debug, info, warn, error |
 
+## Remote Config Fetch
+
+At startup and on each `publish_start`, the transcoder fetches configuration from the Platform App when `-platform-url` and `-platform-api-key` are set:
+
+1. **Startup**: Fetches system defaults from `GET /api/internal/stream-config/defaults` (cached, refreshed every 10 min)
+2. **On `publish_start`**: Fetches per-event config from `GET /api/internal/events/:id/stream-config` using the event ID from the stream key
+
+The `-platform-api-key` value is passed as `X-Internal-Api-Key` header. In Azure, this is injected via the Bicep `internalApiKey` parameter as a Container Apps secret.
+
+See [007-HLS-TRANSCODER.md](../../azure/007-HLS-TRANSCODER.md) for the full failure policy and config types reference.
+
+## Disconnect Notification
+
+On `publish_stop`, the transcoder sends `POST /api/rtmp/disconnect` to the Platform App to notify it that the stream has ended. This allows the platform to immediately clean up active viewer sessions rather than waiting for the session timeout (default 60s). The platform also auto-expires sessions older than 12 hours as a safety net.
+
+## Blob Storage Paths
+
+The transcoder uses the **event UUID** (returned by the Platform API) for blob storage paths — not a hash of the stream key. This ensures blob paths like `{eventId}/stream_N/seg_XXXXX.ts` match the event IDs used by the HLS server for playback lookups.
+
 ## Dynamic Stream Configuration
 
 When `-platform-url` and `-platform-api-key` are set, the transcoder fetches per-event stream configuration from the Platform App instead of using hardcoded FFmpeg arguments.

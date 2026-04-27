@@ -60,6 +60,25 @@ Publisher (OBS/FFmpeg)
    `hls-output` Azure Files share
 5. When the publisher disconnects, rtmp-server fires `publish_stop` webhook
 6. hls-transcoder sends SIGTERM to FFmpeg, which finalizes playlists and exits
+7. hls-transcoder sends `POST /api/rtmp/disconnect` to the Platform App,
+   notifying it that the stream has ended so the platform can clean up active
+   sessions (prevents stale sessions lingering for viewers)
+
+## Startup Config Sequence
+
+When `-platform-url` and `-platform-api-key` are configured, the transcoder
+fetches dynamic configuration from the Platform App at two points:
+
+1. **Startup**: Fetches system-wide defaults from
+   `GET /api/internal/stream-config/defaults` (cached, refreshed every 10 min)
+2. **On `publish_start`**: Fetches per-event config from
+   `GET /api/internal/events/:id/stream-config` using the event ID extracted
+   from the RTMP stream key. This enables per-event tuning (rendition profile,
+   segment duration, H.264 preset, etc.) from the admin UI without redeploying.
+
+The `-platform-api-key` flag provides the `X-Internal-Api-Key` header value.
+This key is injected via Bicep as a Container Apps secret (see `main.bicep`
+`internalApiKey` parameter).
 
 ## Transcoding Modes
 
@@ -172,6 +191,11 @@ segment and uploads it to Azure Blob Storage. No Azure Files mount needed.
   mode. The transcoder's `uploadMasterPlaylist()` function generates and uploads
   `master.m3u8` via HTTP PUT after a 2-second delay.
 - Blob paths: `{eventId}/stream_N/index.m3u8`, `{eventId}/stream_N/seg_XXXXX.ts`
+
+> **UUID-based blob paths**: The transcoder uses the event UUID (from the
+> Platform API response) for blob storage paths — not a hash of the stream key.
+> This ensures blob paths match the event IDs used by the HLS server for
+> playback lookups.
 
 ### Co-located Sidecar via localhost (Phase 4 — current)
 
