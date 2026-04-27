@@ -218,11 +218,18 @@ func (t *Transcoder) Start(streamKey, connID string) {
 	switch t.config.OutputMode {
 	case "http":
 		// HTTP mode: stream directly to blob-sidecar
+		// Use platformEventID (UUID) for blob paths so HLS server can find them
+		blobEventID := platformEventID
+		if blobEventID == "" {
+			// Fallback: extract from stream key (e.g., "live/mystream" → "mystream")
+			parts := strings.Split(streamKey, "/")
+			blobEventID = parts[len(parts)-1]
+		}
 		switch t.config.Mode {
 		case "copy":
-			args = t.buildCopyArgsHTTP(rtmpURL, streamKey, eventConfig)
+			args = t.buildCopyArgsHTTP(rtmpURL, blobEventID, eventConfig)
 		default:
-			args = t.buildABRArgsHTTP(rtmpURL, streamKey, eventConfig)
+			args = t.buildABRArgsHTTP(rtmpURL, blobEventID, eventConfig)
 		}
 	default:
 		// File mode: write to local filesystem (default behavior)
@@ -274,10 +281,15 @@ func (t *Transcoder) Start(streamKey, connID string) {
 	// The master playlist must match the profile's rendition count.
 	if t.config.OutputMode == "http" && t.config.Mode != "copy" {
 		masterContent := generateMasterPlaylist(eventConfig)
+		blobID := platformEventID
+		if blobID == "" {
+			parts := strings.Split(streamKey, "/")
+			blobID = parts[len(parts)-1]
+		}
 		go func() {
 			// Small delay to let FFmpeg initialize and sidecar be ready
 			time.Sleep(2 * time.Second)
-			if err := t.uploadMasterPlaylistContent(streamKey, masterContent); err != nil {
+			if err := t.uploadMasterPlaylistContent(blobID, masterContent); err != nil {
 				t.logger.Error("failed to upload master.m3u8", "stream_key", streamKey, "error", err)
 			}
 		}()
@@ -544,16 +556,13 @@ func (t *Transcoder) buildABRArgs(rtmpURL, outputDir string) []string {
 // The %v is replaced by FFmpeg with the variant number (0, 1, 2 for ABR; omitted for copy).
 // If IngestToken is set, it's passed via X-Token header during PUT operations.
 func (t *Transcoder) buildHTTPOutputPath(eventID string) string {
-	// Extract event ID from stream key (e.g., "live/mystream" → "mystream")
-	parts := strings.Split(eventID, "/")
-	safeName := parts[len(parts)-1]
-
+	// eventID is already the clean identifier (UUID or slug) — no extraction needed.
 	// Base path: http://blob-sidecar:8081/ingest/hls/{eventId}/stream_%v/index.m3u8
 	// For copy mode, omit /stream_%v: http://blob-sidecar:8081/ingest/hls/{eventId}/index.m3u8
 	if t.config.Mode == "copy" {
-		return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + safeName + "/index.m3u8"
+		return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + eventID + "/index.m3u8"
 	}
-	return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + safeName + "/stream_%v/index.m3u8"
+	return strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + eventID + "/stream_%v/index.m3u8"
 }
 
 // buildABRArgsHTTP constructs FFmpeg arguments for multi-bitrate HLS output via HTTP PUT.
@@ -852,10 +861,7 @@ func adjustBufsize(bitrate string) string {
 
 // uploadMasterPlaylistContent uploads dynamic master.m3u8 content to the blob-sidecar.
 // This replaces the old uploadMasterPlaylist that used a hardcoded constant.
-func (t *Transcoder) uploadMasterPlaylistContent(streamKey, content string) error {
-	parts := strings.Split(streamKey, "/")
-	eventID := parts[len(parts)-1]
-
+func (t *Transcoder) uploadMasterPlaylistContent(eventID, content string) error {
 	url := strings.TrimSuffix(t.config.IngestURL, "/") + "/hls/" + eventID + "/master.m3u8"
 
 	body := bytes.NewReader([]byte(content))
@@ -882,15 +888,15 @@ func (t *Transcoder) uploadMasterPlaylistContent(streamKey, content string) erro
 	}
 
 	t.logger.Info("master.m3u8 uploaded via HTTP",
-		"stream_key", streamKey,
+		"event_id", eventID,
 		"url", url,
 		"size", len(content))
 	return nil
 }
 
 // uploadMasterPlaylist uploads the static master.m3u8 (legacy, for backward compatibility).
-func (t *Transcoder) uploadMasterPlaylist(streamKey string) error {
-	return t.uploadMasterPlaylistContent(streamKey, masterPlaylistContent)
+func (t *Transcoder) uploadMasterPlaylist(eventID string) error {
+	return t.uploadMasterPlaylistContent(eventID, masterPlaylistContent)
 }
 
 func writeMasterPlaylist(outputDir string) error {

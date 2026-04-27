@@ -290,22 +290,22 @@ func TestTranscoder_BuildHTTPOutputPath(t *testing.T) {
 		expectedSuffix string
 	}{
 		{
-			name: "ABR mode with stream key",
+			name: "ABR mode with event UUID",
 			config: TranscoderConfig{
 				IngestURL: "http://blob-sidecar:8081/ingest/",
 				Mode:      "abr",
 			},
-			eventID:        "live/mystream",
-			expectedSuffix: "hls/mystream/stream_%v/index.m3u8",
+			eventID:        "3031ddbb-de06-4518-a2ca-72d25227744e",
+			expectedSuffix: "hls/3031ddbb-de06-4518-a2ca-72d25227744e/stream_%v/index.m3u8",
 		},
 		{
-			name: "copy mode with stream key",
+			name: "copy mode with event UUID",
 			config: TranscoderConfig{
 				IngestURL: "http://blob-sidecar:8081/ingest/",
 				Mode:      "copy",
 			},
-			eventID:        "live/mystream",
-			expectedSuffix: "hls/mystream/index.m3u8",
+			eventID:        "3031ddbb-de06-4518-a2ca-72d25227744e",
+			expectedSuffix: "hls/3031ddbb-de06-4518-a2ca-72d25227744e/index.m3u8",
 		},
 		{
 			name: "handles trailing slash in ingest URL",
@@ -313,8 +313,8 @@ func TestTranscoder_BuildHTTPOutputPath(t *testing.T) {
 				IngestURL: "http://blob-sidecar:8081/ingest", // no trailing slash
 				Mode:      "abr",
 			},
-			eventID:        "live/test",
-			expectedSuffix: "hls/test/stream_%v/index.m3u8",
+			eventID:        "abc123-def456",
+			expectedSuffix: "hls/abc123-def456/stream_%v/index.m3u8",
 		},
 	}
 
