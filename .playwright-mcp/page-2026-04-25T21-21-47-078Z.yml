@@ -1,0 +1,15 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - img [ref=e7]
+        - heading "StreamGate" [level=3] [ref=e9]
+        - paragraph [ref=e10]: Enter your access code to start watching
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - textbox "Enter your access code" [active] [ref=e14]
+          - paragraph [ref=e15]: Enter the code from your ticket
+        - button "Watch Now" [disabled]
+    - region "Notifications (F8)":
+      - list
+  - alert [ref=e16]

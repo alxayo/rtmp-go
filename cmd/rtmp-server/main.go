@@ -194,7 +194,7 @@ func main() {
 }
 
 // buildAuthValidator creates the appropriate auth.Validator based on CLI flags.
-func buildAuthValidator(cfg *cliConfig, log interface{ Info(string, ...any) }) (auth.Validator, error) {
+func buildAuthValidator(cfg *cliConfig, log interface{ Info(string, ...any); Debug(string, ...any) }) (auth.Validator, error) {
 	switch cfg.authMode {
 	case "token":
 		tokens := make(map[string]string, len(cfg.authTokens))
@@ -213,6 +213,15 @@ func buildAuthValidator(cfg *cliConfig, log interface{ Info(string, ...any) }) (
 		if timeout == 0 {
 			timeout = 5 * time.Second
 		}
+
+		// Check for INTERNAL_API_KEY for per-event token support
+		apiKey := os.Getenv("INTERNAL_API_KEY")
+		if apiKey != "" {
+			log.Debug("initializing callback validator with per-event token support")
+			return auth.NewCallbackValidatorWithAPIKey(cfg.authCallbackURL, timeout, apiKey), nil
+		}
+
+		log.Debug("initializing callback validator with legacy format")
 		return auth.NewCallbackValidator(cfg.authCallbackURL, timeout), nil
 	default: // "none"
 		return &auth.AllowAllValidator{}, nil
