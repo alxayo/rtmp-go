@@ -78,6 +78,7 @@ type StreamConfigResponse struct {
 	ConfigSource string                `json:"configSource"` // "event" or "system-default"
 	Transcoder   EventTranscoderConfig `json:"transcoder"`
 	Player       EventPlayerConfig     `json:"player"`
+	RTMPToken    string                `json:"rtmpToken,omitempty"` // Per-event RTMP auth token
 }
 
 // SystemDefaultsResponse is the response from GET /api/internal/stream-config/defaults.

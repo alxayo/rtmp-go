@@ -117,6 +117,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 	// Extract event ID from stream key (e.g., "live/uuid" → "uuid")
 	var eventConfig *EventTranscoderConfig
 	var configSource string
+	var perEventToken string
 
 	if t.configFetcher != nil {
 		eventID, err := extractEventID(streamKey)
@@ -149,6 +150,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 
 		eventConfig = &streamCfg.Transcoder
 		configSource = source
+		perEventToken = streamCfg.RTMPToken
 	} else {
 		// No config fetcher (e.g., in tests) — use hardcoded defaults
 		defaults := DefaultEventTranscoderConfig
@@ -168,7 +170,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 	safeKey := sanitizeStreamKey(streamKey)
 
 	// Build the RTMP source URL
-	rtmpURL := t.buildRTMPURL(streamKey)
+	rtmpURL := t.buildRTMPURL(streamKey, perEventToken)
 
 	// Validate HTTP configuration before proceeding
 	if err := t.config.ValidateHTTPConfig(); err != nil {
@@ -385,10 +387,15 @@ func (t *Transcoder) monitor(sp *streamProcess) {
 }
 
 // buildRTMPURL constructs the RTMP URL for subscribing to a stream.
-func (t *Transcoder) buildRTMPURL(streamKey string) string {
+// If perEventToken is non-empty, it takes precedence over the static config token.
+func (t *Transcoder) buildRTMPURL(streamKey string, perEventToken string) string {
 	url := fmt.Sprintf("rtmp://%s:%d/%s", t.config.RTMPHost, t.config.RTMPPort, streamKey)
-	if t.config.RTMPToken != "" {
-		url += "?token=" + t.config.RTMPToken
+	token := perEventToken
+	if token == "" {
+		token = t.config.RTMPToken
+	}
+	if token != "" {
+		url += "?token=" + token
 	}
 	return url
 }
