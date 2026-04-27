@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alxayo/go-rtmp/internal/configfetch"
 	"github.com/alxayo/go-rtmp/internal/logger"
 	_ "github.com/alxayo/go-rtmp/internal/rtmp/metrics" // Register expvar RTMP counters
 	srv "github.com/alxayo/go-rtmp/internal/rtmp/server"
@@ -28,6 +29,20 @@ func main() {
 	if cfg.showVersion {
 		fmt.Println(version)
 		return
+	}
+
+	// Fetch missing config from platform API before reading env vars.
+	// This is best-effort: if PLATFORM_APP_URL or INTERNAL_API_KEY aren't
+	// set, or the request fails, we log a warning and continue.
+	platformURL := os.Getenv("PLATFORM_APP_URL")
+	apiKey := os.Getenv("INTERNAL_API_KEY")
+	if fetched, err := configfetch.FetchRemoteConfig(platformURL, apiKey, []string{
+		"PLAYBACK_SIGNING_SECRET",
+		"RTMP_AUTH_TOKEN",
+	}); err != nil {
+		fmt.Printf("Warning: remote config fetch failed: %v\n", err)
+	} else if len(fetched) > 0 {
+		fmt.Printf("Loaded %d config key(s) from platform API\n", len(fetched))
 	}
 
 	// Initialize global logger and set level based on flag
