@@ -53,6 +53,10 @@ param hlsTranscoderImage string = ''
 @secure()
 param ingestToken string = 'dev-ingest-token-change-in-production'
 
+@description('Internal API key for authenticating with Platform App (X-Internal-Api-Key header)')
+@secure()
+param internalApiKey string = ''
+
 @description('Maximum upload size for HTTP ingest in bytes (default 50MB for Phase 3)')
 param ingestMaxBodyBytes int = 52428800
 
@@ -321,6 +325,10 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'rtmp-auth-token'
           value: rtmpAuthToken
         }
+        {
+          name: 'internal-api-key'
+          value: internalApiKey
+        }
       ]
     }
     template: {
@@ -366,6 +374,12 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             '-log-level'
             'info'
           ]) : []
+          env: [
+            {
+              name: 'INTERNAL_API_KEY'
+              secretRef: 'internal-api-key'
+            }
+          ]
           volumeMounts: [
             {
               volumeName: 'recordings'
@@ -588,6 +602,10 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
           #disable-next-line use-secure-value-for-secure-inputs
           value: hlsTenantsJsonValue
         }
+        {
+          name: 'internal-api-key'
+          value: internalApiKey
+        }
       ]
     }
     template: {
@@ -624,6 +642,8 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             'http://localhost:8081/ingest/'
             '-ingest-token'
             ingestToken
+            '-platform-api-key'
+            internalApiKey
             '-log-level'
             'info'
           ] : []
