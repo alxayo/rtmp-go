@@ -16,9 +16,42 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# --- Verify container app is running after deployment ---
+verify_deployment() {
+  local app_name="$1"
+  local max_retries=12  # 2 minutes with 10s intervals
+  local retry=0
+
+  echo "  Verifying $app_name..."
+
+  while [ $retry -lt $max_retries ]; do
+    local status
+    status=$(az containerapp revision list \
+      --name "$app_name" \
+      -g "$RESOURCE_GROUP" \
+      --query "[?properties.active].properties.runningState" \
+      -o tsv 2>/dev/null | head -1)
+
+    if echo "$status" | grep -qi "Running"; then
+      echo "    ✓ $app_name is running"
+      return 0
+    fi
+
+    retry=$((retry + 1))
+    echo "    Waiting for $app_name to be ready... ($retry/$max_retries)"
+    sleep 10
+  done
+
+  echo "    ✗ WARNING: $app_name may not be running after deployment"
+  return 1
+}
+
+DEPLOY_WARNINGS=0
+
 # --- Configuration ---
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-rtmpgo}"
 LOCATION="${LOCATION:-eastus2}"
+IMAGE_TAG="v$(date +%s)"
 
 echo "============================================"
 echo "  rtmp-go Azure Deployment"
@@ -80,7 +113,7 @@ echo ">>> Step 3/5: Building Docker images in ACR..."
 echo "    Building rtmp-server..."
 az acr build \
   --registry "$ACR_NAME" \
-  --image rtmp-server:latest \
+  --image "rtmp-server:${IMAGE_TAG}" \
   --file "$PROJECT_ROOT/Dockerfile" \
   "$PROJECT_ROOT" \
   --no-logs --output none
@@ -88,7 +121,7 @@ az acr build \
 echo "    Building blob-sidecar..."
 az acr build \
   --registry "$ACR_NAME" \
-  --image blob-sidecar:latest \
+  --image "blob-sidecar:${IMAGE_TAG}" \
   --file "$PROJECT_ROOT/azure/blob-sidecar/Dockerfile" \
   "$PROJECT_ROOT/azure/blob-sidecar" \
   --no-logs --output none
@@ -96,7 +129,7 @@ az acr build \
 echo "    Building hls-transcoder..."
 az acr build \
   --registry "$ACR_NAME" \
-  --image hls-transcoder:latest \
+  --image "hls-transcoder:${IMAGE_TAG}" \
   --file "$PROJECT_ROOT/azure/hls-transcoder/Dockerfile" \
   "$PROJECT_ROOT/azure/hls-transcoder" \
   --no-logs --output none
@@ -111,9 +144,9 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --template-file "$SCRIPT_DIR/infra/main.bicep" \
   --parameters "$SCRIPT_DIR/infra/main.parameters.json" \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
-  --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:latest" \
-  --parameters blobSidecarImage="${ACR_LOGIN_SERVER}/blob-sidecar:latest" \
-  --parameters hlsTranscoderImage="${ACR_LOGIN_SERVER}/hls-transcoder:latest" \
+  --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:${IMAGE_TAG}" \
+  --parameters blobSidecarImage="${ACR_LOGIN_SERVER}/blob-sidecar:${IMAGE_TAG}" \
+  --parameters hlsTranscoderImage="${ACR_LOGIN_SERVER}/hls-transcoder:${IMAGE_TAG}" \
   --query 'properties.outputs' \
   --output json)
 
@@ -127,19 +160,25 @@ SIDECAR_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(js
 HLS_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['hlsAppName']['value'])")
 HLS_SIDECAR_APP_NAME=$(echo "$DEPLOY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['hlsSidecarAppName']['value'])")
 
-RTMP_STATUS=$(az containerapp show --name "$RTMP_APP_NAME" --resource-group "$RESOURCE_GROUP" \
-  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
-SIDECAR_STATUS=$(az containerapp show --name "$SIDECAR_APP_NAME" --resource-group "$RESOURCE_GROUP" \
-  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
-HLS_STATUS=$(az containerapp show --name "$HLS_APP_NAME" --resource-group "$RESOURCE_GROUP" \
-  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
-HLS_SIDECAR_STATUS=$(az containerapp show --name "$HLS_SIDECAR_APP_NAME" --resource-group "$RESOURCE_GROUP" \
-  --query 'properties.runningStatus' --output tsv 2>/dev/null || echo "Unknown")
+verify_deployment "$RTMP_APP_NAME" || DEPLOY_WARNINGS=$((DEPLOY_WARNINGS + 1))
+verify_deployment "$SIDECAR_APP_NAME" || DEPLOY_WARNINGS=$((DEPLOY_WARNINGS + 1))
+verify_deployment "$HLS_APP_NAME" || DEPLOY_WARNINGS=$((DEPLOY_WARNINGS + 1))
+# hls-sidecar is co-located (scaled to 0), skip verification
 
-echo "    rtmp-server:       $RTMP_STATUS"
-echo "    blob-sidecar:      $SIDECAR_STATUS"
-echo "    hls-transcoder:    $HLS_STATUS  (multi-container: transcoder + blob-sidecar)"
-echo "    hls-blob-sidecar:  $HLS_SIDECAR_STATUS  (scaled to 0 — co-located in transcoder)"
+# --- Deployment Summary ---
+echo ""
+echo "=== Deployment Summary ==="
+echo "Image tag: $IMAGE_TAG"
+echo "Resources deployed:"
+for app in "$RTMP_APP_NAME" "$SIDECAR_APP_NAME" "$HLS_APP_NAME" "$HLS_SIDECAR_APP_NAME"; do
+  az containerapp show --name "$app" -g "$RESOURCE_GROUP" \
+    --query "{Name:name, Revision:properties.latestRevisionName, FQDN:properties.configuration.ingress.fqdn}" \
+    -o table 2>/dev/null
+done
+if [ "$DEPLOY_WARNINGS" -gt 0 ]; then
+  echo ""
+  echo "⚠ $DEPLOY_WARNINGS app(s) may not be running — check Azure Portal for details."
+fi
 
 SUBSCRIPTION=$(az account show --query 'id' --output tsv)
 
