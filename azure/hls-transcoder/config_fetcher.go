@@ -103,6 +103,11 @@ func (cf *ConfigFetcher) Stop() {
 	close(cf.stopCh)
 }
 
+// Config returns the fetcher's configuration (platform URL, API key, etc.).
+func (cf *ConfigFetcher) Config() ConfigFetcherConfig {
+	return cf.cfg
+}
+
 // systemDefaultsRefreshLoop periodically refreshes the cached system defaults.
 // Runs until Stop() is called.
 func (cf *ConfigFetcher) systemDefaultsRefreshLoop() {

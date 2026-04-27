@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -53,6 +54,7 @@ type streamProcess struct {
 	cmd          *exec.Cmd
 	streamKey    string
 	connID       string // RTMP connection ID for start/stop correlation
+	eventID      string // Platform event ID (for session cleanup on stop)
 	outputDir    string
 	cancelNotify context.CancelFunc // cancels the segment notifier goroutine
 }
@@ -118,6 +120,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 	var eventConfig *EventTranscoderConfig
 	var configSource string
 	var perEventToken string
+	var platformEventID string // UUID from Platform API (for session cleanup)
 
 	if t.configFetcher != nil {
 		eventID, err := extractEventID(streamKey)
@@ -151,6 +154,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 		eventConfig = &streamCfg.Transcoder
 		configSource = source
 		perEventToken = streamCfg.RTMPToken
+		platformEventID = streamCfg.EventID
 	} else {
 		// No config fetcher (e.g., in tests) — use hardcoded defaults
 		defaults := DefaultEventTranscoderConfig
@@ -283,6 +287,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 		cmd:          cmd,
 		streamKey:    streamKey,
 		connID:       connID,
+		eventID:      platformEventID,
 		outputDir:    outputDir,
 		cancelNotify: cancelNotify,
 	}
@@ -296,6 +301,7 @@ func (t *Transcoder) Start(streamKey, connID string) {
 
 // Stop terminates the FFmpeg process for the given stream key.
 // Sends SIGTERM for graceful shutdown (FFmpeg finalizes HLS playlists).
+// Also notifies the Platform API to close the RTMP session.
 func (t *Transcoder) Stop(streamKey, connID string) {
 	t.mu.Lock()
 	sp, exists := t.streams[streamKey]
@@ -318,6 +324,7 @@ func (t *Transcoder) Stop(streamKey, connID string) {
 		return
 	}
 
+	eventID := sp.eventID
 	delete(t.streams, streamKey)
 	t.mu.Unlock()
 
@@ -333,6 +340,11 @@ func (t *Transcoder) Stop(streamKey, connID string) {
 		t.logger.Warn("failed to send SIGTERM to FFmpeg", "stream_key", streamKey, "error", err)
 		// Fallback: kill the process directly
 		sp.cmd.Process.Kill()
+	}
+
+	// Notify Platform API to close the RTMP session (fire-and-forget)
+	if eventID != "" && t.configFetcher != nil {
+		go t.notifyDisconnect(eventID, streamKey)
 	}
 }
 
@@ -398,6 +410,38 @@ func (t *Transcoder) buildRTMPURL(streamKey string, perEventToken string) string
 		url += "?token=" + token
 	}
 	return url
+}
+
+// notifyDisconnect calls the Platform API to close the RTMP session for an event.
+// This prevents stale sessions from blocking future publish attempts.
+// Runs as a fire-and-forget goroutine — errors are logged but not retried.
+func (t *Transcoder) notifyDisconnect(eventID, streamKey string) {
+	cfg := t.configFetcher.Config()
+	disconnectURL := strings.TrimRight(cfg.PlatformURL, "/") + "/api/rtmp/disconnect"
+
+	payload := fmt.Sprintf(`{"eventId":"%s"}`, eventID)
+	req, err := http.NewRequest("POST", disconnectURL, strings.NewReader(payload))
+	if err != nil {
+		t.logger.Error("failed to create disconnect request", "event_id", eventID, "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Internal-Api-Key", cfg.APIKey)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.logger.Warn("failed to notify platform disconnect", "event_id", eventID, "stream_key", streamKey, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.logger.Info("platform RTMP session closed", "event_id", eventID, "stream_key", streamKey)
+	} else {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		t.logger.Warn("platform disconnect returned non-200", "event_id", eventID, "status", resp.StatusCode, "body", string(body))
+	}
 }
 
 // buildABRArgs constructs FFmpeg arguments for multi-bitrate adaptive HLS.
