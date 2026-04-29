@@ -10,6 +10,7 @@
 #   RTMP_AUTH_TOKEN        — RTMP auth token (format: streamKey=secret)
 #   RTMP_AUTH_CALLBACK_URL — optional auth callback URL (overrides token auth, e.g. https://platform/api/rtmp/auth)
 #   STREAMGATE_HOOKS_URL   — optional Streamgate publish lifecycle webhook endpoint
+#   STREAMGATE_PLATFORM_URL — optional Streamgate Platform base URL for HLS transcoder config fetch (auto-discovered if not set)
 #   INTERNAL_API_KEY       — optional API key for webhook hook authentication
 #   RESOURCE_GROUP         — override resource group name (default: rg-rtmpgo)
 #   LOCATION               — Azure region (default: eastus2)
@@ -55,6 +56,7 @@ DEPLOY_WARNINGS=0
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-rtmpgo}"
 LOCATION="${LOCATION:-eastus2}"
 STREAMGATE_HOOKS_URL="${STREAMGATE_HOOKS_URL:-}"
+STREAMGATE_PLATFORM_URL="${STREAMGATE_PLATFORM_URL:-}"
 INTERNAL_API_KEY="${INTERNAL_API_KEY:-}"
 RTMP_AUTH_CALLBACK_URL="${RTMP_AUTH_CALLBACK_URL:-}"
 IMAGE_TAG="v$(date +%s)"
@@ -93,6 +95,23 @@ if [ -z "${RTMP_AUTH_TOKEN:-}" ]; then
   fi
 fi
 
+# --- Auto-discover StreamGate Platform URL if not set ---
+# The HLS transcoder needs the platform URL to fetch stream configuration.
+# If STREAMGATE_PLATFORM_URL is empty, try to discover it from the deployed
+# StreamGate platform Container App in the same resource group.
+if [ -z "$STREAMGATE_PLATFORM_URL" ]; then
+  SG_PLATFORM_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+    --query "[?contains(name, 'sg-platform')].name" -o tsv 2>/dev/null | head -1)
+  if [ -n "$SG_PLATFORM_APP" ]; then
+    SG_ENV_DOMAIN=$(az containerapp show -n "$SG_PLATFORM_APP" -g "$RESOURCE_GROUP" \
+      --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null)
+    if [ -n "$SG_ENV_DOMAIN" ]; then
+      STREAMGATE_PLATFORM_URL="https://${SG_ENV_DOMAIN}"
+      echo "    Auto-discovered StreamGate Platform URL: $STREAMGATE_PLATFORM_URL"
+    fi
+  fi
+fi
+
 # --- Step 3: Deploy Bicep infrastructure (first pass — creates ACR + infra) ---
 echo ""
 echo ">>> Step 2/5: Deploying infrastructure (Bicep)..."
@@ -102,6 +121,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters "$SCRIPT_DIR/infra/main.parameters.json" \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
   --parameters streamgateHooksUrl="$STREAMGATE_HOOKS_URL" \
+  --parameters streamgatePlatformUrl="$STREAMGATE_PLATFORM_URL" \
   --parameters internalApiKey="$INTERNAL_API_KEY" \
   --parameters rtmpAuthCallbackUrl="$RTMP_AUTH_CALLBACK_URL" \
   --query 'properties.outputs' \
@@ -154,6 +174,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters "$SCRIPT_DIR/infra/main.parameters.json" \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
   --parameters streamgateHooksUrl="$STREAMGATE_HOOKS_URL" \
+  --parameters streamgatePlatformUrl="$STREAMGATE_PLATFORM_URL" \
   --parameters internalApiKey="$INTERNAL_API_KEY" \
   --parameters rtmpAuthCallbackUrl="$RTMP_AUTH_CALLBACK_URL" \
   --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:${IMAGE_TAG}" \

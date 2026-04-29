@@ -43,6 +43,9 @@ param rtmpAuthCallbackUrl string = ''
 @description('Streamgate hooks endpoint URL for RTMP lifecycle notifications (publish_start/publish_stop). When set, rtmp-go sends webhook events to Streamgate so it can track active streaming sessions.')
 param streamgateHooksUrl string = ''
 
+@description('Streamgate Platform base URL for HLS transcoder config fetch (e.g. http://sg-platform-xxx.internal.env.region.azurecontainerapps.io). Required for HLS transcoder to fetch stream configuration.')
+param streamgatePlatformUrl string = ''
+
 @description('Container image for rtmp-server (set after ACR build)')
 param rtmpServerImage string = ''
 
@@ -652,6 +655,10 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
             ingestToken
             '-platform-api-key'
             internalApiKey
+            // Platform URL for stream config fetch (required — transcoder fetches
+            // event config like resolution profiles from the StreamGate Platform API)
+            '-platform-url'
+            streamgatePlatformUrl
             '-log-level'
             'info'
           ] : []
