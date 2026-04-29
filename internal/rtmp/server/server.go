@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +33,11 @@ import (
 
 // Config holds all settings for the RTMP server.
 type Config struct {
-	ListenAddr        string   // TCP address to listen on (default ":1935")
-	ChunkSize         uint32   // outbound chunk payload size in bytes (default 4096)
-	WindowAckSize     uint32   // flow control: bytes before client must acknowledge (default 2,500,000)
-	RecordAll         bool     // if true, automatically record all published streams to FLV files
-	RecordDir         string   // directory for FLV recordings (default "recordings")
+	ListenAddr    string // TCP address to listen on (default ":1935")
+	ChunkSize     uint32 // outbound chunk payload size in bytes (default 4096)
+	WindowAckSize uint32 // flow control: bytes before client must acknowledge (default 2,500,000)
+	RecordAll     bool   // if true, automatically record all published streams to FLV files
+	RecordDir     string // directory for FLV recordings (default "recordings")
 
 	// SegmentDuration splits recordings into multiple files of this duration.
 	// Segment boundaries are aligned to video keyframes for independent playback.
@@ -46,7 +47,7 @@ type Config struct {
 	// SegmentPattern is the filename pattern for segments, using FFmpeg-inspired
 	// placeholders. See the -segment-pattern flag documentation for details.
 	// Default: "%s_%T_seg%03d"
-	SegmentPattern string
+	SegmentPattern    string
 	LogLevel          string   // log verbosity: "debug", "info", "warn", "error" (default "info")
 	RelayDestinations []string // RTMP URLs to forward published streams to (e.g. rtmp://cdn/live/key)
 
@@ -889,6 +890,9 @@ func initializeHookManager(cfg Config, logger *slog.Logger) *hooks.HookManager {
 	}
 
 	// Register webhook hooks from configuration (format: "event_type=https://url")
+	// Inject X-Internal-Api-Key so Streamgate webhook endpoints can authenticate
+	// incoming hook events with the same shared secret used by the auth callback.
+	internalAPIKey := os.Getenv("INTERNAL_API_KEY")
 	for i, webhook := range cfg.HookWebhooks {
 		parts := strings.SplitN(webhook, "=", 2)
 		if len(parts) != 2 {
@@ -897,6 +901,9 @@ func initializeHookManager(cfg Config, logger *slog.Logger) *hooks.HookManager {
 		}
 		eventType := hooks.EventType(parts[0])
 		webhookHook := hooks.NewWebhookHook(fmt.Sprintf("webhook_%d", i), parts[1], 30*time.Second)
+		if internalAPIKey != "" {
+			webhookHook.AddHeader("X-Internal-Api-Key", internalAPIKey)
+		}
 		if err := hookManager.RegisterHook(eventType, webhookHook); err != nil {
 			logger.Error("Failed to register webhook hook", "hook", webhook, "error", err)
 		}

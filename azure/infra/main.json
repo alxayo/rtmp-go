@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "446921207314065520"
+      "templateHash": "4041011674681544589"
     }
   },
   "parameters": {
@@ -28,6 +28,20 @@
         "description": "RTMP auth token in format streamKey=secret (e.g. live/stream=mysecret123)"
       }
     },
+    "rtmpAuthCallbackUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "RTMP auth callback URL for delegated authentication (e.g. https://platform.example.com/api/rtmp/auth). When set, overrides token-based auth."
+      }
+    },
+    "streamgateHooksUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Streamgate hooks endpoint URL for RTMP lifecycle notifications (publish_start/publish_stop). When set, rtmp-go sends webhook events to Streamgate so it can track active streaming sessions."
+      }
+    },
     "rtmpServerImage": {
       "type": "string",
       "defaultValue": "",
@@ -41,6 +55,34 @@
       "metadata": {
         "description": "Container image for blob-sidecar (set after ACR build)"
       }
+    },
+    "hlsTranscoderImage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Container image for hls-transcoder (set after ACR build)"
+      }
+    },
+    "ingestToken": {
+      "type": "securestring",
+      "defaultValue": "dev-ingest-token-change-in-production",
+      "metadata": {
+        "description": "Bearer token for HTTP ingest authentication (enables PUT /upload/{path} endpoint on blob-sidecar:8081)"
+      }
+    },
+    "internalApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Internal API key for authenticating with Platform App (X-Internal-Api-Key header)"
+      }
+    },
+    "ingestMaxBodyBytes": {
+      "type": "int",
+      "defaultValue": 52428800,
+      "metadata": {
+        "description": "Maximum upload size for HTTP ingest in bytes (default 50MB for Phase 3)"
+      }
     }
   },
   "variables": {
@@ -50,11 +92,47 @@
     "registryName": "[format('azacr{0}', variables('resourceToken'))]",
     "storageAccountName": "[format('azst{0}', variables('resourceToken'))]",
     "identityName": "[format('azid{0}', variables('resourceToken'))]",
-    "rtmpAppName": "[format('azapp{0}1', variables('resourceToken'))]",
-    "sidecarAppName": "[format('azapp{0}2', variables('resourceToken'))]",
-    "blobContainerName": "recordings"
+    "rtmpAppName": "[format('rtmp-server-{0}', variables('resourceToken'))]",
+    "sidecarAppName": "[format('rec-blob-sidecar-{0}', variables('resourceToken'))]",
+    "hlsAppName": "[format('hls-transcoder-{0}', variables('resourceToken'))]",
+    "hlsSidecarAppName": "[format('hls-blob-sidecar-{0}', variables('resourceToken'))]",
+    "blobContainerName": "recordings",
+    "hlsBlobContainerName": "hls-content",
+    "vnetName": "[format('azvnet{0}', variables('resourceToken'))]",
+    "subnetName": "containerapps",
+    "tenantsJsonValue": "[format('{{\"tenants\":{{\"live\":{{\"storage_account\":\"https://{0}.blob.core.windows.net\",\"container\":\"recordings\",\"credential\":\"managed-identity\"}}}},\"default\":{{\"storage_account\":\"https://{1}.blob.core.windows.net\",\"container\":\"recordings\",\"credential\":\"managed-identity\"}},\"api_fallback\":{{\"enabled\":false}}}}', variables('storageAccountName'), variables('storageAccountName'))]",
+    "hlsTenantsJsonValue": "[format('{{\"tenants\":{{\"hls\":{{\"storage_account\":\"https://{0}.blob.core.windows.net\",\"container\":\"hls-content\",\"credential\":\"managed-identity\"}}}},\"default\":{{\"storage_account\":\"https://{1}.blob.core.windows.net\",\"container\":\"hls-content\",\"credential\":\"managed-identity\"}},\"api_fallback\":{{\"enabled\":false}}}}', variables('storageAccountName'), variables('storageAccountName'))]"
   },
   "resources": [
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2024-01-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.0.0.0/16"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "10.0.0.0/23",
+              "delegations": [
+                {
+                  "name": "Microsoft.App.environments",
+                  "properties": {
+                    "serviceName": "Microsoft.App/environments"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
     {
       "type": "Microsoft.OperationalInsights/workspaces",
       "apiVersion": "2023-09-01",
@@ -79,10 +157,15 @@
             "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').customerId]",
             "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').primarySharedKey]"
           }
+        },
+        "vnetConfiguration": {
+          "infrastructureSubnetId": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '2024-01-01').subnets[0].id]",
+          "internal": false
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ]
     },
     {
@@ -100,6 +183,24 @@
       "dependsOn": [
         "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
         "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('storageAccountName'), 'default', 'recordings')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments/storages",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}/{1}', variables('containerEnvName'), 'hls-output')]",
+      "properties": {
+        "azureFile": {
+          "accountName": "[variables('storageAccountName')]",
+          "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01').keys[0].value]",
+          "shareName": "hls-output",
+          "accessMode": "ReadWrite"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', variables('storageAccountName'), 'default', 'hls-output')]",
         "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
       ]
     },
@@ -152,6 +253,17 @@
       ]
     },
     {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', variables('hlsBlobContainerName'))]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
+      ]
+    },
+    {
       "type": "Microsoft.Storage/storageAccounts/fileServices",
       "apiVersion": "2023-05-01",
       "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
@@ -165,6 +277,17 @@
       "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', 'recordings')]",
       "properties": {
         "shareQuota": 10
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', 'hls-output')]",
+      "properties": {
+        "shareQuota": 50
       },
       "dependsOn": [
         "[resourceId('Microsoft.Storage/storageAccounts/fileServices', variables('storageAccountName'), 'default')]"
@@ -211,6 +334,10 @@
       "apiVersion": "2024-03-01",
       "name": "[variables('rtmpAppName')]",
       "location": "[parameters('location')]",
+      "tags": {
+        "role": "rtmp-server",
+        "component": "rtmp-go"
+      },
       "identity": {
         "type": "UserAssigned",
         "userAssignedIdentities": {
@@ -236,6 +363,10 @@
             {
               "name": "rtmp-auth-token",
               "value": "[parameters('rtmpAuthToken')]"
+            },
+            {
+              "name": "internal-api-key",
+              "value": "[parameters('internalApiKey')]"
             }
           ]
         },
@@ -248,7 +379,13 @@
                 "cpu": "[json('0.5')]",
                 "memory": "1Gi"
               },
-              "command": "[if(not(empty(parameters('rtmpServerImage'))), createArray('/rtmp-server', '-listen', ':1935', '-auth-mode', 'token', '-auth-token', parameters('rtmpAuthToken'), '-record-all', 'true', '-record-dir', '/recordings', '-segment-duration', '2m', '-log-level', 'info'), createArray())]",
+              "command": "[if(not(empty(parameters('rtmpServerImage'))), concat(createArray('/rtmp-server', '-listen', ':1935'), if(not(empty(parameters('rtmpAuthCallbackUrl'))), createArray('-auth-mode', 'callback', '-auth-callback', parameters('rtmpAuthCallbackUrl')), createArray('-auth-mode', 'token', '-auth-token', parameters('rtmpAuthToken'))), createArray('-record-all', 'true', '-record-dir', '/recordings', '-segment-duration', '2m', '-hook-webhook', format('segment_complete=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_start=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_stop=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_start=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_stop=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-log-level', 'info'), if(not(empty(parameters('streamgateHooksUrl'))), createArray('-hook-webhook', format('publish_start={0}', parameters('streamgateHooksUrl')), '-hook-webhook', format('publish_stop={0}', parameters('streamgateHooksUrl'))), createArray())), createArray())]",
+              "env": [
+                {
+                  "name": "INTERNAL_API_KEY",
+                  "secretRef": "internal-api-key"
+                }
+              ],
               "volumeMounts": [
                 {
                   "volumeName": "recordings",
@@ -283,6 +420,10 @@
       "apiVersion": "2024-03-01",
       "name": "[variables('sidecarAppName')]",
       "location": "[parameters('location')]",
+      "tags": {
+        "role": "rec-blob-sidecar",
+        "component": "rtmp-go"
+      },
       "identity": {
         "type": "UserAssigned",
         "userAssignedIdentities": {
@@ -297,6 +438,22 @@
               "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), '2023-11-01-preview').loginServer]",
               "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
             }
+          ],
+          "ingress": {
+            "external": false,
+            "targetPort": 8081,
+            "transport": "http",
+            "allowInsecure": true
+          },
+          "secrets": [
+            {
+              "name": "tenants-json",
+              "value": "[variables('tenantsJsonValue')]"
+            },
+            {
+              "name": "ingest-token",
+              "value": "[parameters('ingestToken')]"
+            }
           ]
         },
         "template": {
@@ -308,7 +465,7 @@
                 "cpu": "[json('0.25')]",
                 "memory": "0.5Gi"
               },
-              "command": "[if(not(empty(parameters('blobSidecarImage'))), createArray('/blob-sidecar', '-mode', 'watch', '-watch-dir', '/recordings', '-config', '/config/tenants.json', '-workers', '4', '-cleanup', 'true', '-log-level', 'info'), createArray())]",
+              "command": "[if(not(empty(parameters('blobSidecarImage'))), createArray('/blob-sidecar', '-mode', 'webhook', '-listen-addr', ':8080', '-config', '/config/tenants-json', '-workers', '4', '-cleanup', 'true', '-ingest-addr', ':8081', '-ingest-storage', 'blob', '-ingest-token', parameters('ingestToken'), '-ingest-max-body', string(parameters('ingestMaxBodyBytes')), '-log-level', 'info'), createArray())]",
               "env": [
                 {
                   "name": "AZURE_CLIENT_ID",
@@ -324,6 +481,26 @@
                   "volumeName": "sidecar-config",
                   "mountPath": "/config"
                 }
+              ],
+              "probes": [
+                {
+                  "type": "Startup",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 30
+                }
               ]
             }
           ],
@@ -335,7 +512,7 @@
             },
             {
               "name": "sidecar-config",
-              "storageType": "EmptyDir"
+              "storageType": "Secret"
             }
           ],
           "scale": {
@@ -349,6 +526,253 @@
         "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.App/managedEnvironments/storages', variables('containerEnvName'), 'recordings')]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('registryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('hlsAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "role": "hls-transcoder",
+        "component": "rtmp-go"
+      },
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), '2023-11-01-preview').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": false,
+            "targetPort": 8090,
+            "transport": "http",
+            "allowInsecure": true
+          },
+          "secrets": [
+            {
+              "name": "rtmp-auth-token",
+              "value": "[parameters('rtmpAuthToken')]"
+            },
+            {
+              "name": "ingest-token",
+              "value": "[parameters('ingestToken')]"
+            },
+            {
+              "name": "hls-tenants-json",
+              "value": "[variables('hlsTenantsJsonValue')]"
+            },
+            {
+              "name": "internal-api-key",
+              "value": "[parameters('internalApiKey')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "hls-transcoder",
+              "image": "[if(not(empty(parameters('hlsTranscoderImage'))), parameters('hlsTranscoderImage'), 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest')]",
+              "resources": {
+                "cpu": "[json('3.5')]",
+                "memory": "7Gi"
+              },
+              "command": "[if(not(empty(parameters('hlsTranscoderImage'))), createArray('/hls-transcoder', '-listen-addr', ':8090', '-hls-dir', '/hls-output', '-rtmp-host', format('{0}.{1}', variables('rtmpAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-rtmp-port', '1935', '-rtmp-token', last(split(parameters('rtmpAuthToken'), '=')), '-mode', 'abr', '-output-mode', 'http', '-ingest-url', 'http://localhost:8081/ingest/', '-ingest-token', parameters('ingestToken'), '-platform-api-key', parameters('internalApiKey'), '-log-level', 'info'), createArray())]",
+              "volumeMounts": [
+                {
+                  "volumeName": "hls-output",
+                  "mountPath": "/hls-output"
+                }
+              ]
+            },
+            {
+              "name": "blob-sidecar",
+              "image": "[if(not(empty(parameters('blobSidecarImage'))), parameters('blobSidecarImage'), 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "command": "[if(not(empty(parameters('blobSidecarImage'))), createArray('/blob-sidecar', '-mode', 'webhook', '-listen-addr', ':8080', '-config', '/config/hls-tenants-json', '-workers', '4', '-cleanup', 'false', '-ingest-addr', ':8081', '-ingest-storage', 'blob', '-ingest-token', parameters('ingestToken'), '-ingest-max-body', string(parameters('ingestMaxBodyBytes')), '-log-level', 'info'), createArray())]",
+              "env": [
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Startup",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 30
+                }
+              ],
+              "volumeMounts": [
+                {
+                  "volumeName": "sidecar-config",
+                  "mountPath": "/config"
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "hls-output",
+              "storageType": "EmptyDir"
+            },
+            {
+              "name": "sidecar-config",
+              "storageType": "Secret"
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '7f951dda-4ed3-4680-a7ca-43fe172d538d'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('registryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('hlsSidecarAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "role": "hls-blob-sidecar",
+        "component": "rtmp-go"
+      },
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), '2023-11-01-preview').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": false,
+            "targetPort": 8081,
+            "transport": "http",
+            "allowInsecure": true
+          },
+          "secrets": [
+            {
+              "name": "hls-tenants-json",
+              "value": "[variables('hlsTenantsJsonValue')]"
+            },
+            {
+              "name": "ingest-token",
+              "value": "[parameters('ingestToken')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "hls-blob-sidecar",
+              "image": "[if(not(empty(parameters('blobSidecarImage'))), parameters('blobSidecarImage'), 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest')]",
+              "resources": {
+                "cpu": "[json('1')]",
+                "memory": "2Gi"
+              },
+              "command": "[if(not(empty(parameters('blobSidecarImage'))), createArray('/blob-sidecar', '-mode', 'webhook', '-listen-addr', ':8080', '-config', '/config/hls-tenants-json', '-workers', '4', '-cleanup', 'false', '-ingest-addr', ':8081', '-ingest-storage', 'blob', '-ingest-token', parameters('ingestToken'), '-ingest-max-body', string(parameters('ingestMaxBodyBytes')), '-log-level', 'info'), createArray())]",
+              "env": [
+                {
+                  "name": "AZURE_CLIENT_ID",
+                  "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]"
+                }
+              ],
+              "volumeMounts": [
+                {
+                  "volumeName": "hls-output",
+                  "mountPath": "/hls-output"
+                },
+                {
+                  "volumeName": "sidecar-config",
+                  "mountPath": "/config"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Startup",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 30
+                }
+              ]
+            }
+          ],
+          "volumes": [
+            {
+              "name": "hls-output",
+              "storageName": "hls-output",
+              "storageType": "AzureFile"
+            },
+            {
+              "name": "sidecar-config",
+              "storageType": "Secret"
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '7f951dda-4ed3-4680-a7ca-43fe172d538d'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "[resourceId('Microsoft.App/managedEnvironments/storages', variables('containerEnvName'), 'hls-output')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
         "[resourceId('Microsoft.ContainerRegistry/registries', variables('registryName'))]",
         "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'))]"
       ]
@@ -370,6 +794,14 @@
     "sidecarAppName": {
       "type": "string",
       "value": "[variables('sidecarAppName')]"
+    },
+    "hlsAppName": {
+      "type": "string",
+      "value": "[variables('hlsAppName')]"
+    },
+    "hlsSidecarAppName": {
+      "type": "string",
+      "value": "[variables('hlsSidecarAppName')]"
     },
     "rtmpAppFqdn": {
       "type": "string",

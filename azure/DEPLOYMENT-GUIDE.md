@@ -85,7 +85,9 @@ This creates the Azure resource group, VNet, Container Apps Environment, ACR, St
 
 ```bash
 cd rtmp-go/azure
-RTMP_AUTH_TOKEN="$RTMP_AUTH_TOKEN" ./deploy.sh
+RTMP_AUTH_TOKEN="$RTMP_AUTH_TOKEN" \
+STREAMGATE_HOOKS_URL="https://watch.port-80.com/api/rtmp/hooks" \
+./deploy.sh
 ```
 
 **What happens** (5 automated steps):
@@ -472,6 +474,7 @@ export RTMP_AUTH_TOKEN="YourSecretToken"
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RTMP_AUTH_TOKEN` | *(prompted)* | Shared secret for RTMP publish auth |
+| `STREAMGATE_HOOKS_URL` | *(empty)* | Optional Streamgate `/api/rtmp/hooks` endpoint for publish lifecycle notifications |
 | `RESOURCE_GROUP` | `rg-rtmpgo` | Azure resource group name |
 | `LOCATION` | `eastus2` | Azure region |
 
@@ -484,6 +487,7 @@ File: `azure/infra/main.parameters.json`
 | `environmentName` | `rtmpgo` | Base name for `uniqueString()` resource naming |
 | `location` | `eastus2` | Azure region |
 | `rtmpAuthToken` | *(empty — set at deploy time)* | RTMP publish authentication token |
+| `streamgateHooksUrl` | *(empty)* | Optional Streamgate `/api/rtmp/hooks` URL for `publish_start`/`publish_stop` webhooks |
 | `rtmpServerImage` | *(empty = placeholder)* | ACR image for rtmp-server |
 | `blobSidecarImage` | *(empty = placeholder)* | ACR image for blob-sidecar |
 | `hlsTranscoderImage` | *(empty = placeholder)* | ACR image for hls-transcoder |
@@ -817,8 +821,12 @@ The rtmp-server container uses **CLI arguments** in its command array:
 -hook-webhook "record_segment=http://<sidecar-fqdn>/hooks"
 -hook-webhook "publish_start=http://<transcoder-fqdn>/hooks"
 -hook-webhook "publish_stop=http://<transcoder-fqdn>/hooks"
+-hook-webhook "publish_start=https://watch.port-80.com/api/rtmp/hooks"
+-hook-webhook "publish_stop=https://watch.port-80.com/api/rtmp/hooks"
 -hook-concurrency 20
 ```
+
+> **Streamgate lifecycle hooks**: Set the `streamgateHooksUrl` Bicep parameter (or `STREAMGATE_HOOKS_URL` when using `deploy.sh`) to the Streamgate platform endpoint, typically `https://watch.port-80.com/api/rtmp/hooks`, to receive `publish_start` and `publish_stop` notifications alongside the existing HLS hooks.
 
 > **Remote config fetch**: At startup, rtmp-server calls `configfetch.FetchRemoteConfig()` to retrieve `PLAYBACK_SIGNING_SECRET` and `RTMP_AUTH_TOKEN` from the platform API if they are not already set in the environment. This requires `INTERNAL_API_KEY` and the platform URL. See [§12.4](#124-remote-config-fetch-rtmp-server) for details.
 

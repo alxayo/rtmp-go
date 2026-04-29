@@ -7,9 +7,10 @@
 #   RTMP_AUTH_TOKEN="live/stream=secret" ./deploy.sh   # non-interactive
 #
 # Environment variables:
-#   RTMP_AUTH_TOKEN  — RTMP auth token (format: streamKey=secret)
-#   RESOURCE_GROUP   — override resource group name (default: rg-rtmpgo)
-#   LOCATION         — Azure region (default: eastus2)
+#   RTMP_AUTH_TOKEN       — RTMP auth token (format: streamKey=secret)
+#   STREAMGATE_HOOKS_URL  — optional Streamgate publish lifecycle webhook endpoint
+#   RESOURCE_GROUP        — override resource group name (default: rg-rtmpgo)
+#   LOCATION              — Azure region (default: eastus2)
 # ============================================================================
 set -euo pipefail
 
@@ -51,6 +52,7 @@ DEPLOY_WARNINGS=0
 # --- Configuration ---
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-rtmpgo}"
 LOCATION="${LOCATION:-eastus2}"
+STREAMGATE_HOOKS_URL="${STREAMGATE_HOOKS_URL:-}"
 IMAGE_TAG="v$(date +%s)"
 
 echo "============================================"
@@ -95,6 +97,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --template-file "$SCRIPT_DIR/infra/main.bicep" \
   --parameters "$SCRIPT_DIR/infra/main.parameters.json" \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
+  --parameters streamgateHooksUrl="$STREAMGATE_HOOKS_URL" \
   --query 'properties.outputs' \
   --output json)
 
@@ -144,6 +147,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --template-file "$SCRIPT_DIR/infra/main.bicep" \
   --parameters "$SCRIPT_DIR/infra/main.parameters.json" \
   --parameters rtmpAuthToken="$RTMP_AUTH_TOKEN" \
+  --parameters streamgateHooksUrl="$STREAMGATE_HOOKS_URL" \
   --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:${IMAGE_TAG}" \
   --parameters blobSidecarImage="${ACR_LOGIN_SERVER}/blob-sidecar:${IMAGE_TAG}" \
   --parameters hlsTranscoderImage="${ACR_LOGIN_SERVER}/hls-transcoder:${IMAGE_TAG}" \

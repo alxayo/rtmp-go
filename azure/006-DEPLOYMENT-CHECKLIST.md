@@ -173,6 +173,7 @@ See: `002-SCHEDULED-ORCHESTRATION.md`
 - [ ] Verify Streamgate has `/api/events?status=upcoming` endpoint
 - [ ] Test API: `curl https://streamgate.example.com/api/events?status=upcoming`
 - [ ] Get API key for Function authentication
+- [ ] Set `streamgateHooksUrl` in the rtmp-go Bicep deployment (for example `https://watch.port-80.com/api/rtmp/hooks`) so Streamgate receives `publish_start` and `publish_stop` events
 - [ ] Set Function environment variables:
   - `STREAMGATE_API_BASE`: Your Streamgate URL
   - `STREAMGATE_API_KEY`: API key

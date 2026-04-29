@@ -17,6 +17,8 @@ package hooks
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -163,23 +165,54 @@ func TestStdioHook(t *testing.T) {
 //
 // No real HTTP calls are made; this is a pure in-memory unit check.
 func TestWebhookHook(t *testing.T) {
-	hook := NewWebhookHook("webhook-test", "https://example.com/webhook", 30*time.Second)
+	t.Run("metadata and headers", func(t *testing.T) {
+		hook := NewWebhookHook("webhook-test", "https://example.com/webhook", 30*time.Second)
 
-	if hook.Type() != "webhook" {
-		t.Errorf("Expected hook type 'webhook', got %s", hook.Type())
-	}
+		if hook.Type() != "webhook" {
+			t.Errorf("Expected hook type 'webhook', got %s", hook.Type())
+		}
 
-	if hook.ID() != "webhook-test" {
-		t.Errorf("Expected hook ID 'webhook-test', got %s", hook.ID())
-	}
+		if hook.ID() != "webhook-test" {
+			t.Errorf("Expected hook ID 'webhook-test', got %s", hook.ID())
+		}
 
-	if hook.url != "https://example.com/webhook" {
-		t.Errorf("Expected URL 'https://example.com/webhook', got %s", hook.url)
-	}
+		if hook.url != "https://example.com/webhook" {
+			t.Errorf("Expected URL 'https://example.com/webhook', got %s", hook.url)
+		}
 
-	// Test adding headers
-	hook.AddHeader("Authorization", "Bearer token")
-	if hook.headers["Authorization"] != "Bearer token" {
-		t.Errorf("Expected Authorization header 'Bearer token', got %s", hook.headers["Authorization"])
-	}
+		// Test adding headers
+		hook.AddHeader("Authorization", "Bearer token")
+		if hook.headers["Authorization"] != "Bearer token" {
+			t.Errorf("Expected Authorization header 'Bearer token', got %s", hook.headers["Authorization"])
+		}
+	})
+
+	t.Run("execute sends custom headers", func(t *testing.T) {
+		receivedHeader := make(chan string, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedHeader <- r.Header.Get("X-Internal-Api-Key")
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		hook := NewWebhookHook("webhook-test", server.URL, 30*time.Second)
+		hook.AddHeader("X-Internal-Api-Key", "test-key")
+
+		event := NewEvent(EventPublishStart).
+			WithConnID("conn-1").
+			WithStreamKey("live/test")
+
+		if err := hook.Execute(context.Background(), *event); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+
+		select {
+		case got := <-receivedHeader:
+			if got != "test-key" {
+				t.Fatalf("Expected X-Internal-Api-Key header 'test-key', got %q", got)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Timed out waiting for webhook request")
+		}
+	})
 }

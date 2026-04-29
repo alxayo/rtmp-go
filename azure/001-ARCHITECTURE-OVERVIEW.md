@@ -12,6 +12,8 @@ This document outlines the deployment of RTMP-go to Azure Container Apps with **
 
 ## Scheduled Streaming: 93% Cost Reduction
 
+> **Publish lifecycle integration**: The Azure deployment can now send `publish_start` and `publish_stop` webhooks directly to Streamgate's `/api/rtmp/hooks` endpoint so the platform can track active RTMP sessions in real time while the HLS transcoder hooks continue to run.
+
 ### Cost Comparison
 
 | Scenario | RTMP Hours/Week | Total Cost/Month | Comment |
@@ -124,6 +126,7 @@ Monday, April 21, 2025
 09:52 UTC ─── Broadcaster Goes Live
               OBS publishes rtmp://server:1935/live/conference
               RTMP-go receives stream
+              Sends publish_start webhook to Streamgate `/api/rtmp/hooks`
               Writes to ephemeral disk
               Sends segment metadata to Storage Service
               

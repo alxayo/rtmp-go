@@ -40,6 +40,9 @@ param rtmpAuthToken string
 @description('RTMP auth callback URL for delegated authentication (e.g. https://platform.example.com/api/rtmp/auth). When set, overrides token-based auth.')
 param rtmpAuthCallbackUrl string = ''
 
+@description('Streamgate hooks endpoint URL for RTMP lifecycle notifications (publish_start/publish_stop). When set, rtmp-go sends webhook events to Streamgate so it can track active streaming sessions.')
+param streamgateHooksUrl string = ''
+
 @description('Container image for rtmp-server (set after ACR build)')
 param rtmpServerImage string = ''
 
@@ -373,7 +376,12 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             'publish_stop=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-log-level'
             'info'
-          ]) : []
+          ], !empty(streamgateHooksUrl) ? [
+            '-hook-webhook'
+            'publish_start=${streamgateHooksUrl}'
+            '-hook-webhook'
+            'publish_stop=${streamgateHooksUrl}'
+          ] : []) : []
           env: [
             {
               name: 'INTERNAL_API_KEY'
