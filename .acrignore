@@ -1,0 +1,11 @@
+recordings
+recordings/
+.git
+azure/
+docs/
+specs/
+tests/
+e2e-tests/
+site/
+*.md
+*.exe
