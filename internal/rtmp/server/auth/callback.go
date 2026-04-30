@@ -19,14 +19,18 @@ import (
 // # Request Body (JSON)
 //
 // New per-event format:
+//
 //	{
 //	  "streamKeyHash": "event-slug-abc123def456",
 //	  "token":         "rtmp_abc123def456xyz789",
 //	  "action":        "publish" or "play",
-//	  "publisherIp":   "192.168.1.100:54321"
+//	  "publisherIp":   "192.168.1.100:54321",
+//	  "clientIp":      "192.168.1.100:54321",
+//	  "remoteAddr":    "192.168.1.100:54321"
 //	}
 //
 // Legacy format (for backward compatibility):
+//
 //	{
 //	  "action":      "publish" or "play",
 //	  "app":         "live",
@@ -36,10 +40,10 @@ import (
 //	  "remote_addr": "192.168.1.100:54321"
 //	}
 type CallbackValidator struct {
-	URL                   string       // webhook URL (e.g. "https://auth.example.com/validate")
-	Client                *http.Client // HTTP client with configured timeout
-	InternalAPIKey        string       // X-Internal-Api-Key header for streamgate auth
-	EnablePerEventTokens  bool         // true = use new per-event format; false = legacy format
+	URL                  string       // webhook URL (e.g. "https://auth.example.com/validate")
+	Client               *http.Client // HTTP client with configured timeout
+	InternalAPIKey       string       // X-Internal-Api-Key header for streamgate auth
+	EnablePerEventTokens bool         // true = use new per-event format; false = legacy format
 }
 
 // NewCallbackValidator creates a CallbackValidator with the given webhook URL
@@ -69,6 +73,10 @@ type callbackRequest struct {
 	Token         string `json:"token"`
 	Action        string `json:"action"`
 	PublisherIp   string `json:"publisherIp"`
+	// ClientIp and RemoteAddr duplicate PublisherIp for newer consumers that use clearer names.
+	// Keeping PublisherIp preserves compatibility with older StreamGate deployments.
+	ClientIp   string `json:"clientIp"`
+	RemoteAddr string `json:"remoteAddr"`
 }
 
 // legacyCallbackRequest is the old JSON format for backward compatibility.
@@ -94,9 +102,9 @@ func (v *CallbackValidator) ValidatePlay(ctx context.Context, req *Request) erro
 // call performs the HTTP POST to the webhook and interprets the response.
 func (v *CallbackValidator) call(ctx context.Context, action string, req *Request) error {
 	var (
-		data       []byte
-		err        error
-		httpReq    *http.Request
+		data    []byte
+		err     error
+		httpReq *http.Request
 	)
 
 	if v.EnablePerEventTokens {
@@ -113,6 +121,9 @@ func (v *CallbackValidator) call(ctx context.Context, action string, req *Reques
 			Token:         token,
 			Action:        action,
 			PublisherIp:   req.RemoteAddr,
+			// Send the same socket address under all three names so StreamGate can migrate safely.
+			ClientIp:   req.RemoteAddr,
+			RemoteAddr: req.RemoteAddr,
 		}
 
 		data, err = json.Marshal(body)

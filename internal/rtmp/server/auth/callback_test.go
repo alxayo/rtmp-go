@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -64,6 +65,39 @@ func TestCallbackValidator(t *testing.T) {
 				t.Errorf("ValidatePlay: expected %v, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestCallbackValidator_PerEventPayloadIncludesClientAddressFields(t *testing.T) {
+	var got callbackRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Api-Key") != "test-key" {
+			t.Fatalf("expected X-Internal-Api-Key header")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Per-event mode is the StreamGate integration path that sends the newer JSON body.
+	v := NewCallbackValidatorWithAPIKey(srv.URL, 5*time.Second, "test-key")
+	err := v.ValidatePlay(context.Background(), &Request{
+		StreamName:  "event-slug-abc123def456",
+		QueryParams: map[string]string{"token": "abc123def456ghi789jkl012"},
+		RemoteAddr:  "203.0.113.42:54321",
+	})
+	if err != nil {
+		t.Fatalf("ValidatePlay: %v", err)
+	}
+
+	if got.StreamKeyHash != "event-slug-abc123def456" || got.Action != "play" {
+		t.Fatalf("unexpected request body: %+v", got)
+	}
+	// All three fields should carry the same peer address during the compatibility window.
+	if got.PublisherIp != "203.0.113.42:54321" || got.ClientIp != got.PublisherIp || got.RemoteAddr != got.PublisherIp {
+		t.Fatalf("expected all address fields to match remote addr, got %+v", got)
 	}
 }
 

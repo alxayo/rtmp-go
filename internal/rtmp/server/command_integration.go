@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/alxayo/go-rtmp/internal/rtmp/chunk"
-	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	iconn "github.com/alxayo/go-rtmp/internal/rtmp/conn"
 	"github.com/alxayo/go-rtmp/internal/rtmp/control"
 	"github.com/alxayo/go-rtmp/internal/rtmp/media"
+	"github.com/alxayo/go-rtmp/internal/rtmp/metrics"
 	"github.com/alxayo/go-rtmp/internal/rtmp/relay"
 	"github.com/alxayo/go-rtmp/internal/rtmp/rpc"
 	"github.com/alxayo/go-rtmp/internal/rtmp/server/auth"
@@ -516,6 +516,8 @@ func authenticateRequest(
 	srv.triggerHookEvent(hooks.EventAuthFailed, c.ID(), streamKey, map[string]interface{}{
 		"action": action,
 		"error":  err.Error(),
+		// Include the peer address so operators can audit which IP was denied.
+		"remote_addr": authReq.RemoteAddr,
 	})
 
 	_ = c.Close()
