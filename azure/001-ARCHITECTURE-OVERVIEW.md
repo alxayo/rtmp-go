@@ -59,7 +59,7 @@ This document outlines the deployment of RTMP-go to Azure Container Apps with **
 │                                                         │
 │ ┌──────────────────────────────────────────────────┐   │
 │ │ RTMP Server (Go)                                 │   │
-│ │ - Port 1935 (RTMP) + 443 (RTMPS)                │   │
+│ │ - Port 1935 (RTMP) + 1936 (RTMPS)               │   │
 │ │ - Records 3-min segments → [Service]            │   │
 │ │ - [NEW] Segment metadata via stdout             │   │
 │ └──────────────────────────────────────────────────┘   │

@@ -184,7 +184,7 @@ The script will detect the DNS CNAMEs and automatically:
 
 Managed certificate provisioning takes **up to 20 minutes** per domain (Azure ACME domain validation). The binding uses CNAME validation — no additional TXT records are needed beyond the CNAMEs created in Step 4.
 
-> **Note**: `stream.port-80.com` does NOT get a custom domain binding because the RTMP server uses TCP transport (port 1935), not HTTPS. The CNAME record alone is sufficient for RTMP.
+> **Note**: `stream.port-80.com` does NOT get a managed SSL certificate from Azure because the RTMP server uses TCP transport (not HTTPS). The CNAME record routes traffic. For encrypted RTMP (RTMPS), a Let's Encrypt certificate is deployed via Key Vault — see §16 (RTMPS & TLS).
 
 Alternatively, set custom domain URLs explicitly to override auto-detection:
 ```bash
@@ -339,7 +339,7 @@ The system consists of **two deployments** sharing a single Azure resource group
 
 ### Data Flow
 
-1. **Ingest**: Broadcaster publishes RTMP to `rtmp-server` (TCP 1935)
+1. **Ingest**: Broadcaster publishes RTMP to `rtmp-server` (TCP 1935, or RTMPS on TCP 1936 when TLS enabled)
 2. **Recording**: `rtmp-server` writes FLV segments to Azure Files `recordings/` share and fires webhooks
 3. **Blob Upload (recordings)**: `blob-sidecar` receives webhook, uploads FLV to Blob Storage, optionally deletes local file
 4. **HLS Transcoding**: `hls-transcoder` receives `publish_start` webhook, spawns FFmpeg to subscribe to RTMP stream, transcodes to 3 ABR renditions (1080p/720p/480p)
@@ -920,7 +920,7 @@ The rtmp-server container uses **CLI arguments** in its command array:
 
 | App | Transport | Port | External? | Custom Domain | Description |
 |-----|-----------|------|-----------|---------------|-------------|
-| rtmp-server | TCP | 1935 | Yes (external) | `stream.port-80.com` (CNAME only, no SSL) | Public RTMP ingest endpoint |
+| rtmp-server | TCP | 1935 + 1936 | Yes (external) | `stream.port-80.com` (CNAME only) | Public RTMP/RTMPS ingest endpoint |
 | blob-sidecar | HTTP | 8080 | No (internal) | — | Only receives webhooks from rtmp-server |
 | hls-transcoder | HTTP | 8090 | No (internal) | — | Only receives webhooks from rtmp-server. Multi-container: co-located blob-sidecar on localhost:8081 |
 | sg-platform | HTTP | 3000 | Yes (external) | `watch.port-80.com` (managed SSL) | Public viewer portal + admin |
@@ -989,7 +989,7 @@ All container apps are configured with `minReplicas: 1, maxReplicas: 1` (single-
 ### 12.1 RTMP Authentication
 
 ```
-Broadcaster → RTMP TCP 1935 → rtmp-server
+Broadcaster → RTMP TCP 1935 (or RTMPS TCP 1936) → rtmp-server
                                    │
                                    ├─ Auth mode: token
                                    ├─ Token format: stream_key?token=SECRET
@@ -1184,7 +1184,7 @@ curl -sv https://hls.port-80.com/health 2>&1 | grep -E "SSL|subject|HTTP/"
 #   SSL certificate verify ok.
 ```
 
-> **Note**: `stream.port-80.com` (RTMP server) does NOT have an SSL certificate binding because it uses TCP transport on port 1935, not HTTPS. The CNAME record alone provides the custom domain for RTMP.
+> **Note**: `stream.port-80.com` (RTMP server) does NOT use Azure managed SSL certificates because it uses TCP transport, not HTTPS. For encrypted RTMP (RTMPS), a Let's Encrypt certificate is issued and stored in Key Vault — see §16 (RTMPS & TLS).
 
 ### 13.8 Verify Managed Identity RBAC
 
@@ -1544,11 +1544,11 @@ az network dns record-set cname show --query 'cnameRecord.cname' ...
 
 ### 15.16 Custom Domain Not Binding (RTMP Server)
 
-**Symptom**: Attempting to bind `stream.port-80.com` to the RTMP server fails.
+**Symptom**: Attempting to bind `stream.port-80.com` to the RTMP server via Azure managed certificates fails.
 
-**Root Cause**: The RTMP server uses **TCP transport** on port 1935. Azure Container Apps managed certificates and custom domain bindings with SSL only work for HTTP/HTTPS ingress. TCP-only apps cannot have managed certificates.
+**Root Cause**: The RTMP server uses **TCP transport** on port 1935/1936. Azure Container Apps managed certificates only work for HTTP/HTTPS ingress. TCP-only apps cannot use Azure's built-in managed certificates.
 
-**Solution**: No SSL binding is needed or possible for `stream.port-80.com`. The CNAME record alone routes RTMP traffic. Clients connect via `rtmp://stream.port-80.com:1935/...` (unencrypted RTMP protocol).
+**Solution**: The CNAME record alone routes traffic. For unencrypted RTMP, clients use `rtmp://stream.port-80.com:1935/...`. For encrypted RTMPS, the server handles TLS termination directly using a Let's Encrypt certificate stored in Key Vault (see §16). Azure's managed SSL is not involved — TLS is handled at the application layer.
 
 ### 15.17 HLS HTTP Ingest Pipeline — Step-by-Step Troubleshooting
 
@@ -2196,3 +2196,229 @@ CI/CD uses `sha-{7-char-git-hash}` tags (e.g., `rtmp-server:sha-abc1234`) for ex
 | Audit trail | Terminal output | GitHub Actions logs + step summaries |
 
 For full workflow reference, see [docs/CI_CD_DOCUMENTATION.md](../docs/CI_CD_DOCUMENTATION.md).
+
+---
+
+## 21. RTMPS & TLS (Let's Encrypt)
+
+### 21.1 Overview
+
+RTMPS (RTMP over TLS) provides encrypted ingest on **port 1936** alongside plain RTMP on port 1935. This is required for OBS Studio and other broadcasters that mandate encrypted connections.
+
+**Architecture:**
+```
+                          Port 1935 (plain RTMP)
+Broadcaster ──────────────────────────────────────→ rtmp-server
+                                                       ↑
+Broadcaster ──── TLS 1.3 ──── Port 1936 (RTMPS) ─────┘
+                    ↑
+                    │  Certificate from Azure Key Vault
+                    │  (Let's Encrypt, auto-renewed)
+                    │
+              ┌─────┴──────┐
+              │  Key Vault  │ ← cert-renew.yml (GitHub Actions)
+              │  tls-cert   │     or manual acme.sh
+              │  tls-key    │
+              └────────────┘
+```
+
+**Key design decisions:**
+- Azure Container Apps TCP ingress does NOT terminate TLS — raw bytes pass through
+- The Go RTMP server handles TLS termination directly (built-in `-tls-listen` flag)
+- Certificate + private key stored as Key Vault Secrets (not Certificate objects)
+- Container Apps resolves Key Vault secrets at revision creation time
+- Separate port (1936) rather than STARTTLS on 1935 for maximum client compatibility
+
+### 21.2 Enabling RTMPS
+
+RTMPS is controlled by the `enableRtmps` Bicep parameter (default: `false`). When enabled, the deployment:
+
+1. Creates an Azure Key Vault (Standard tier, RBAC authorization)
+2. Seeds placeholder TLS secrets (required for first deployment ordering)
+3. Grants the container app's Managed Identity "Key Vault Secrets User"
+4. Adds port 1936 to the RTMP server's `additionalPortMappings`
+5. Appends `-tls-listen :1936 -tls-cert /certs/tls-cert -tls-key /certs/tls-key` to the container command
+6. Mounts Key Vault secrets as files in a `/certs` volume
+
+**Deploy with RTMPS enabled:**
+```bash
+# Via deploy.sh
+ENABLE_RTMPS=true ./azure/deploy.sh
+
+# Via Bicep directly
+az deployment group create -g <rg> -f azure/infra/main.bicep \
+  -p enableRtmps=true ...
+```
+
+### 21.3 Certificate Issuance (First Time)
+
+After the first deployment with `enableRtmps=true`, the container starts but RTMPS fails because only placeholder secrets exist. You must issue the real certificate:
+
+**Prerequisites:**
+- [acme.sh](https://get.acme.sh) installed (`curl -sSL https://get.acme.sh | sh`)
+- Azure CLI logged in with DNS Zone Contributor access on the DNS zone resource group
+- Key Vault Secrets Officer role on the Key Vault
+
+**Issue the certificate:**
+```bash
+# Get an Azure access token for the DNS API
+export AZUREDNS_SUBSCRIPTIONID="<subscription-id>"
+export AZUREDNS_TENANTID="<tenant-id>"
+export AZUREDNS_MANAGEDIDENTITY="false"
+export AZUREDNS_BEARERTOKEN="$(az account get-access-token \
+  --resource https://management.azure.com --query accessToken -o tsv)"
+
+# Issue via DNS-01 challenge (no port 80 needed)
+acme.sh --issue \
+  -d "stream.your-domain.com" \
+  --dns dns_azure \
+  --dnssleep 30 \
+  --server letsencrypt
+```
+
+**Upload to Key Vault:**
+```bash
+CERT_DIR="$HOME/.acme.sh/stream.your-domain.com_ecc"
+KV_NAME="<your-key-vault-name>"
+
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name "tls-cert" \
+  --file "$CERT_DIR/fullchain.cer" \
+  --content-type "application/x-pem-file"
+
+az keyvault secret set --vault-name "$KV_NAME" \
+  --name "tls-key" \
+  --file "$CERT_DIR/stream.your-domain.com.key" \
+  --content-type "application/x-pem-file"
+```
+
+**Restart the container to load the certificate:**
+```bash
+az containerapp update -n <rtmp-app-name> -g <rg> \
+  --revision-suffix "tls-$(date +%s)"
+```
+
+### 21.4 Certificate Renewal
+
+Let's Encrypt certificates are valid for **90 days**. Renewal is handled by the `cert-renew.yml` GitHub Actions workflow.
+
+**Automated renewal (`.github/workflows/cert-renew.yml`):**
+- **Schedule**: Runs bi-monthly (1st of every 2nd month at 03:00 UTC)
+- **Method**: OIDC login → acme.sh with `dns_azure` plugin → DNS-01 challenge → upload to Key Vault → restart container
+- **Safety**: 30-day margin before expiry; gracefully skips if not due
+
+**Manual renewal (workflow_dispatch):**
+```
+GitHub → Actions → "TLS Certificate Renewal" → Run workflow
+  ├── force_renew: true/false (force even if not expiring)
+  └── staging: true/false (use LE staging for testing)
+```
+
+**Manual renewal (local CLI):**
+```bash
+# Renew (acme.sh tracks expiry automatically)
+acme.sh --renew -d "stream.your-domain.com" --force
+
+# Upload new cert
+CERT_DIR="$HOME/.acme.sh/stream.your-domain.com_ecc"
+az keyvault secret set --vault-name "$KV_NAME" --name "tls-cert" \
+  --file "$CERT_DIR/fullchain.cer" --content-type "application/x-pem-file"
+az keyvault secret set --vault-name "$KV_NAME" --name "tls-key" \
+  --file "$CERT_DIR/stream.your-domain.com.key" --content-type "application/x-pem-file"
+
+# Restart to pick up new cert
+az containerapp update -n <rtmp-app> -g <rg> --revision-suffix "tls-$(date +%s)"
+```
+
+### 21.5 GitHub Actions Workflow Requirements
+
+The `cert-renew.yml` workflow requires these GitHub configuration items:
+
+**Environment: `prod`**
+
+| Type | Name | Value |
+|------|------|-------|
+| Secret | `AZURE_CLIENT_ID` | OIDC App Registration client ID |
+| Secret | `AZURE_TENANT_ID` | Azure AD tenant ID |
+| Secret | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| Variable | `RESOURCE_GROUP` | Resource group (e.g., `event-periscope-ne`) |
+| Variable | `RTMPS_DOMAIN` | RTMPS domain (e.g., `stream.event-periscope.com`) |
+| Variable | `DNS_ZONE_NAME` | DNS zone (e.g., `event-periscope.com`) |
+| Variable | `DNS_RESOURCE_GROUP` | DNS zone resource group (e.g., `rg-dns`) |
+
+**Azure RBAC roles required for the OIDC identity:**
+- **DNS Zone Contributor** on the DNS zone resource group (for DNS-01 challenge)
+- **Key Vault Secrets Officer** on the Key Vault (for cert upload)
+
+### 21.6 Verifying RTMPS
+
+**Check TLS certificate (openssl):**
+```bash
+echo | openssl s_client -connect stream.your-domain.com:1936 2>&1 \
+  | grep -E "subject|issuer|verify"
+# Expected:
+#   subject=CN=stream.your-domain.com
+#   issuer=C=US, O=Let's Encrypt, CN=E7
+#   verify return:1
+```
+
+**Test RTMPS publish (ffmpeg):**
+```bash
+ffmpeg -re -i test.mp4 -c copy -f flv \
+  "rtmps://stream.your-domain.com:1936/live/stream?token=<secret>"
+```
+
+**OBS Studio settings:**
+```
+Server:      rtmps://stream.your-domain.com:1936/live
+Stream Key:  <event-uuid>?token=<secret>
+```
+
+**Server-side verification (logs):**
+```bash
+az containerapp logs show -n <rtmp-app> -g <rg> --tail 20 \
+  | grep -i "RTMPS\|tls"
+# Expected: "RTMPS enabled" and "RTMPS server listening" on port 1936
+# Connections show: "tls":true
+```
+
+### 21.7 How It Works (Technical Details)
+
+**Secret mounting flow:**
+1. Key Vault stores `tls-cert` (fullchain PEM) and `tls-key` (private key PEM)
+2. Container Apps `secrets` block references them via `keyVaultUrl` + managed identity
+3. A `volumes` entry with `storageType: 'Secret'` creates an in-memory volume
+4. The volume is mounted at `/certs/` — files are named by secret name (`tls-cert`, `tls-key`)
+5. Go server reads `/certs/tls-cert` and `/certs/tls-key` at startup
+
+**Certificate rotation:**
+- Key Vault secrets are versioned — uploading a new cert creates a new version
+- Container Apps resolves `keyvaultref` (no version pin) → picks up latest version
+- **However**, secrets are cached per-revision. A new revision or restart is required to load updated certs
+- The cert-renew workflow forces this by restarting the active revision after upload
+
+**Why DNS-01 (not HTTP-01):**
+- The RTMP server only exposes TCP ports (1935/1936) — no HTTP port 80
+- DNS-01 challenge adds a TXT record to `_acme-challenge.stream.your-domain.com`
+- Works regardless of firewall rules, network topology, or port availability
+- Uses Azure DNS API with the same OIDC identity that manages the infrastructure
+
+### 21.8 Cost
+
+| Resource | Monthly Cost | Notes |
+|----------|-------------|-------|
+| Key Vault (Standard) | ~$0.00 | 2 secrets × $0.03/10K transactions ≈ negligible |
+| Let's Encrypt | $0.00 | Free certificates |
+| DNS TXT record operations | ~$0.00 | 6 requests per renewal (create + delete + verify) |
+| **Total RTMPS overhead** | **< $0.01/month** | |
+
+### 21.9 Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `"failed to find any PEM data in certificate input"` | Placeholder secrets (first deploy) | Issue real cert and upload to Key Vault |
+| RTMPS listener doesn't start | `enableRtmps=false` or cert/key files missing | Verify `enableRtmps=true` in deployment, check `/certs/` mount |
+| `verify return:0` in openssl | Cert expired or incomplete chain | Check fullchain.cer includes intermediate; renew if expired |
+| ffmpeg `Input/output error` on RTMPS | Multiple possible causes | 1. Check port 1936 is open: `nc -zv host 1936` 2. Check auth token 3. Check server logs |
+| cert-renew workflow fails | OIDC token issue or DNS permissions | Verify DNS Zone Contributor role; check workflow logs |
+| Container won't start after cert upload | Revision still uses old cached secrets | Force new revision: `az containerapp update --revision-suffix "tls-$(date +%s)"` |

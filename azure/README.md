@@ -37,8 +37,47 @@ On completion it prints the RTMP URL, ffmpeg test command, and OBS Studio settin
 | Variable | Default | Description |
 |---|---|---|
 | `RTMP_AUTH_TOKEN` | *(prompted)* | Auth token in `streamKey=secret` format |
+| `RTMP_AUTH_CALLBACK_URL` | *(empty)* | Auth callback URL (overrides token auth) |
+| `ENABLE_RTMPS` | `false` | Enable RTMPS (TLS) on port 1936 via Key Vault cert |
 | `RESOURCE_GROUP` | `rg-rtmpgo` | Azure resource group name |
 | `LOCATION` | `eastus2` | Azure region |
+
+### RTMPS (TLS Encryption)
+
+Enable encrypted RTMP ingest on port 1936 alongside plain RTMP on port 1935:
+
+```bash
+ENABLE_RTMPS=true RTMP_AUTH_TOKEN="live/stream=secret" ./azure/deploy.sh
+```
+
+After deployment, issue a Let's Encrypt certificate and upload to Key Vault:
+
+```bash
+# Issue cert (requires acme.sh + Azure DNS access)
+acme.sh --issue -d "stream.your-domain.com" --dns dns_azure --dnssleep 30
+
+# Upload to Key Vault
+KV_NAME=$(az keyvault list -g <rg> --query "[0].name" -o tsv)
+az keyvault secret set --vault-name "$KV_NAME" --name "tls-cert" \
+  --file ~/.acme.sh/stream.your-domain.com_ecc/fullchain.cer
+az keyvault secret set --vault-name "$KV_NAME" --name "tls-key" \
+  --file ~/.acme.sh/stream.your-domain.com_ecc/stream.your-domain.com.key
+
+# Restart to load cert
+az containerapp update -n <rtmp-app> -g <rg> --revision-suffix "tls-$(date +%s)"
+```
+
+**Test:**
+```bash
+# Verify TLS
+echo | openssl s_client -connect stream.your-domain.com:1936 | grep subject
+
+# Publish via RTMPS
+ffmpeg -re -i test.mp4 -c copy -f flv \
+  "rtmps://stream.your-domain.com:1936/live/stream?token=secret"
+```
+
+Certificate auto-renewal is handled by `.github/workflows/cert-renew.yml` (bi-monthly). See [DEPLOYMENT-GUIDE.md §21](DEPLOYMENT-GUIDE.md#21-rtmps--tls-lets-encrypt) for full details.
 
 ### Unified Multi-Region Deployment (with StreamGate)
 
@@ -222,7 +261,8 @@ Resource Group (rg-rtmpgo)
 ├── Container Registry (Basic) — stores rtmp-server, blob-sidecar, and hls-transcoder images
 ├── Storage Account            — Azure Files (recordings + hls-output shares) + Blob (recordings archive)
 ├── Managed Identity           — AcrPull + Storage Blob Data Contributor roles
-├── rtmp-server Container App  — TCP ingress on port 1935, token auth, 2-min segment recording
+├── Key Vault (if RTMPS)       — Stores TLS cert + key for RTMPS (Let's Encrypt)
+├── rtmp-server Container App  — TCP ingress on port 1935 (+1936 RTMPS), token/callback auth
 ├── blob-sidecar Container App — receives segment_complete webhooks, uploads to Blob Storage
 └── hls-transcoder Container App — receives publish_start/stop webhooks, runs FFmpeg ABR transcoding
 ```
