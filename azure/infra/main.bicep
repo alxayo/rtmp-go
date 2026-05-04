@@ -75,6 +75,9 @@ param sidecarMinReplicas int = 1
 @description('Minimum replicas for HLS transcoder (0 = scale to zero)')
 param hlsTranscoderMinReplicas int = 1
 
+@description('Enable RTMPS (TLS) on port 1936 alongside plain RTMP on 1935. Requires TLS cert/key in Key Vault.')
+param enableRtmps bool = false
+
 // ---------- Variables ----------
 
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
@@ -93,6 +96,7 @@ var blobContainerName = 'recordings'
 var hlsBlobContainerName = 'hls-content'
 var vnetName = 'azvnet${resourceToken}'
 var subnetName = 'containerapps'
+var keyVaultName = 'azkv${resourceToken}'
 
 // Tenant config for the blob-sidecar (uses managed identity to access blob storage)
 #disable-next-line secure-secrets-in-params
@@ -303,6 +307,35 @@ resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+// ---------- Key Vault (for TLS certificate storage) ----------
+
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = if (enableRtmps) {
+  name: keyVaultName
+  location: location
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+  }
+}
+
+// Key Vault Secrets User: allows container app to read TLS cert/key secrets
+resource kvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableRtmps) {
+  name: guid(keyVault!.id, identity.id, '4633458b-17de-408a-b874-0445c86b69e6')
+  scope: keyVault!
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    // Key Vault Secrets User role
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+  }
+}
+
 // ---------- Container App: rtmp-server ----------
 
 resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -334,8 +367,15 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 1935
         transport: 'tcp'
         exposedPort: 1935
+        additionalPortMappings: enableRtmps ? [
+          {
+            targetPort: 1936
+            external: true
+            exposedPort: 1936
+          }
+        ] : []
       }
-      secrets: [
+      secrets: concat([
         {
           name: 'rtmp-auth-token'
           value: rtmpAuthToken
@@ -344,7 +384,18 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'internal-api-key'
           value: internalApiKey
         }
-      ]
+      ], enableRtmps ? [
+        {
+          name: 'tls-cert'
+          keyVaultUrl: 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/tls-cert'
+          identity: identity.id
+        }
+        {
+          name: 'tls-key'
+          keyVaultUrl: 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/tls-key'
+          identity: identity.id
+        }
+      ] : [])
     }
     template: {
       containers: [
@@ -393,6 +444,13 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             'publish_start=${streamgateHooksUrl}'
             '-hook-webhook'
             'publish_stop=${streamgateHooksUrl}'
+          ] : [], enableRtmps ? [
+            '-tls-listen'
+            ':1936'
+            '-tls-cert'
+            '/certs/tls-cert'
+            '-tls-key'
+            '/certs/tls-key'
           ] : []) : []
           env: [
             {
@@ -400,21 +458,31 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
               secretRef: 'internal-api-key'
             }
           ]
-          volumeMounts: [
+          volumeMounts: concat([
             {
               volumeName: 'recordings'
               mountPath: '/recordings'
             }
-          ]
+          ], enableRtmps ? [
+            {
+              volumeName: 'certs'
+              mountPath: '/certs'
+            }
+          ] : [])
         }
       ]
-      volumes: [
+      volumes: concat([
         {
           name: 'recordings'
           storageName: recordingsStorage.name
           storageType: 'AzureFile'
         }
-      ]
+      ], enableRtmps ? [
+        {
+          name: 'certs'
+          storageType: 'Secret'
+        }
+      ] : [])
       scale: {
         minReplicas: rtmpMinReplicas
         maxReplicas: 1
@@ -933,3 +1001,5 @@ output identityClientId string = identity.properties.clientId
 output identityName string = identity.name
 output resourceGroupName string = resourceGroup().name
 output environmentName string = containerEnv.name
+output keyVaultName string = enableRtmps ? keyVault!.name : ''
+output keyVaultUri string = enableRtmps ? keyVault!.properties.vaultUri : ''

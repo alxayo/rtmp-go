@@ -1,0 +1,210 @@
+# ============================================================================
+# TLS Certificate Renewal — Let's Encrypt via acme.sh + Azure DNS
+# ============================================================================
+# Issues/renews RTMPS TLS certificate using DNS-01 challenge against Azure DNS,
+# stores cert + key as Secrets in Azure Key Vault, and restarts the RTMP server
+# container app to pick up the new certificate.
+#
+# Schedule: Runs bi-monthly (every 60 days). Let's Encrypt certs are valid 90
+# days, so this provides a 30-day safety margin.
+#
+# Manual trigger: Use workflow_dispatch for first issuance or emergency renewal.
+#
+# Prerequisites:
+#   - Azure Key Vault deployed (enableRtmps=true in Bicep)
+#   - OIDC federated credential for this repo's 'prod' environment
+#   - Managed Identity has "DNS Zone Contributor" on DNS zone resource group
+#   - Managed Identity has "Key Vault Secrets Officer" on Key Vault
+# ============================================================================
+
+name: "TLS Certificate Renewal"
+
+on:
+  schedule:
+    # 1st of every 2nd month at 03:00 UTC (bi-monthly renewal)
+    - cron: '0 3 1 */2 *'
+  workflow_dispatch:
+    inputs:
+      force_renew:
+        description: 'Force renewal even if cert is not expiring'
+        required: false
+        type: boolean
+        default: false
+      staging:
+        description: 'Use Let''s Encrypt staging (for testing without rate limits)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  DOMAIN: ${{ vars.RTMPS_DOMAIN || 'stream.port-80.com' }}
+  DNS_ZONE_NAME: ${{ vars.DNS_ZONE_NAME || 'port-80.com' }}
+  DNS_RESOURCE_GROUP: ${{ vars.DNS_RESOURCE_GROUP || 'rg-dns' }}
+
+jobs:
+  renew-certificate:
+    name: Issue/Renew TLS Certificate
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: ./.github/actions/azure-login
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover Key Vault and RTMP App
+        id: discover
+        run: |
+          RG="${{ vars.RESOURCE_GROUP }}"
+          
+          # Find Key Vault in resource group
+          KV_NAME=$(az keyvault list -g "$RG" --query "[0].name" -o tsv)
+          if [ -z "$KV_NAME" ]; then
+            echo "::error::No Key Vault found in resource group $RG"
+            exit 1
+          fi
+          echo "kv_name=$KV_NAME" >> "$GITHUB_OUTPUT"
+          
+          # Find RTMP server container app
+          RTMP_APP=$(az containerapp list -g "$RG" --query "[?tags.role=='rtmp-server'].name | [0]" -o tsv)
+          if [ -z "$RTMP_APP" ]; then
+            echo "::error::No RTMP server container app found in resource group $RG"
+            exit 1
+          fi
+          echo "rtmp_app=$RTMP_APP" >> "$GITHUB_OUTPUT"
+          
+          echo "Key Vault: $KV_NAME"
+          echo "RTMP App:  $RTMP_APP"
+
+      - name: Install acme.sh
+        run: |
+          curl -sSL https://get.acme.sh | sh -s email=noreply@${{ env.DNS_ZONE_NAME }}
+          echo "$HOME/.acme.sh" >> "$GITHUB_PATH"
+
+      - name: Get Azure DNS credentials
+        id: dns_creds
+        run: |
+          # acme.sh Azure DNS plugin uses Azure CLI credentials directly
+          # The OIDC login from earlier provides the necessary access
+          SUBSCRIPTION_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
+          
+          # Export for acme.sh Azure DNS plugin
+          echo "AZUREDNS_SUBSCRIPTIONID=$SUBSCRIPTION_ID" >> "$GITHUB_ENV"
+          echo "AZUREDNS_TENANTID=$TENANT_ID" >> "$GITHUB_ENV"
+          echo "AZUREDNS_APPID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+          # Use managed identity token from az CLI
+          ACCESS_TOKEN=$(az account get-access-token --query accessToken -o tsv)
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "AZUREDNS_MANAGEDIDENTITY=true" >> "$GITHUB_ENV"
+
+      - name: Issue/Renew Certificate
+        run: |
+          ACME_ARGS=""
+          
+          # Use staging server for testing
+          if [ "${{ inputs.staging }}" = "true" ]; then
+            ACME_ARGS="--staging"
+            echo "⚠️  Using Let's Encrypt STAGING server"
+          fi
+          
+          # Force renewal if requested
+          if [ "${{ inputs.force_renew }}" = "true" ]; then
+            ACME_ARGS="$ACME_ARGS --force"
+          fi
+          
+          # Issue or renew the certificate using Azure DNS validation
+          ~/.acme.sh/acme.sh --issue \
+            -d "${{ env.DOMAIN }}" \
+            --dns dns_azure \
+            --dnssleep 30 \
+            $ACME_ARGS \
+            || {
+              # Exit code 2 means "cert not due for renewal" — not an error
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -eq 2 ]; then
+                echo "Certificate not due for renewal yet. Skipping."
+                echo "SKIP_UPLOAD=true" >> "$GITHUB_ENV"
+              else
+                exit $EXIT_CODE
+              fi
+            }
+
+      - name: Upload Certificate to Key Vault
+        if: env.SKIP_UPLOAD != 'true'
+        run: |
+          KV_NAME="${{ steps.discover.outputs.kv_name }}"
+          CERT_DIR="$HOME/.acme.sh/${{ env.DOMAIN }}_ecc"
+          
+          # If no ECC cert, try RSA path
+          if [ ! -d "$CERT_DIR" ]; then
+            CERT_DIR="$HOME/.acme.sh/${{ env.DOMAIN }}"
+          fi
+          
+          echo "Uploading certificate from: $CERT_DIR"
+          
+          # Upload fullchain cert (includes intermediate for proper chain)
+          az keyvault secret set \
+            --vault-name "$KV_NAME" \
+            --name "tls-cert" \
+            --file "$CERT_DIR/fullchain.cer" \
+            --content-type "application/x-pem-file" \
+            -o none
+          
+          # Upload private key
+          az keyvault secret set \
+            --vault-name "$KV_NAME" \
+            --name "tls-key" \
+            --file "$CERT_DIR/${{ env.DOMAIN }}.key" \
+            --content-type "application/x-pem-file" \
+            -o none
+          
+          echo "✅ Certificate uploaded to Key Vault: $KV_NAME"
+
+      - name: Restart RTMP Server to pick up new certificate
+        if: env.SKIP_UPLOAD != 'true'
+        run: |
+          RG="${{ vars.RESOURCE_GROUP }}"
+          RTMP_APP="${{ steps.discover.outputs.rtmp_app }}"
+          
+          # Get active revision
+          REVISION=$(az containerapp revision list \
+            -g "$RG" \
+            -n "$RTMP_APP" \
+            --query "[?properties.active].name | [0]" \
+            -o tsv)
+          
+          echo "Restarting revision: $REVISION"
+          az containerapp revision restart \
+            -g "$RG" \
+            -n "$RTMP_APP" \
+            --revision "$REVISION" \
+            -o none
+          
+          echo "✅ RTMP server restarted — new certificate will be loaded"
+
+      - name: Verify Certificate (post-restart)
+        if: env.SKIP_UPLOAD != 'true'
+        run: |
+          KV_NAME="${{ steps.discover.outputs.kv_name }}"
+          
+          # Verify cert exists and show expiry
+          CERT_VALUE=$(az keyvault secret show \
+            --vault-name "$KV_NAME" \
+            --name "tls-cert" \
+            --query "value" \
+            -o tsv)
+          
+          echo "$CERT_VALUE" | openssl x509 -noout -subject -issuer -dates
+          echo ""
+          echo "✅ Certificate renewal complete"
