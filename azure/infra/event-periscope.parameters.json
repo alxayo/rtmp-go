@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "eventperiscope"
+    },
+    "location": {
+      "value": "northeurope"
+    },
+    "rtmpAuthToken": {
+      "value": ""
+    },
+    "rtmpMinReplicas": {
+      "value": 0
+    },
+    "sidecarMinReplicas": {
+      "value": 0
+    },
+    "hlsTranscoderMinReplicas": {
+      "value": 0
+    }
+  }
+}
