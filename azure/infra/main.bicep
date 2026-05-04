@@ -66,6 +66,15 @@ param internalApiKey string = ''
 @description('Maximum upload size for HTTP ingest in bytes (default 50MB for Phase 3)')
 param ingestMaxBodyBytes int = 52428800
 
+@description('Minimum replicas for RTMP server (0 = scale to zero)')
+param rtmpMinReplicas int = 1
+
+@description('Minimum replicas for blob-sidecar (0 = scale to zero)')
+param sidecarMinReplicas int = 1
+
+@description('Minimum replicas for HLS transcoder (0 = scale to zero)')
+param hlsTranscoderMinReplicas int = 1
+
 // ---------- Variables ----------
 
 var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
@@ -407,7 +416,7 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
+        minReplicas: rtmpMinReplicas
         maxReplicas: 1
       }
     }
@@ -548,7 +557,7 @@ resource sidecarApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
+        minReplicas: sidecarMinReplicas
         maxReplicas: 1
       }
     }
@@ -747,7 +756,7 @@ resource hlsApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
+        minReplicas: hlsTranscoderMinReplicas
         maxReplicas: 1
       }
     }
