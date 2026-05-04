@@ -178,6 +178,7 @@ See [docs/architecture.md](docs/architecture.md) for the full system overview wi
 | [SRT Protocol](docs/srt-protocol.md) | SRT ingest: handshake, reliability, MPEG-TS conversion |
 | [Implementation](docs/implementation.md) | Code walkthrough, data structures, media flow |
 | [Testing Guide](docs/testing-guide.md) | Unit tests, golden vectors, interop testing |
+| [CI/CD & Azure Deployment](docs/CI_CD_DOCUMENTATION.md) | GitHub Actions pipelines and Azure deployment |
 | [Documentation Index](docs/README.md) | Full index of all docs |
 
 ## Testing

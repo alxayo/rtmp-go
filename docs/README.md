@@ -39,6 +39,8 @@
 |----------|-------------|
 | [../README.md](../README.md) | Project overview and feature summary |
 | [../quick-start.md](../quick-start.md) | Original quick-start guide with OBS setup |
+| [CI/CD Documentation](CI_CD_DOCUMENTATION.md) | GitHub Actions pipelines, Azure deployment, and environment setup |
+| [../azure/README.md](../azure/README.md) | Azure Container Apps architecture and deployment guide |
 
 ## Specifications
 
