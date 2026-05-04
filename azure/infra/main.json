@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "4041011674681544589"
+      "templateHash": "11148351624728148474"
     }
   },
   "parameters": {
@@ -40,6 +40,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "Streamgate hooks endpoint URL for RTMP lifecycle notifications (publish_start/publish_stop). When set, rtmp-go sends webhook events to Streamgate so it can track active streaming sessions."
+      }
+    },
+    "streamgatePlatformUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Streamgate Platform base URL for HLS transcoder config fetch (e.g. http://sg-platform-xxx.internal.env.region.azurecontainerapps.io). Required for HLS transcoder to fetch stream configuration."
       }
     },
     "rtmpServerImage": {
@@ -83,6 +90,34 @@
       "metadata": {
         "description": "Maximum upload size for HTTP ingest in bytes (default 50MB for Phase 3)"
       }
+    },
+    "rtmpMinReplicas": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Minimum replicas for RTMP server (0 = scale to zero)"
+      }
+    },
+    "sidecarMinReplicas": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Minimum replicas for blob-sidecar (0 = scale to zero)"
+      }
+    },
+    "hlsTranscoderMinReplicas": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Minimum replicas for HLS transcoder (0 = scale to zero)"
+      }
+    },
+    "enableRtmps": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable RTMPS (TLS) on port 1936 alongside plain RTMP on 1935. Requires TLS cert/key in Key Vault."
+      }
     }
   },
   "variables": {
@@ -100,6 +135,7 @@
     "hlsBlobContainerName": "hls-content",
     "vnetName": "[format('azvnet{0}', variables('resourceToken'))]",
     "subnetName": "containerapps",
+    "keyVaultName": "[format('azkv{0}', variables('resourceToken'))]",
     "tenantsJsonValue": "[format('{{\"tenants\":{{\"live\":{{\"storage_account\":\"https://{0}.blob.core.windows.net\",\"container\":\"recordings\",\"credential\":\"managed-identity\"}}}},\"default\":{{\"storage_account\":\"https://{1}.blob.core.windows.net\",\"container\":\"recordings\",\"credential\":\"managed-identity\"}},\"api_fallback\":{{\"enabled\":false}}}}', variables('storageAccountName'), variables('storageAccountName'))]",
     "hlsTenantsJsonValue": "[format('{{\"tenants\":{{\"hls\":{{\"storage_account\":\"https://{0}.blob.core.windows.net\",\"container\":\"hls-content\",\"credential\":\"managed-identity\"}}}},\"default\":{{\"storage_account\":\"https://{1}.blob.core.windows.net\",\"container\":\"hls-content\",\"credential\":\"managed-identity\"}},\"api_fallback\":{{\"enabled\":false}}}}', variables('storageAccountName'), variables('storageAccountName'))]"
   },
@@ -330,6 +366,64 @@
       ]
     },
     {
+      "condition": "[parameters('enableRtmps')]",
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 7
+      }
+    },
+    {
+      "condition": "[parameters('enableRtmps')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '4633458b-17de-408a-b874-0445c86b69e6')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableRtmps')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'tls-cert')]",
+      "properties": {
+        "value": "placeholder-awaiting-cert-renewal",
+        "contentType": "application/x-pem-file"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableRtmps')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'tls-key')]",
+      "properties": {
+        "value": "placeholder-awaiting-cert-renewal",
+        "contentType": "application/x-pem-file"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
       "type": "Microsoft.App/containerApps",
       "apiVersion": "2024-03-01",
       "name": "[variables('rtmpAppName')]",
@@ -357,18 +451,10 @@
             "external": true,
             "targetPort": 1935,
             "transport": "tcp",
-            "exposedPort": 1935
+            "exposedPort": 1935,
+            "additionalPortMappings": "[if(parameters('enableRtmps'), createArray(createObject('targetPort', 1936, 'external', true(), 'exposedPort', 1936)), createArray())]"
           },
-          "secrets": [
-            {
-              "name": "rtmp-auth-token",
-              "value": "[parameters('rtmpAuthToken')]"
-            },
-            {
-              "name": "internal-api-key",
-              "value": "[parameters('internalApiKey')]"
-            }
-          ]
+          "secrets": "[concat(createArray(createObject('name', 'rtmp-auth-token', 'value', parameters('rtmpAuthToken')), createObject('name', 'internal-api-key', 'value', parameters('internalApiKey'))), if(parameters('enableRtmps'), createArray(createObject('name', 'tls-cert', 'keyVaultUrl', format('https://{0}{1}/secrets/tls-cert', variables('keyVaultName'), environment().suffixes.keyvaultDns), 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))), createObject('name', 'tls-key', 'keyVaultUrl', format('https://{0}{1}/secrets/tls-key', variables('keyVaultName'), environment().suffixes.keyvaultDns), 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')))), createArray()))]"
         },
         "template": {
           "containers": [
@@ -379,30 +465,19 @@
                 "cpu": "[json('0.5')]",
                 "memory": "1Gi"
               },
-              "command": "[if(not(empty(parameters('rtmpServerImage'))), concat(createArray('/rtmp-server', '-listen', ':1935'), if(not(empty(parameters('rtmpAuthCallbackUrl'))), createArray('-auth-mode', 'callback', '-auth-callback', parameters('rtmpAuthCallbackUrl')), createArray('-auth-mode', 'token', '-auth-token', parameters('rtmpAuthToken'))), createArray('-record-all', 'true', '-record-dir', '/recordings', '-segment-duration', '2m', '-hook-webhook', format('segment_complete=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_start=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_stop=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_start=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_stop=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-log-level', 'info'), if(not(empty(parameters('streamgateHooksUrl'))), createArray('-hook-webhook', format('publish_start={0}', parameters('streamgateHooksUrl')), '-hook-webhook', format('publish_stop={0}', parameters('streamgateHooksUrl'))), createArray())), createArray())]",
+              "command": "[if(not(empty(parameters('rtmpServerImage'))), concat(createArray('/rtmp-server', '-listen', ':1935'), if(not(empty(parameters('rtmpAuthCallbackUrl'))), createArray('-auth-mode', 'callback', '-auth-callback', parameters('rtmpAuthCallbackUrl')), createArray('-auth-mode', 'token', '-auth-token', parameters('rtmpAuthToken'))), createArray('-record-all', 'true', '-record-dir', '/recordings', '-segment-duration', '2m', '-hook-webhook', format('segment_complete=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_start=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('recording_stop=http://{0}.internal.{1}/events', variables('sidecarAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_start=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-hook-webhook', format('publish_stop=http://{0}.internal.{1}/events', variables('hlsAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-log-level', 'info'), if(not(empty(parameters('streamgateHooksUrl'))), createArray('-hook-webhook', format('publish_start={0}', parameters('streamgateHooksUrl')), '-hook-webhook', format('publish_stop={0}', parameters('streamgateHooksUrl'))), createArray()), if(parameters('enableRtmps'), createArray('-tls-listen', ':1936', '-tls-cert', '/certs/tls-cert', '-tls-key', '/certs/tls-key'), createArray())), createArray())]",
               "env": [
                 {
                   "name": "INTERNAL_API_KEY",
                   "secretRef": "internal-api-key"
                 }
               ],
-              "volumeMounts": [
-                {
-                  "volumeName": "recordings",
-                  "mountPath": "/recordings"
-                }
-              ]
+              "volumeMounts": "[concat(createArray(createObject('volumeName', 'recordings', 'mountPath', '/recordings')), if(parameters('enableRtmps'), createArray(createObject('volumeName', 'certs', 'mountPath', '/certs')), createArray()))]"
             }
           ],
-          "volumes": [
-            {
-              "name": "recordings",
-              "storageName": "recordings",
-              "storageType": "AzureFile"
-            }
-          ],
+          "volumes": "[concat(createArray(createObject('name', 'recordings', 'storageName', 'recordings', 'storageType', 'AzureFile')), if(parameters('enableRtmps'), createArray(createObject('name', 'certs', 'storageType', 'Secret')), createArray()))]",
           "scale": {
-            "minReplicas": 1,
+            "minReplicas": "[parameters('rtmpMinReplicas')]",
             "maxReplicas": 1
           }
         }
@@ -411,6 +486,9 @@
         "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '7f951dda-4ed3-4680-a7ca-43fe172d538d'))]",
         "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '4633458b-17de-408a-b874-0445c86b69e6'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'tls-cert')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'tls-key')]",
         "[resourceId('Microsoft.App/managedEnvironments/storages', variables('containerEnvName'), 'recordings')]",
         "[resourceId('Microsoft.ContainerRegistry/registries', variables('registryName'))]"
       ]
@@ -516,7 +594,7 @@
             }
           ],
           "scale": {
-            "minReplicas": 1,
+            "minReplicas": "[parameters('sidecarMinReplicas')]",
             "maxReplicas": 1
           }
         }
@@ -588,7 +666,7 @@
                 "cpu": "[json('3.5')]",
                 "memory": "7Gi"
               },
-              "command": "[if(not(empty(parameters('hlsTranscoderImage'))), createArray('/hls-transcoder', '-listen-addr', ':8090', '-hls-dir', '/hls-output', '-rtmp-host', format('{0}.{1}', variables('rtmpAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-rtmp-port', '1935', '-rtmp-token', last(split(parameters('rtmpAuthToken'), '=')), '-mode', 'abr', '-output-mode', 'http', '-ingest-url', 'http://localhost:8081/ingest/', '-ingest-token', parameters('ingestToken'), '-platform-api-key', parameters('internalApiKey'), '-log-level', 'info'), createArray())]",
+              "command": "[if(not(empty(parameters('hlsTranscoderImage'))), createArray('/hls-transcoder', '-listen-addr', ':8090', '-hls-dir', '/hls-output', '-rtmp-host', format('{0}.{1}', variables('rtmpAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName')), '2024-03-01').defaultDomain), '-rtmp-port', '1935', '-rtmp-token', last(split(parameters('rtmpAuthToken'), '=')), '-mode', 'abr', '-output-mode', 'http', '-ingest-url', 'http://localhost:8081/ingest/', '-ingest-token', parameters('ingestToken'), '-platform-api-key', parameters('internalApiKey'), '-platform-url', parameters('streamgatePlatformUrl'), '-log-level', 'info'), createArray())]",
               "volumeMounts": [
                 {
                   "volumeName": "hls-output",
@@ -649,7 +727,7 @@
             }
           ],
           "scale": {
-            "minReplicas": 1,
+            "minReplicas": "[parameters('hlsTranscoderMinReplicas')]",
             "maxReplicas": 1
           }
         }
@@ -826,6 +904,14 @@
     "environmentName": {
       "type": "string",
       "value": "[variables('containerEnvName')]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[if(parameters('enableRtmps'), variables('keyVaultName'), '')]"
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "value": "[if(parameters('enableRtmps'), reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri, '')]"
     }
   }
 }

@@ -336,6 +336,25 @@ resource kvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+// Seed placeholder TLS secrets so the container app can reference them before first cert issuance
+resource kvSecretTlsCert 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableRtmps) {
+  parent: keyVault
+  name: 'tls-cert'
+  properties: {
+    value: 'placeholder-awaiting-cert-renewal'
+    contentType: 'application/x-pem-file'
+  }
+}
+
+resource kvSecretTlsKey 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (enableRtmps) {
+  parent: keyVault
+  name: 'tls-key'
+  properties: {
+    value: 'placeholder-awaiting-cert-renewal'
+    contentType: 'application/x-pem-file'
+  }
+}
+
 // ---------- Container App: rtmp-server ----------
 
 resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -491,6 +510,9 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   dependsOn: [
     acrPullRole
+    kvSecretsUserRole
+    kvSecretTlsCert
+    kvSecretTlsKey
   ]
 }
 

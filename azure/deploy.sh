@@ -12,6 +12,7 @@
 #   STREAMGATE_HOOKS_URL   — optional Streamgate publish lifecycle webhook endpoint
 #   STREAMGATE_PLATFORM_URL — optional Streamgate Platform base URL for HLS transcoder config fetch (auto-discovered if not set)
 #   INTERNAL_API_KEY       — optional API key for webhook hook authentication
+#   ENABLE_RTMPS           — enable RTMPS (TLS) on port 1936 (default: false)
 #   RESOURCE_GROUP         — override resource group name (default: rg-rtmpgo)
 #   LOCATION               — Azure region (default: eastus2)
 # ============================================================================
@@ -59,6 +60,7 @@ STREAMGATE_HOOKS_URL="${STREAMGATE_HOOKS_URL:-}"
 STREAMGATE_PLATFORM_URL="${STREAMGATE_PLATFORM_URL:-}"
 INTERNAL_API_KEY="${INTERNAL_API_KEY:-}"
 RTMP_AUTH_CALLBACK_URL="${RTMP_AUTH_CALLBACK_URL:-}"
+ENABLE_RTMPS="${ENABLE_RTMPS:-false}"
 IMAGE_TAG="v$(date +%s)"
 
 echo "============================================"
@@ -66,6 +68,7 @@ echo "  rtmp-go Azure Deployment"
 echo "============================================"
 echo "Resource Group:  $RESOURCE_GROUP"
 echo "Location:        $LOCATION"
+echo "RTMPS Enabled:   $ENABLE_RTMPS"
 echo "Project Root:    $PROJECT_ROOT"
 echo "============================================"
 
@@ -124,6 +127,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters streamgatePlatformUrl="$STREAMGATE_PLATFORM_URL" \
   --parameters internalApiKey="$INTERNAL_API_KEY" \
   --parameters rtmpAuthCallbackUrl="$RTMP_AUTH_CALLBACK_URL" \
+  --parameters enableRtmps="$ENABLE_RTMPS" \
   --query 'properties.outputs' \
   --output json)
 
@@ -177,6 +181,7 @@ DEPLOY_OUTPUT=$(az deployment group create \
   --parameters streamgatePlatformUrl="$STREAMGATE_PLATFORM_URL" \
   --parameters internalApiKey="$INTERNAL_API_KEY" \
   --parameters rtmpAuthCallbackUrl="$RTMP_AUTH_CALLBACK_URL" \
+  --parameters enableRtmps="$ENABLE_RTMPS" \
   --parameters rtmpServerImage="${ACR_LOGIN_SERVER}/rtmp-server:${IMAGE_TAG}" \
   --parameters blobSidecarImage="${ACR_LOGIN_SERVER}/blob-sidecar:${IMAGE_TAG}" \
   --parameters hlsTranscoderImage="${ACR_LOGIN_SERVER}/hls-transcoder:${IMAGE_TAG}" \
@@ -223,6 +228,11 @@ echo ""
 echo "RTMP Endpoint (ACA FQDN):"
 echo "  rtmp://${RTMP_FQDN}/live/stream?token=<your-secret>"
 echo ""
+if [ "$ENABLE_RTMPS" = "true" ]; then
+echo "RTMPS Endpoint (TLS, port 1936):"
+echo "  rtmps://${RTMP_FQDN}:1936/live/stream?token=<your-secret>"
+echo ""
+fi
 echo "Custom Domain Endpoint (after DNS setup):"
 echo "  rtmp://stream.port-80.com/live/stream?token=<your-secret>"
 echo ""
