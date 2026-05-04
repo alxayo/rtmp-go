@@ -1,0 +1,33 @@
+name: 'Discover ACR'
+description: 'Discover Azure Container Registry from a resource group'
+
+inputs:
+  resource-group:
+    description: 'Azure resource group name'
+    required: true
+
+outputs:
+  acr-name:
+    description: 'ACR name (short name for az acr build)'
+    value: ${{ steps.discover.outputs.acr-name }}
+  acr-login-server:
+    description: 'ACR login server URL'
+    value: ${{ steps.discover.outputs.acr-login-server }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Discover ACR in resource group
+      id: discover
+      shell: bash
+      run: |
+        ACR_NAME=$(az acr list --resource-group "${{ inputs.resource-group }}" \
+          --query "[0].name" -o tsv)
+        if [ -z "$ACR_NAME" ]; then
+          echo "::error::No ACR found in resource group ${{ inputs.resource-group }}. Run the infra workflow first."
+          exit 1
+        fi
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --query "loginServer" -o tsv)
+        echo "acr-name=$ACR_NAME" >> "$GITHUB_OUTPUT"
+        echo "acr-login-server=$ACR_LOGIN_SERVER" >> "$GITHUB_OUTPUT"
+        echo "Found ACR: $ACR_LOGIN_SERVER"

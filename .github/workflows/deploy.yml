@@ -1,0 +1,186 @@
+name: Deploy Services
+
+on:
+  workflow_run:
+    workflows: [Build Containers]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      service:
+        description: 'Service to deploy (or all)'
+        required: true
+        type: choice
+        options:
+          - all
+          - rtmp-server
+          - blob-sidecar
+          - hls-transcoder
+      image_tag:
+        description: 'Image tag to deploy (default: latest built SHA)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment || 'dev' }}
+    runs-on: ubuntu-latest
+    # Only deploy on workflow_run if the build succeeded
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: ./.github/actions/azure-login
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover ACR
+        id: acr
+        uses: ./.github/actions/discover-acr
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+
+      - name: Resolve image tag
+        id: resolve-tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then
+            # Use the most recent SHA-tagged image from ACR
+            TAG=$(az acr repository show-tags \
+              --name "${{ steps.acr.outputs.acr-name }}" \
+              --repository "rtmp-server" \
+              --orderby time_desc \
+              --query "[?starts_with(@, 'sha-')] | [0]" -o tsv 2>/dev/null)
+            if [ -z "$TAG" ]; then
+              TAG="latest"
+            fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying with tag: $TAG"
+
+      - name: Discover container app names
+        id: apps
+        run: |
+          RTMP_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'rtmp-server')].name" -o tsv | head -1)
+          SIDECAR_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'rec-blob-sidecar')].name" -o tsv | head -1)
+          HLS_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'hls-transcoder')].name" -o tsv | head -1)
+
+          echo "rtmp-app=$RTMP_APP" >> "$GITHUB_OUTPUT"
+          echo "sidecar-app=$SIDECAR_APP" >> "$GITHUB_OUTPUT"
+          echo "hls-app=$HLS_APP" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy rtmp-server
+        if: inputs.service == 'all' || inputs.service == 'rtmp-server' || inputs.service == ''
+        run: |
+          APP="${{ steps.apps.outputs.rtmp-app }}"
+          IMAGE="${{ steps.acr.outputs.acr-login-server }}/rtmp-server:${{ steps.resolve-tag.outputs.tag }}"
+          echo "Deploying $IMAGE to $APP..."
+          az containerapp update \
+            --name "$APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --output none
+
+      - name: Deploy blob-sidecar
+        if: inputs.service == 'all' || inputs.service == 'blob-sidecar' || inputs.service == ''
+        run: |
+          APP="${{ steps.apps.outputs.sidecar-app }}"
+          IMAGE="${{ steps.acr.outputs.acr-login-server }}/blob-sidecar:${{ steps.resolve-tag.outputs.tag }}"
+          echo "Deploying $IMAGE to $APP..."
+          az containerapp update \
+            --name "$APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --output none
+
+      - name: Deploy hls-transcoder
+        if: inputs.service == 'all' || inputs.service == 'hls-transcoder' || inputs.service == ''
+        run: |
+          APP="${{ steps.apps.outputs.hls-app }}"
+          IMAGE="${{ steps.acr.outputs.acr-login-server }}/hls-transcoder:${{ steps.resolve-tag.outputs.tag }}"
+          echo "Deploying $IMAGE to $APP..."
+          # hls-transcoder has co-located sidecar — update both containers
+          az containerapp update \
+            --name "$APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --output none
+
+      - name: Verify deployments
+        run: |
+          SERVICE="${{ inputs.service || 'all' }}"
+          FAILED=0
+
+          verify_app() {
+            local app_name="$1"
+            local retries=12
+            local i=0
+            while [ $i -lt $retries ]; do
+              STATUS=$(az containerapp revision list \
+                --name "$app_name" -g "$RESOURCE_GROUP" \
+                --query "[?properties.active].properties.runningState" -o tsv 2>/dev/null | head -1)
+              if echo "$STATUS" | grep -qi "Running"; then
+                echo "✓ $app_name is running"
+                return 0
+              fi
+              i=$((i + 1))
+              sleep 10
+            done
+            echo "✗ $app_name may not be running"
+            return 1
+          }
+
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "rtmp-server" ] || [ "$SERVICE" = "" ]; then
+            verify_app "${{ steps.apps.outputs.rtmp-app }}" || FAILED=$((FAILED + 1))
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "blob-sidecar" ] || [ "$SERVICE" = "" ]; then
+            verify_app "${{ steps.apps.outputs.sidecar-app }}" || FAILED=$((FAILED + 1))
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "hls-transcoder" ] || [ "$SERVICE" = "" ]; then
+            verify_app "${{ steps.apps.outputs.hls-app }}" || FAILED=$((FAILED + 1))
+          fi
+
+          if [ $FAILED -gt 0 ]; then
+            echo "::warning::$FAILED service(s) may not be running. Check Azure Portal."
+          fi
+
+      - name: Summary
+        run: |
+          echo "### Deployment Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Service | Image | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          TAG="${{ steps.resolve-tag.outputs.tag }}"
+          ACR="${{ steps.acr.outputs.acr-login-server }}"
+          SERVICE="${{ inputs.service || 'all' }}"
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "rtmp-server" ] || [ "$SERVICE" = "" ]; then
+            echo "| rtmp-server | ${ACR}/rtmp-server:${TAG} | Deployed |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "blob-sidecar" ] || [ "$SERVICE" = "" ]; then
+            echo "| blob-sidecar | ${ACR}/blob-sidecar:${TAG} | Deployed |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "hls-transcoder" ] || [ "$SERVICE" = "" ]; then
+            echo "| hls-transcoder | ${ACR}/hls-transcoder:${TAG} | Deployed |" >> "$GITHUB_STEP_SUMMARY"
+          fi

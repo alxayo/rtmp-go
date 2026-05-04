@@ -1,0 +1,125 @@
+name: Build Containers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.go'
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - 'azure/blob-sidecar/**'
+      - 'azure/hls-transcoder/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      service:
+        description: 'Service to build (or all)'
+        required: true
+        type: choice
+        options:
+          - all
+          - rtmp-server
+          - blob-sidecar
+          - hls-transcoder
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    name: Build Container Images
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    env:
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+    outputs:
+      image-tag: ${{ steps.tag.outputs.tag }}
+      acr-login-server: ${{ steps.acr.outputs.acr-login-server }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: ./.github/actions/azure-login
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Discover ACR
+        id: acr
+        uses: ./.github/actions/discover-acr
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAG="sha-${SHORT_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Build rtmp-server
+        if: inputs.service == 'all' || inputs.service == 'rtmp-server' || inputs.service == ''
+        run: |
+          echo "Building rtmp-server:${{ steps.tag.outputs.tag }}..."
+          az acr build \
+            --registry "${{ steps.acr.outputs.acr-name }}" \
+            --image "rtmp-server:${{ steps.tag.outputs.tag }}" \
+            --image "rtmp-server:latest" \
+            --file Dockerfile \
+            . \
+            --no-logs
+
+      - name: Build blob-sidecar
+        if: inputs.service == 'all' || inputs.service == 'blob-sidecar' || inputs.service == ''
+        run: |
+          echo "Building blob-sidecar:${{ steps.tag.outputs.tag }}..."
+          az acr build \
+            --registry "${{ steps.acr.outputs.acr-name }}" \
+            --image "blob-sidecar:${{ steps.tag.outputs.tag }}" \
+            --image "blob-sidecar:latest" \
+            --file azure/blob-sidecar/Dockerfile \
+            azure/blob-sidecar \
+            --no-logs
+
+      - name: Build hls-transcoder
+        if: inputs.service == 'all' || inputs.service == 'hls-transcoder' || inputs.service == ''
+        run: |
+          echo "Building hls-transcoder:${{ steps.tag.outputs.tag }}..."
+          az acr build \
+            --registry "${{ steps.acr.outputs.acr-name }}" \
+            --image "hls-transcoder:${{ steps.tag.outputs.tag }}" \
+            --image "hls-transcoder:latest" \
+            --file azure/hls-transcoder/Dockerfile \
+            azure/hls-transcoder \
+            --no-logs
+
+      - name: Summary
+        run: |
+          echo "### Build Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tag |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-----|" >> "$GITHUB_STEP_SUMMARY"
+          SERVICE="${{ inputs.service || 'all' }}"
+          ACR="${{ steps.acr.outputs.acr-login-server }}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "rtmp-server" ] || [ "$SERVICE" = "" ]; then
+            echo "| rtmp-server | ${ACR}/rtmp-server:${TAG} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "blob-sidecar" ] || [ "$SERVICE" = "" ]; then
+            echo "| blob-sidecar | ${ACR}/blob-sidecar:${TAG} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$SERVICE" = "all" ] || [ "$SERVICE" = "hls-transcoder" ] || [ "$SERVICE" = "" ]; then
+            echo "| hls-transcoder | ${ACR}/hls-transcoder:${TAG} |" >> "$GITHUB_STEP_SUMMARY"
+          fi

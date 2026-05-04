@@ -1,0 +1,134 @@
+name: Infrastructure Provisioning
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  provision:
+    name: Provision Azure Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      LOCATION: ${{ vars.LOCATION }}
+      ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: ./.github/actions/azure-login
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create Resource Group
+        run: |
+          if az group show --name "$RESOURCE_GROUP" &>/dev/null; then
+            echo "Resource group '$RESOURCE_GROUP' already exists."
+          else
+            az group create --name "$RESOURCE_GROUP" --location "$LOCATION" --output none
+            echo "Resource group '$RESOURCE_GROUP' created in $LOCATION."
+          fi
+
+      - name: Determine current images
+        id: current-images
+        run: |
+          # If container apps already exist, preserve their current images
+          # Otherwise use empty strings (Bicep will use placeholder)
+          RTMP_IMAGE=""
+          SIDECAR_IMAGE=""
+          HLS_IMAGE=""
+
+          # Try to find existing rtmp-server app
+          RTMP_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'rtmp-server')].name" -o tsv 2>/dev/null | head -1)
+          if [ -n "$RTMP_APP" ]; then
+            RTMP_IMAGE=$(az containerapp show -n "$RTMP_APP" -g "$RESOURCE_GROUP" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null || echo "")
+          fi
+
+          SIDECAR_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'rec-blob-sidecar')].name" -o tsv 2>/dev/null | head -1)
+          if [ -n "$SIDECAR_APP" ]; then
+            SIDECAR_IMAGE=$(az containerapp show -n "$SIDECAR_APP" -g "$RESOURCE_GROUP" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null || echo "")
+          fi
+
+          HLS_APP=$(az containerapp list -g "$RESOURCE_GROUP" \
+            --query "[?contains(name, 'hls-transcoder')].name" -o tsv 2>/dev/null | head -1)
+          if [ -n "$HLS_APP" ]; then
+            HLS_IMAGE=$(az containerapp show -n "$HLS_APP" -g "$RESOURCE_GROUP" \
+              --query "properties.template.containers[0].image" -o tsv 2>/dev/null || echo "")
+          fi
+
+          echo "rtmp-image=$RTMP_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "sidecar-image=$SIDECAR_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "hls-image=$HLS_IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Compute scale settings
+        id: scale
+        run: |
+          if [ "${{ vars.SCALE_TO_ZERO }}" = "true" ]; then
+            echo "rtmp-min=0" >> "$GITHUB_OUTPUT"
+            echo "sidecar-min=0" >> "$GITHUB_OUTPUT"
+            echo "hls-min=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "rtmp-min=1" >> "$GITHUB_OUTPUT"
+            echo "sidecar-min=1" >> "$GITHUB_OUTPUT"
+            echo "hls-min=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy Bicep
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "infra-$(date +%s)" \
+            --template-file azure/infra/main.bicep \
+            --parameters \
+              environmentName="${ENVIRONMENT_NAME}" \
+              location="${LOCATION}" \
+              rtmpAuthToken="${{ secrets.RTMP_AUTH_TOKEN }}" \
+              rtmpAuthCallbackUrl="${{ vars.RTMP_AUTH_CALLBACK_URL }}" \
+              streamgateHooksUrl="${{ vars.STREAMGATE_HOOKS_URL }}" \
+              streamgatePlatformUrl="${{ vars.STREAMGATE_PLATFORM_URL }}" \
+              internalApiKey="${{ secrets.INTERNAL_API_KEY }}" \
+              ingestToken="${{ secrets.INGEST_TOKEN }}" \
+              rtmpMinReplicas=${{ steps.scale.outputs.rtmp-min }} \
+              sidecarMinReplicas=${{ steps.scale.outputs.sidecar-min }} \
+              hlsTranscoderMinReplicas=${{ steps.scale.outputs.hls-min }} \
+              rtmpServerImage="${{ steps.current-images.outputs.rtmp-image }}" \
+              blobSidecarImage="${{ steps.current-images.outputs.sidecar-image }}" \
+              hlsTranscoderImage="${{ steps.current-images.outputs.hls-image }}" \
+            --output none
+
+      - name: Show outputs
+        run: |
+          OUTPUTS=$(az deployment group show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$(az deployment group list -g "$RESOURCE_GROUP" --query "[0].name" -o tsv)" \
+            --query 'properties.outputs' -o json 2>/dev/null || echo "{}")
+          echo "### Infrastructure Outputs" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$OUTPUTS" | python3 -c "
+          import sys, json
+          outputs = json.load(sys.stdin)
+          for k, v in outputs.items():
+              if 'secret' not in k.lower() and 'token' not in k.lower():
+                  print(f'{k}: {v.get(\"value\", \"\")}')
+          " >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
