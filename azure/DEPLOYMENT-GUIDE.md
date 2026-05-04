@@ -28,12 +28,15 @@
 17. [Cost Analysis](#17-cost-analysis)
 18. [Performance Verification](#18-performance-verification)
 19. [Quick Reference Card](#19-quick-reference-card)
+20. [CI/CD Automated Deployment](#20-cicd-automated-deployment)
 
 ---
 
 ## 0. Step-by-Step Deployment Runbook
 
 > **Copy-paste deployment guide.** Follow these steps in order to go from zero to a fully deployed system with custom DNS names on `port-80.com`. Total time: ~25-35 minutes.
+>
+> **Prefer automated deployment?** See [§20 CI/CD Automated Deployment](#20-cicd-automated-deployment) for the GitHub Actions pipeline that automates all of these steps.
 
 ### 0.1 Prerequisites Checklist
 
@@ -431,6 +434,13 @@ python3 --version
 # FFmpeg (for testing RTMP ingest)
 ffmpeg -version
 ```
+
+### CI/CD Prerequisites (GitHub Actions)
+
+For automated deployments via GitHub Actions (see [§20](#20-cicd-automated-deployment)):
+- Azure AD App Registration with OIDC federated credentials
+- GitHub Environments (`dev`, `prod`) configured with secrets and variables
+- `Contributor` + `AcrPush` role assignment on the target subscription
 
 ### Required Accounts & Secrets
 
@@ -2083,3 +2093,106 @@ done
 Resource Group:  https://portal.azure.com/#@/resource/subscriptions/4e0d0fc6-fdf1-4821-94cc-6efbf6ba0667/resourceGroups/rg-rtmpgo/overview
 DNS Zone:        https://portal.azure.com/#@/resource/subscriptions/4e0d0fc6-fdf1-4821-94cc-6efbf6ba0667/resourceGroups/rg-dns/overview
 ```
+
+---
+
+## 20. CI/CD Automated Deployment
+
+> **GitHub Actions pipeline that automates infrastructure provisioning, container builds, and service deployment.**
+
+The project includes three CD workflows (`.github/workflows/`) that replace manual `deploy.sh` usage for ongoing deployments. The manual scripts remain useful for first-time setup and troubleshooting.
+
+### 20.1 Workflow Overview
+
+| Workflow | File | Purpose | Trigger |
+|----------|------|---------|---------|
+| Infrastructure | `infra.yml` | Provision/update all Azure resources | Manual (`workflow_dispatch`) |
+| Build | `build.yml` | Build Docker images → ACR | Push to `main` / Manual |
+| Deploy | `deploy.yml` | Update container apps with new images | After build (dev) / Manual (prod) |
+
+### 20.2 Authentication (OIDC)
+
+Workflows authenticate to Azure using **workload identity federation** — no stored credentials. Setup:
+
+1. Create Azure AD App Registration: `github-rtmp-go-cicd`
+2. Add federated identity credentials:
+   ```
+   Issuer:  https://token.actions.githubusercontent.com
+   Subject: repo:<org>/rtmp-go:environment:dev
+   Subject: repo:<org>/rtmp-go:environment:prod
+   ```
+3. Assign roles on the subscription:
+   - `Contributor` (create/manage resources)
+   - `AcrPush` (push images to ACR)
+
+### 20.3 GitHub Environments
+
+Configure two environments in **Settings → Environments**:
+
+**`dev`** (no protection rules — auto-deploy on push):
+
+| Type | Name | Value |
+|------|------|-------|
+| Variable | `RESOURCE_GROUP` | `rg-rtmpgo-dev` |
+| Variable | `LOCATION` | `northeurope` |
+| Variable | `ENVIRONMENT_NAME` | `rtmpgodev` |
+| Variable | `SCALE_TO_ZERO` | `true` |
+| Secret | `AZURE_CLIENT_ID` | App registration client ID |
+| Secret | `AZURE_TENANT_ID` | Azure AD tenant ID |
+| Secret | `AZURE_SUBSCRIPTION_ID` | Subscription ID |
+| Secret | `RTMP_AUTH_TOKEN` | `live/stream=secret` |
+| Secret | `INTERNAL_API_KEY` | Generated key |
+| Secret | `INGEST_TOKEN` | Generated token |
+
+**`prod`** (required reviewer — manual trigger with approval):
+
+Same variables/secrets but with production values (e.g., `RESOURCE_GROUP=event-periscope-ne`, `SCALE_TO_ZERO=false`).
+
+### 20.4 Usage Patterns
+
+**First-time deployment:**
+```
+GitHub → Actions → "Infrastructure Provisioning" → Run → environment: dev
+GitHub → Actions → "Build Containers" → Run → environment: dev, service: all
+GitHub → Actions → "Deploy Services" → Run → environment: dev, service: all
+```
+
+**Routine code changes (automated):**
+```
+git push origin main
+→ build.yml auto-triggers (builds changed images)
+→ deploy.yml auto-triggers (deploys to dev)
+→ Manual: deploy.yml → prod (with approval)
+```
+
+**Targeted service update:**
+```
+GitHub → Actions → "Build Containers" → service: hls-transcoder
+GitHub → Actions → "Deploy Services" → service: hls-transcoder, environment: prod
+```
+
+### 20.5 Image Tagging
+
+CI/CD uses `sha-{7-char-git-hash}` tags (e.g., `rtmp-server:sha-abc1234`) for exact commit traceability. Each build also tags `:latest` for convenience.
+
+### 20.6 Reusable Actions
+
+| Action | Path | Purpose |
+|--------|------|---------|
+| `azure-login` | `.github/actions/azure-login/` | OIDC workload identity login |
+| `discover-acr` | `.github/actions/discover-acr/` | Find ACR in resource group |
+
+### 20.7 Comparison: Manual vs CI/CD
+
+| Aspect | Manual (`deploy.sh`) | CI/CD (GitHub Actions) |
+|--------|---------------------|----------------------|
+| Authentication | `az login` (interactive) | OIDC (no stored secrets) |
+| Image tags | `v<timestamp>` | `sha-<git-hash>` |
+| Build location | Your machine → ACR Tasks | GitHub runner → ACR Tasks |
+| Deploy strategy | Full Bicep re-run | `az containerapp update` (fast) |
+| Infra changes | Always re-runs full Bicep | `infra.yml` for infra, `deploy.yml` for images |
+| Environments | One target per invocation | Environment selector (dev/prod) |
+| Approval gates | None (whoever runs it) | Required reviewer for prod |
+| Audit trail | Terminal output | GitHub Actions logs + step summaries |
+
+For full workflow reference, see [docs/CI_CD_DOCUMENTATION.md](../docs/CI_CD_DOCUMENTATION.md).

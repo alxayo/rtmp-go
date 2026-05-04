@@ -76,6 +76,42 @@ az deployment group create -g <rg> -f azure/infra/main.bicep \
 
 > **Note:** Scale-to-zero introduces a 10-30s cold start delay on the first connection after idle. The unified deploy script sets all values to 0 by default.
 
+### CI/CD Automated Deployment (GitHub Actions)
+
+For automated deployments via GitHub Actions, the project includes three workflows in `.github/workflows/`:
+
+| Workflow | Purpose | Trigger |
+|----------|---------|---------|
+| `infra.yml` | Provision/update all Azure infrastructure | Manual (environment: dev/prod) |
+| `build.yml` | Build container images → ACR | Push to main (auto) / Manual |
+| `deploy.yml` | Deploy images to container apps | After build (dev auto) / Manual (prod + approval) |
+
+**Setup requirements:**
+1. Azure AD App Registration with OIDC federated credentials for GitHub
+2. GitHub Environments (`dev`, `prod`) with variables: `RESOURCE_GROUP`, `LOCATION`, `ENVIRONMENT_NAME`, `SCALE_TO_ZERO`
+3. GitHub Secrets per environment: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `RTMP_AUTH_TOKEN`, `INTERNAL_API_KEY`, `INGEST_TOKEN`
+
+**Typical workflow:**
+```bash
+# First-time: provision infrastructure
+# GitHub → Actions → "Infrastructure Provisioning" → Run workflow → select "dev"
+
+# Code change: auto-builds and deploys to dev on push to main
+git push origin main  # triggers build.yml → deploy.yml (dev)
+
+# Promote to prod: manual trigger with approval gate
+# GitHub → Actions → "Deploy Services" → Run workflow → select "prod", "all"
+```
+
+**Selective deployment:**
+```bash
+# Only rebuild and deploy the hls-transcoder
+# GitHub → Actions → "Build Containers" → service: hls-transcoder
+# GitHub → Actions → "Deploy Services" → service: hls-transcoder
+```
+
+See [docs/CI_CD_DOCUMENTATION.md](../docs/CI_CD_DOCUMENTATION.md) for full details on secrets, OIDC setup, and workflow architecture.
+
 ### Destroy
 
 Remove all Azure resources:
