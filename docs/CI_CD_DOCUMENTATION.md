@@ -170,25 +170,137 @@ go tool cover -html=pkg.out
 3. **Golden Vectors**: Add generation logic to `tests/golden/gen_*.go`
 4. **Interop Tests**: Extend `tests/interop/ffmpeg_test.sh` with new scenarios
 
+## CD Workflows (Azure Container Apps Deployment)
+
+In addition to the CI workflows above, the project includes three **Continuous Deployment** workflows for deploying to Azure Container Apps.
+
+### 6. Infrastructure Workflow (`infra.yml`)
+**Purpose**: Provision Azure infrastructure (ACR, VNet, Container Apps Environment, Storage)
+**Triggers**: Manual (`workflow_dispatch`) with environment selection (dev/prod)
+
+**What it deploys**:
+- Resource Group (created if not exists)
+- Azure Container Registry (ACR)
+- Virtual Network with Container Apps subnet
+- Container Apps Environment
+- Azure Storage Account (blob containers for recordings + HLS content)
+- User-Assigned Managed Identity with AcrPull + Storage Blob Data Contributor roles
+- Container Apps: rtmp-server, blob-sidecar, hls-transcoder (with current or placeholder images)
+
+**Key features**:
+- Preserves current container images on subsequent runs (no downtime)
+- Respects `SCALE_TO_ZERO` environment variable for minReplicas configuration
+- Outputs infrastructure resource names to step summary
+
+### 7. Build Containers Workflow (`build.yml`)
+**Purpose**: Build Docker images and push to Azure Container Registry
+**Triggers**: Push to `main` (path filter: Go files, Dockerfiles), manual dispatch
+
+**Images built** (via ACR Tasks — no local Docker required):
+| Image | Dockerfile | Build Context |
+|-------|-----------|---------------|
+| `rtmp-server` | `Dockerfile` | Project root |
+| `blob-sidecar` | `azure/blob-sidecar/Dockerfile` | `azure/blob-sidecar/` |
+| `hls-transcoder` | `azure/hls-transcoder/Dockerfile` | `azure/hls-transcoder/` |
+
+**Image tag format**: `sha-{7-char-git-hash}` (also tagged as `:latest`)
+
+**Features**:
+- Selective builds — deploy a single service or all three
+- Auto-triggers on push to main for dev environment
+- Manual dispatch for prod with environment selection
+
+### 8. Deploy Services Workflow (`deploy.yml`)
+**Purpose**: Update container apps with new images
+**Triggers**: After `build.yml` completes (dev auto-deploy), manual dispatch with approval (prod)
+
+**Features**:
+- Deploys individual services or all at once
+- Resolves latest SHA-tagged image from ACR if no tag specified
+- Verifies deployment (polls revision status for up to 2 minutes)
+- Uses `az containerapp update` for fast image-only updates (no Bicep re-run)
+
+**Inputs**:
+- `environment`: dev or prod
+- `service`: all, rtmp-server, blob-sidecar, or hls-transcoder
+- `image_tag`: specific tag or empty (uses latest SHA tag)
+
+### Deployment Flow
+
+```
+Push to main → build.yml (auto) → deploy.yml (dev, auto)
+                                 → deploy.yml (prod, manual + approval)
+```
+
+For infrastructure changes:
+```
+Modify Bicep → infra.yml (dev, manual) → infra.yml (prod, manual + approval)
+```
+
 ## GitHub Actions Configuration
 
-### Secrets Required
-Currently no secrets are required. The workflows use only public actions and built-in GitHub tokens.
+### CI Secrets
+The CI workflows (ci.yml, test.yml, quality.yml) require no secrets.
 
-### Future Enhancements
-- Code coverage reporting integration
-- Automated dependency updates
-- Performance regression detection
-- Security scanning integration
-- Release automation improvements
+### CD Secrets (per GitHub Environment: dev, prod)
+
+| Secret | Purpose |
+|--------|---------|
+| `AZURE_CLIENT_ID` | OIDC workload identity federation (App Registration client ID) |
+| `AZURE_TENANT_ID` | Azure AD tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Target Azure subscription |
+| `RTMP_AUTH_TOKEN` | RTMP stream authentication (format: `streamKey=secret`) |
+| `INTERNAL_API_KEY` | Cross-service webhook authentication |
+| `INGEST_TOKEN` | HTTP ingest endpoint authentication |
+
+### CD Variables (per GitHub Environment)
+
+| Variable | Example (dev) | Example (prod) |
+|----------|--------------|----------------|
+| `RESOURCE_GROUP` | `rg-rtmpgo-dev` | `event-periscope-ne` |
+| `LOCATION` | `northeurope` | `northeurope` |
+| `ENVIRONMENT_NAME` | `rtmpgodev` | `eventperiscope` |
+| `SCALE_TO_ZERO` | `true` | `false` |
+| `RTMP_AUTH_CALLBACK_URL` | (optional) | `https://play.example.com/api/rtmp/auth` |
+| `STREAMGATE_HOOKS_URL` | (optional) | `https://play.example.com/api/rtmp/hooks` |
+| `STREAMGATE_PLATFORM_URL` | (optional) | `https://play.example.com` |
+
+### GitHub Environments
+
+| Environment | Protection Rules | Description |
+|-------------|-----------------|-------------|
+| `dev` | None | Auto-deploy on push to main |
+| `prod` | Required reviewer | Manual trigger with approval gate |
+
+### OIDC Setup (One-Time)
+
+The CD workflows use Azure OIDC workload identity federation (no stored credentials):
+
+1. Create an Azure AD App Registration (e.g., `github-rtmp-go-cicd`)
+2. Add federated credentials:
+   - Subject: `repo:<org>/rtmp-go:environment:dev`
+   - Subject: `repo:<org>/rtmp-go:environment:prod`
+3. Assign `Contributor` + `AcrPush` roles on the target subscription
+
+### Reusable Actions
+
+| Action | Path | Purpose |
+|--------|------|---------|
+| `azure-login` | `.github/actions/azure-login/action.yml` | OIDC login wrapper |
+| `discover-acr` | `.github/actions/discover-acr/action.yml` | Finds ACR in resource group |
 
 ## Monitoring and Observability
 
 ### Workflow Monitoring
 - GitHub Actions dashboard shows workflow status
-- Workflow summaries provide detailed results
+- Workflow summaries provide detailed results (build tags, deployment status)
 - Artifacts are retained for debugging
 - Build summaries include binary sizes and build information
+
+### Deployment Monitoring
+- Deploy workflow verifies each container app reaches `Running` state
+- Step summaries show image tags deployed and service status
+- Infrastructure workflow outputs resource names for audit trail
 
 ### Performance Tracking
 - Benchmark results are archived for performance tracking
