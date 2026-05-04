@@ -40,6 +40,42 @@ On completion it prints the RTMP URL, ffmpeg test command, and OBS Studio settin
 | `RESOURCE_GROUP` | `rg-rtmpgo` | Azure resource group name |
 | `LOCATION` | `eastus2` | Azure region |
 
+### Unified Multi-Region Deployment (with StreamGate)
+
+For deploying **both rtmp-go and StreamGate together** to any Azure region with any custom domain, use the unified deployment script in the StreamGate repo:
+
+```bash
+# Deploy to North Europe with event-periscope.com
+RESOURCE_GROUP=event-periscope-ne LOCATION=northeurope \
+DNS_ZONE_NAME=event-periscope.com \
+RTMP_AUTH_TOKEN="live/stream=secret" ADMIN_PASSWORD_HASH='$2b$12$...' \
+../streamgate/azure/deploy-unified.sh
+
+# Deploy to West US with example.com
+RESOURCE_GROUP=rg-myapp-wus LOCATION=westus2 \
+DNS_ZONE_NAME=example.com \
+../streamgate/azure/deploy-unified.sh
+```
+
+The unified script handles all 10 phases: infrastructure, image builds, DNS, custom domain binding with managed SSL, and deployment verification. See `../streamgate/azure/deploy-unified.sh` for full documentation.
+
+### Scale-to-Zero
+
+Container Apps can be configured to scale to zero replicas when idle, eliminating compute costs during inactive periods. Pass `minReplicas=0` parameters to the Bicep template:
+
+```bash
+az deployment group create -g <rg> -f azure/infra/main.bicep \
+  -p rtmpMinReplicas=0 sidecarMinReplicas=0 hlsTranscoderMinReplicas=0
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `rtmpMinReplicas` | `1` | Min replicas for RTMP server (0 = scale to zero) |
+| `sidecarMinReplicas` | `1` | Min replicas for recording blob-sidecar |
+| `hlsTranscoderMinReplicas` | `1` | Min replicas for HLS transcoder |
+
+> **Note:** Scale-to-zero introduces a 10-30s cold start delay on the first connection after idle. The unified deploy script sets all values to 0 by default.
+
 ### Destroy
 
 Remove all Azure resources:
@@ -165,7 +201,8 @@ azure/
 ├── dns-destroy.sh            # DNS zone teardown (separate from app destroy)
 ├── infra/
 │   ├── main.bicep            # All Azure resources (Bicep IaC)
-│   ├── main.parameters.json  # Default parameter values
+│   ├── main.parameters.json  # Default parameter values (eastus2)
+│   ├── event-periscope.parameters.json  # North Europe scale-to-zero params
 │   ├── dns.bicep             # DNS Zone + CNAME record (Bicep IaC)
 │   └── dns.parameters.json   # DNS parameter defaults (domain, subdomain)
 └── blob-sidecar/             # Blob upload sidecar (Go module with Dockerfile)
