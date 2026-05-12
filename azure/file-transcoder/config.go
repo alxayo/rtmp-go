@@ -10,7 +10,7 @@ package main
 // Environment variables:
 //   - JOB_ID:               Unique job identifier (matches TranscodeJob in Platform DB)
 //   - EVENT_ID:             Event UUID for output path construction
-//   - CODEC:                Video codec: "h264", "av1", "vp8", or "vp9"
+//   - CODEC:                Video codec: "h264", "h265", "av1", "vp8", or "vp9"
 //   - SOURCE_BLOB_URL:      URL or local file path to the source video
 //   - OUTPUT_BLOB_PREFIX:   Blob path prefix for uploaded output files
 //   - RENDITIONS:           JSON array of rendition specs (resolution, bitrate)
@@ -67,7 +67,7 @@ type JobConfig struct {
 	EventID string // Event UUID for output path construction
 
 	// Codec selection — determines encoder, audio codec, and FFmpeg flags
-	Codec string // "h264", "av1", "vp8", or "vp9"
+	Codec string // "h264", "h265", "av1", "vp8", or "vp9"
 
 	// Source and output paths
 	SourceBlobURL    string // URL or local path to source video
@@ -149,8 +149,8 @@ func loadConfig() (*JobConfig, error) {
 	if cfg.Codec == "" {
 		return nil, fmt.Errorf("CODEC is required")
 	}
-	if cfg.Codec != "h264" && cfg.Codec != "av1" && cfg.Codec != "vp8" && cfg.Codec != "vp9" {
-		return nil, fmt.Errorf("CODEC must be one of: h264, av1, vp8, vp9 (got %q)", cfg.Codec)
+	if cfg.Codec != "h264" && cfg.Codec != "h265" && cfg.Codec != "av1" && cfg.Codec != "vp8" && cfg.Codec != "vp9" {
+		return nil, fmt.Errorf("CODEC must be one of: h264, h265, av1, vp8, vp9 (got %q)", cfg.Codec)
 	}
 	if cfg.SourceBlobURL == "" {
 		return nil, fmt.Errorf("SOURCE_BLOB_URL is required")

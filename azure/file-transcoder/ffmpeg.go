@@ -134,6 +134,8 @@ func buildFFmpegArgs(cfg *JobConfig, outputDir string) []string {
 //
 // Codec selection guide:
 //   - h264:  Widest compatibility (all browsers/devices). Uses libx264.
+//   - h265:  Better compression than H.264 (~40%). Uses libx265.
+//            Supported by Safari, Chrome (macOS/Windows). Not Firefox/Linux.
 //   - av1:   Best compression (~30% smaller than H.264 at same quality).
 //            Uses libsvtav1 (fast) or libaom-av1 (fallback).
 //   - vp8:   Legacy WebM codec. Uses libvpx.
@@ -152,6 +154,22 @@ func buildVideoEncoderArgs(cfg *JobConfig) (encoder string, args []string) {
 			tune = "film" // Optimized for live-action video content
 		}
 		args = []string{"-preset", preset, "-tune", tune}
+
+	case "h265":
+		// libx265: HEVC/H.265 encoder — ~40% better compression than H.264
+		// at the cost of ~2-3x slower encoding speed.
+		encoder = "libx265"
+		preset := cfg.CodecConfig.Preset
+		if preset == "" {
+			preset = "medium" // Good balance of speed and quality for VOD
+		}
+		// x265 does not support -tune film; omit tune unless explicitly set.
+		// The -tag:v hvc1 flag is critical: Apple HLS requires hvc1 box type,
+		// not the default hev1 that FFmpeg writes.
+		args = []string{"-preset", preset, "-tag:v", "hvc1"}
+		if cfg.CodecConfig.Tune != "" {
+			args = append(args, "-tune", cfg.CodecConfig.Tune)
+		}
 
 	case "av1":
 		// SVT-AV1 is significantly faster than libaom for comparable quality.
@@ -207,8 +225,8 @@ func buildVideoEncoderArgs(cfg *JobConfig) (encoder string, args []string) {
 //   - AV1/VP8/VP9 → Opus: Modern, efficient codec (better quality at lower bitrates)
 func buildAudioCodecArgs(cfg *JobConfig) (codec string, args []string) {
 	switch cfg.Codec {
-	case "h264":
-		// AAC is the standard audio codec for H.264/HLS content
+	case "h264", "h265":
+		// AAC is the standard audio codec for H.264 and H.265/HEVC HLS content
 		codec = "aac"
 	default:
 		// Opus is the preferred audio codec for AV1/VP8/VP9
