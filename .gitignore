@@ -84,6 +84,9 @@ coverage.html
 /dist/
 /build/
 
+# Node.js (not part of this Go project — ignore if accidentally created)
+node_modules/
+
 # Delve debugger
 __debug_bin*
 *.pem
