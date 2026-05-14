@@ -38,10 +38,10 @@ import (
 //	{"label":"1080p","width":1920,"height":1080,"videoBitrate":"5000k","audioBitrate":"192k"}
 type Rendition struct {
 	Label        string `json:"label"`        // Human-readable name (e.g., "1080p", "720p")
-	Width        int    `json:"width"`         // Output width in pixels
-	Height       int    `json:"height"`        // Output height in pixels
-	VideoBitrate string `json:"videoBitrate"`  // FFmpeg bitrate string (e.g., "5000k")
-	AudioBitrate string `json:"audioBitrate"`  // FFmpeg audio bitrate (e.g., "192k")
+	Width        int    `json:"width"`        // Output width in pixels
+	Height       int    `json:"height"`       // Output height in pixels
+	VideoBitrate string `json:"videoBitrate"` // FFmpeg bitrate string (e.g., "5000k")
+	AudioBitrate string `json:"audioBitrate"` // FFmpeg audio bitrate (e.g., "192k")
 }
 
 // CodecConfig holds optional codec-specific overrides.
@@ -50,6 +50,9 @@ type CodecConfig struct {
 	// H.264 options
 	Preset string `json:"preset,omitempty"` // e.g., "medium", "slow"
 	Tune   string `json:"tune,omitempty"`   // e.g., "film", "animation"
+
+	// Incremental reruns can target a specific output stream_N directory.
+	TargetStreamIndex *int `json:"targetStreamIndex,omitempty"`
 
 	// AV1 options
 	CRF int `json:"crf,omitempty"` // Constant rate factor (lower = better quality)
@@ -172,6 +175,15 @@ func loadConfig() (*JobConfig, error) {
 		}
 		if r.AudioBitrate == "" {
 			return nil, fmt.Errorf("RENDITIONS[%d]: audioBitrate is required", i)
+		}
+	}
+
+	if cfg.CodecConfig.TargetStreamIndex != nil {
+		if *cfg.CodecConfig.TargetStreamIndex < 0 {
+			return nil, fmt.Errorf("CODEC_CONFIG.targetStreamIndex must be >= 0")
+		}
+		if len(cfg.Renditions) != 1 {
+			return nil, fmt.Errorf("CODEC_CONFIG.targetStreamIndex requires exactly one rendition")
 		}
 	}
 

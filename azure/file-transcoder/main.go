@@ -92,13 +92,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create subdirectories for each rendition (FFmpeg won't create them)
-	for i := range cfg.Renditions {
-		streamDir := filepath.Join(outputDir, fmt.Sprintf("stream_%d", i))
+	// Create subdirectories for output variants (FFmpeg won't create them).
+	if cfg.CodecConfig.TargetStreamIndex != nil {
+		streamDir := filepath.Join(outputDir, fmt.Sprintf("stream_%d", *cfg.CodecConfig.TargetStreamIndex))
 		if err := os.MkdirAll(streamDir, 0o755); err != nil {
 			logger.Error("failed to create stream directory", "dir", streamDir, "error", err)
 			sendFailureCallback(cfg, err, logger)
 			os.Exit(1)
+		}
+	} else {
+		for i := range cfg.Renditions {
+			streamDir := filepath.Join(outputDir, fmt.Sprintf("stream_%d", i))
+			if err := os.MkdirAll(streamDir, 0o755); err != nil {
+				logger.Error("failed to create stream directory", "dir", streamDir, "error", err)
+				sendFailureCallback(cfg, err, logger)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -148,7 +157,7 @@ func main() {
 	logger.Info("FFmpeg completed successfully")
 
 	// --- Step 6: Report results ---
-	variants := listVariantPlaylists(outputDir, len(cfg.Renditions))
+	variants := listVariantPlaylists(outputDir, len(cfg.Renditions), cfg.CodecConfig.TargetStreamIndex)
 
 	// In local dev mode (no Azure connection string), just log the output
 	if cfg.AzureStorageConnectionString == "" {

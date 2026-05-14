@@ -26,9 +26,9 @@ type callbackPayload struct {
 	JobID    string   `json:"jobId"`              // Matches TranscodeJob.id in Platform DB
 	Codec    string   `json:"codec"`              // "h264", "av1", "vp8", or "vp9"
 	Status   string   `json:"status"`             // "completed" or "failed"
-	Error    string   `json:"error,omitempty"`     // Error message (only if status="failed")
-	Duration float64  `json:"duration,omitempty"`  // Video duration in seconds
-	Variants []string `json:"variants,omitempty"`  // Relative paths to variant playlists
+	Error    string   `json:"error,omitempty"`    // Error message (only if status="failed")
+	Duration float64  `json:"duration,omitempty"` // Video duration in seconds
+	Variants []string `json:"variants,omitempty"` // Relative paths to variant playlists
 }
 
 // sendCallback POSTs the completion or failure callback to the Platform App.
@@ -147,7 +147,11 @@ func sendFailureCallback(cfg *JobConfig, err error, logger *slog.Logger) {
 //	{outputDir}/stream_2/index.m3u8
 //
 // Returns: ["stream_0/index.m3u8", "stream_1/index.m3u8", "stream_2/index.m3u8"]
-func listVariantPlaylists(outputDir string, numRenditions int) []string {
+func listVariantPlaylists(outputDir string, numRenditions int, targetStreamIndex *int) []string {
+	if targetStreamIndex != nil {
+		return []string{fmt.Sprintf("stream_%d/index.m3u8", *targetStreamIndex)}
+	}
+
 	variants := make([]string, 0, numRenditions)
 	for i := range numRenditions {
 		relPath := fmt.Sprintf("stream_%d/index.m3u8", i)

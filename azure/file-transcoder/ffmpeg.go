@@ -73,13 +73,19 @@ func buildFFmpegArgs(cfg *JobConfig, outputDir string) []string {
 		// Video codec and encoder-specific flags (applied once, shared across renditions)
 		args = append(args, "-c"+vi, videoEncoder)
 
-		// Per-rendition resolution and bitrate
-		args = append(args,
-			"-s"+vi, fmt.Sprintf("%dx%d", r.Width, r.Height),
-			"-b"+vi, r.VideoBitrate,
-			"-maxrate"+vi, r.VideoBitrate,
-			"-bufsize"+vi, doubleBitrate(r.VideoBitrate),
-		)
+		// Per-rendition resolution
+		args = append(args, "-s"+vi, fmt.Sprintf("%dx%d", r.Width, r.Height))
+
+		// Per-rendition bitrate — only for codecs that use CBR/VBR rate control.
+		// AV1 (libsvtav1/libaom) uses CRF mode (--rc 0) which rejects a target
+		// bitrate; the quality target is set globally via -crf in encoder args.
+		if cfg.Codec != "av1" {
+			args = append(args,
+				"-b"+vi, r.VideoBitrate,
+				"-maxrate"+vi, r.VideoBitrate,
+				"-bufsize"+vi, doubleBitrate(r.VideoBitrate),
+			)
+		}
 
 		// Audio codec and bitrate
 		args = append(args, "-c"+ai, audioCodec)
@@ -98,8 +104,15 @@ func buildFFmpegArgs(cfg *JobConfig, outputDir string) []string {
 	// can only switch renditions at keyframe boundaries.
 	args = append(args,
 		"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", cfg.ForceKeyframeInterval),
-		"-sc_threshold", "0", // Disable scene-change detection (would insert extra keyframes)
 	)
+
+	// -sc_threshold is a libx264/libx265-only option that disables scene-change
+	// keyframe insertion. AV1/VP8/VP9 encoders don't recognise it and FFmpeg will
+	// print an "AVOption has not been used" warning (and may error) if it is passed
+	// to those encoders.
+	if cfg.Codec == "h264" || cfg.Codec == "h265" {
+		args = append(args, "-sc_threshold", "0")
+	}
 
 	// --- HLS output settings (fMP4/CMAF) ---
 	// fMP4 is the modern HLS container format (replacing MPEG-TS):
@@ -109,10 +122,22 @@ func buildFFmpegArgs(cfg *JobConfig, outputDir string) []string {
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", fmt.Sprintf("%d", cfg.HLSTime),
-		"-hls_segment_type", "fmp4",                   // Use fragmented MP4 segments (.m4s)
-		"-hls_fmp4_init_filename", "init.mp4",          // Name of the initialization segment
-		"-hls_flags", "independent_segments",            // Each segment is independently decodable
-		"-hls_playlist_type", "vod",                     // VOD playlist (includes #EXT-X-ENDLIST)
+		"-hls_segment_type", "fmp4", // Use fragmented MP4 segments (.m4s)
+		"-hls_fmp4_init_filename", "init.mp4", // Name of the initialization segment
+		"-hls_flags", "independent_segments", // Each segment is independently decodable
+		"-hls_playlist_type", "vod", // VOD playlist (includes #EXT-X-ENDLIST)
+	)
+
+	if cfg.CodecConfig.TargetStreamIndex != nil {
+		targetDir := filepath.Join(outputDir, fmt.Sprintf("stream_%d", *cfg.CodecConfig.TargetStreamIndex))
+		args = append(args,
+			"-hls_segment_filename", filepath.Join(targetDir, "seg_%05d.m4s"),
+			filepath.Join(targetDir, "index.m3u8"),
+		)
+		return args
+	}
+
+	args = append(args,
 		"-hls_segment_filename", filepath.Join(outputDir, "stream_%v", "seg_%05d.m4s"),
 	)
 
@@ -135,9 +160,9 @@ func buildFFmpegArgs(cfg *JobConfig, outputDir string) []string {
 // Codec selection guide:
 //   - h264:  Widest compatibility (all browsers/devices). Uses libx264.
 //   - h265:  Better compression than H.264 (~40%). Uses libx265.
-//            Supported by Safari, Chrome (macOS/Windows). Not Firefox/Linux.
+//     Supported by Safari, Chrome (macOS/Windows). Not Firefox/Linux.
 //   - av1:   Best compression (~30% smaller than H.264 at same quality).
-//            Uses libsvtav1 (fast) or libaom-av1 (fallback).
+//     Uses libsvtav1 (fast) or libaom-av1 (fallback).
 //   - vp8:   Legacy WebM codec. Uses libvpx.
 //   - vp9:   Good compression, wide browser support. Uses libvpx-vp9.
 func buildVideoEncoderArgs(cfg *JobConfig) (encoder string, args []string) {
