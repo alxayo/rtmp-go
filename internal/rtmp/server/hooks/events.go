@@ -32,6 +32,9 @@ const (
 	EventPlayStart    EventType = "play_start"
 	EventPlayStop     EventType = "play_stop"
 
+	// Keepalive events
+	EventStreamKeepalive EventType = "stream_keepalive" // Periodic heartbeat while publisher is connected
+
 	// Media events
 	EventCodecDetected EventType = "codec_detected"
 

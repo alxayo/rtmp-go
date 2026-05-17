@@ -64,6 +64,11 @@ type Config struct {
 	HookTimeout     string   // Hook execution timeout (default "30s")
 	HookConcurrency int      // Max concurrent hook executions (default 10)
 
+	// KeepaliveInterval is the interval for stream_keepalive hooks fired while
+	// a publisher is connected. This prevents Container Apps from scaling the
+	// HLS transcoder to zero mid-stream. Zero (default) = disabled.
+	KeepaliveInterval time.Duration
+
 	// Authentication (optional). When nil, all publish/play requests are allowed.
 	// Set to an auth.Validator implementation to enforce token-based access control.
 	AuthValidator auth.Validator
