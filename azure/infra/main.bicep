@@ -456,6 +456,10 @@ resource rtmpApp 'Microsoft.App/containerApps@2024-03-01' = {
             'publish_start=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
             '-hook-webhook'
             'publish_stop=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-webhook'
+            'stream_keepalive=http://${hlsAppName}.internal.${containerEnv.properties.defaultDomain}/events'
+            '-hook-keepalive-interval'
+            '60s'
             '-log-level'
             'info'
           ], !empty(streamgateHooksUrl) ? [
