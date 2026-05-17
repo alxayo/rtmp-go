@@ -77,6 +77,11 @@ func main() {
 		segmentDur, _ = time.ParseDuration(cfg.segmentDuration) // already validated in parseFlags
 	}
 
+	var keepaliveInterval time.Duration
+	if cfg.hookKeepaliveInterval != "" && cfg.hookKeepaliveInterval != "0" {
+		keepaliveInterval, _ = time.ParseDuration(cfg.hookKeepaliveInterval) // already validated in parseFlags
+	}
+
 	server := srv.New(srv.Config{
 		ListenAddr:            cfg.listenAddr,
 		ChunkSize:             uint32(cfg.chunkSize),
@@ -92,6 +97,7 @@ func main() {
 		HookStdioFormat:       cfg.hookStdioFormat,
 		HookTimeout:           cfg.hookTimeout,
 		HookConcurrency:       cfg.hookConcurrency,
+		KeepaliveInterval:     keepaliveInterval,
 		AuthValidator:         authValidator,
 		TLSListenAddr:         cfg.tlsListenAddr,
 		TLSCertFile:           cfg.tlsCertFile,

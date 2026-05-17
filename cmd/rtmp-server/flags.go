@@ -38,6 +38,7 @@ type cliConfig struct {
 	hookStdioFormat string   // stdio output: "json", "env", or ""
 	hookTimeout     string   // hook execution timeout (e.g. "30s")
 	hookConcurrency int      // max concurrent hook executions
+	hookKeepaliveInterval string // interval for stream_keepalive hooks (e.g. "60s")
 
 	// Metrics
 	metricsAddr string // HTTP address for expvar metrics (e.g. ":8080"); empty = disabled
@@ -95,6 +96,8 @@ func parseFlags(args []string) (*cliConfig, error) {
 	fs.StringVar(&cfg.hookStdioFormat, "hook-stdio-format", "", "Stdio hook output format: json|env (empty=disabled)")
 	fs.StringVar(&cfg.hookTimeout, "hook-timeout", "30s", "Hook execution timeout")
 	fs.IntVar(&cfg.hookConcurrency, "hook-concurrency", 10, "Max concurrent hook executions")
+	fs.StringVar(&cfg.hookKeepaliveInterval, "hook-keepalive-interval", "0",
+		"Interval for stream_keepalive hooks while a publisher is connected (e.g. '60s'). 0 = disabled")
 
 	// Metrics
 	fs.StringVar(&cfg.metricsAddr, "metrics-addr", "", "HTTP address for metrics endpoint (e.g. :8080 or 127.0.0.1:8080). Empty = disabled")
@@ -133,6 +136,13 @@ func parseFlags(args []string) (*cliConfig, error) {
 	if cfg.segmentDuration != "" {
 		if _, err := time.ParseDuration(cfg.segmentDuration); err != nil {
 			return nil, fmt.Errorf("invalid -segment-duration %q: %w", cfg.segmentDuration, err)
+		}
+	}
+
+	// Validate keepalive interval if provided
+	if cfg.hookKeepaliveInterval != "" && cfg.hookKeepaliveInterval != "0" {
+		if _, err := time.ParseDuration(cfg.hookKeepaliveInterval); err != nil {
+			return nil, fmt.Errorf("invalid -hook-keepalive-interval %q: %w", cfg.hookKeepaliveInterval, err)
 		}
 	}
 
