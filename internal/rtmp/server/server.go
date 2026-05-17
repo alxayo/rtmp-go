@@ -239,19 +239,19 @@ func (s *Server) Start() error {
 	if s.cfg.TLSListenAddr != "" {
 		tlsLn, err := s.startTLSListener()
 		if err != nil {
-			// TLS listener failure is fatal — stop the plain listener and return error
-			_ = ln.Close()
+			// TLS listener failure is not fatal — plain RTMP still works.
+			// This allows graceful startup with placeholder certs (e.g. first deploy
+			// before Let's Encrypt issuance). RTMPS becomes available after a restart
+			// with valid certificates.
+			s.log.Error("RTMPS listener failed to start (plain RTMP still active)", "error", err)
+		} else {
 			s.mu.Lock()
-			s.l = nil
+			s.tlsListener = tlsLn
 			s.mu.Unlock()
-			return fmt.Errorf("tls listen: %w", err)
+			s.logListenerInfo("RTMPS", tlsLn)
+			s.acceptingWg.Add(1)
+			go s.acceptLoop(tlsLn)
 		}
-		s.mu.Lock()
-		s.tlsListener = tlsLn
-		s.mu.Unlock()
-		s.logListenerInfo("RTMPS", tlsLn)
-		s.acceptingWg.Add(1)
-		go s.acceptLoop(tlsLn)
 	}
 
 	// Start optional SRT (UDP) listener for SRT ingest
