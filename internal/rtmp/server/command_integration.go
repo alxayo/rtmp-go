@@ -42,6 +42,7 @@ type commandState struct {
 	role          string                 // "publisher" or "subscriber" — set by OnPublish/OnPlay handlers
 	enhancedRTMP  bool                   // true if client advertised fourCcList in connect
 	fourCcList    []string               // Enhanced RTMP FourCC codecs supported by client
+	keepaliveDone chan struct{}           // closed when publisher disconnects to stop keepalive ticker
 }
 
 // attachCommandHandling installs a dispatcher-backed message handler on the
@@ -96,6 +97,11 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 
 		// 2. Publisher cleanup: close recorder, unregister publisher, fire hook
 		if st.streamKey != "" && st.role == "publisher" {
+			// Stop keepalive ticker before cleanup
+			if st.keepaliveDone != nil {
+				close(st.keepaliveDone)
+			}
+
 			stream := reg.GetStream(st.streamKey)
 			if stream != nil {
 				// Close recorder under lock (concurrent with cleanupAllRecorders)
@@ -287,6 +293,27 @@ func attachCommandHandling(c *iconn.Connection, reg *Registry, cfg *Config, log 
 			"app":             st.app,
 			"publishing_name": pc.PublishingName,
 		})
+
+		// Start keepalive ticker — fires stream_keepalive hooks periodically
+		// while the publisher is connected. This prevents Container Apps from
+		// scaling the HLS transcoder to zero mid-stream.
+		if cfg.KeepaliveInterval > 0 {
+			st.keepaliveDone = make(chan struct{})
+			go func(streamKey, connID, app string, done <-chan struct{}) {
+				ticker := time.NewTicker(cfg.KeepaliveInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						srv.triggerHookEvent(hooks.EventStreamKeepalive, connID, streamKey, map[string]interface{}{
+							"app": app,
+						})
+					case <-done:
+						return
+					}
+				}
+			}(pc.StreamKey, c.ID(), st.app, st.keepaliveDone)
+		}
 
 		// Mark stream for recording — actual recorder creation is deferred to the
 		// first media frame (in dispatchMedia → ensureRecorder) so that the video
