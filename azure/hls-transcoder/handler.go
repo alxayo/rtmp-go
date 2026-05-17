@@ -76,6 +76,9 @@ func (h *Handler) HandleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		h.transcoder.Stop(event.StreamKey, event.ConnID)
 
+	case "stream_keepalive":
+		h.logger.Debug("stream_keepalive received", "stream_key", event.StreamKey, "conn_id", event.ConnID)
+
 	default:
 		h.logger.Debug("ignoring event", "type", event.Type, "stream_key", event.StreamKey)
 	}
